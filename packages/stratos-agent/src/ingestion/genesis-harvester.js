@@ -370,12 +370,23 @@ export class GenesisHarvester {
         while (index < content.length) {
           const chunkText = content.substring(index, index + chunkSize).trim();
           if (chunkText.length > 50) { // Skip trivial tiny snippets
+            // 1. Compute Shannon Entropy to check for encrypted/obfuscated malware shellcode
+            const entropy = calculateShannonEntropy(chunkText);
+            if (entropy > 6.0) {
+              console.warn(`⚠️  [Security Alert] Suspicious high entropy chunk (${entropy.toFixed(2)} > 6.0) detected in ${relativePath}. Obfuscated shellcode or binary anomaly quarantined. skipping chunk!`);
+              index += chunkSize - overlap;
+              continue;
+            }
+
+            // 2. Filter content to strip explicit prompt injection and override patterns
+            const sanitizedText = sanitizeInstructionInjections(chunkText);
+
             const sourceInfo = `workspace_file:${relativePath}`;
             
             // Ingest as ambient memory chunk
             await insertAmbientMemory({
               source: sourceInfo,
-              content: `--- FILE PATH: ${relativePath} ---\n${chunkText}`,
+              content: `--- FILE PATH: ${relativePath} ---\n${sanitizedText}`,
               tags: `code,architecture,deep-scan,${path.extname(filePath).slice(1)}`
             });
             chunksIngested++;
@@ -393,3 +404,45 @@ export class GenesisHarvester {
     return chunksIngested;
   }
 }
+
+/**
+ * Computes Shannon Entropy of a string to detect obfuscated shellcode/packed payloads.
+ */
+export function calculateShannonEntropy(str) {
+  if (!str) return 0;
+  const freqs = {};
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    freqs[char] = (freqs[char] || 0) + 1;
+  }
+  let entropy = 0;
+  const len = str.length;
+  for (const char in freqs) {
+    const p = freqs[char] / len;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+
+/**
+ * Sanitizes input text against prompt injection/override instructions.
+ */
+export function sanitizeInstructionInjections(text) {
+  if (!text) return '';
+  const patterns = [
+    /ignore\s+previous\s+instructions/gi,
+    /system\s+override/gi,
+    /as\s+an\s+ai\s+assistant/gi,
+    /you\s+must\s+never/gi,
+    /forget\s+all\s+previous/gi,
+    /forget\s+what\s+you\s+were\s+told/gi,
+    /system\s+prompt/gi,
+    /\[system\s+rule\]/gi
+  ];
+  let sanitized = text;
+  for (const pat of patterns) {
+    sanitized = sanitized.replace(pat, '[STRIPPED_SECURITY_VIOLATION]');
+  }
+  return sanitized;
+}
+

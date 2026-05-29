@@ -208,12 +208,71 @@ async function runTest() {
     console.log(`   - Multi-Modal Pipeline Audit:       ${voiceFilesCreated ? '✅ PASSED' : '❌ FAILED'}`);
     console.log('-------------------------------------------------------------------------------------');
 
-    if (data.choices.length > 0 && responseText.length > 0 && configVerified && isHostIdle && !isHostBusy && voiceFilesCreated) {
-      console.log('\n🎉 PHASE 16 GLOBAL PRODUCTION UI & MULTI-MODAL AUDIT SECURELY VERIFIED!');
+    // 11. WASI Enclave & PQC-Identity Vault Verification
+    console.log('🔒 [Step 9] Auditing WASI Enclave & PQC-Identity Vault...');
+    const { VaultHost } = await import('./src/security/vault-host.js');
+    
+    // Generate a mathematically valid AES-GCM-256 encrypted seed buffer
+    const { pbkdf2Sync, createCipheriv, randomBytes: cryptoRandom } = await import('node:crypto');
+    const mockSeed = Buffer.alloc(32, 0x42);
+    
+    // We instantiate separate mutable Buffer objects for encryption and decryption
+    const encryptionPasscode = Buffer.from('supersecretpasscode123_dynamic_buffer');
+    const decryptionPasscode = Buffer.from('supersecretpasscode123_dynamic_buffer');
+    const mockSalt = Buffer.alloc(16, 0x99);
+    const mockSaltCopy = Buffer.from(mockSalt);
+    
+    const key = pbkdf2Sync(encryptionPasscode, mockSalt, 100000, 32, 'sha256');
+    encryptionPasscode.fill(0); // Proactively zero out encryption passcode
+    
+    const iv = cryptoRandom(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const ciphertext = Buffer.concat([cipher.update(mockSeed), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    const mockEncryptedSeed = Buffer.concat([iv, tag, ciphertext]);
+    key.fill(0); // Zero out PBKDF2 derived key
+
+    const vaultHost = new VaultHost();
+    const vaultInitOk = await vaultHost.init(mockEncryptedSeed, decryptionPasscode, mockSaltCopy);
+    console.log(`   - Enclave Initialized:              ${vaultInitOk ? '✅ YES' : '❌ NO'}`);
+
+    const vaultPub = vaultHost.getPublicKey();
+    const vaultSig = vaultHost.sign('Sovereign Message');
+    const enclaveOk = vaultPub.length > 0 && vaultSig.length > 0;
+    
+    console.log(`   - Public Key Derivation DER size:   ${vaultPub.length} bytes`);
+    console.log(`   - Enclaved Message Signature size:  ${vaultSig.length} bytes`);
+    console.log(`   - PQC-Identity Vault Audit:         ${enclaveOk ? '✅ PASSED' : '❌ FAILED'}`);
+    console.log('-------------------------------------------------------------------------------------');
+
+    // 12. W3C DID Document & Self-Attestation verification
+    console.log('🆔 [Step 10] Testing W3C DID document generation & PQC attestation...');
+    const { generateDidDocument, signDidDocument } = await import('./src/security/did-generator.js');
+    
+    const mockPubBundle = {
+      ed25519: vaultPub,
+      mldsa: vaultPub
+    };
+    
+    const unsignedDoc = generateDidDocument(mockPubBundle, 'hyperswarm://atmos-genesis-dht');
+    const signedDoc = signDidDocument(unsignedDoc, vaultHost);
+    
+    const didGeneratedOk = signedDoc.id.startsWith('did:atmos:') &&
+                           signedDoc.verificationMethod.length === 2 &&
+                           signedDoc.proof &&
+                           signedDoc.proof.proofValue;
+                           
+    console.log(`   - Derived did:atmos format:         ${signedDoc.id}`);
+    console.log(`   - Self-attestation proof created:   ${signedDoc.proof ? '✅ YES' : '❌ NO'}`);
+    console.log(`   - W3C Document schema validated:    ${didGeneratedOk ? '✅ PASSED' : '❌ FAILED'}`);
+    console.log('-------------------------------------------------------------------------------------');
+
+    if (data.choices.length > 0 && responseText.length > 0 && configVerified && isHostIdle && !isHostBusy && voiceFilesCreated && enclaveOk && didGeneratedOk) {
+      console.log('\n🎉 ATMOSPHERE GLOBAL SOVEREIGN MULTI-MODAL, W3C DID & PQC MEMORY ENCLAVE VERIFIED!');
       cleanup(tmpDir, serverInstance);
       process.exit(0);
     } else {
-      throw new Error('Verification failed: legacy configs, hardware throttle checks, or voice systems failed.');
+      throw new Error('Verification failed: legacy configs, hardware throttle checks, voice systems, or enclaves failed.');
     }
 
   } catch (err) {

@@ -35,7 +35,7 @@ We permanently lock in the following four core architectural decision records (A
 ## 🏗️ 2. Core Functional Requirements
 
 ### 2.1 Local-First Software & Consensus
-*   **Autoritative Copy**: All user prompts, agent memories, and vector databases (`LanceDB`) must reside natively on the user's edge hardware device.
+*   **Authoritative Copy**: All user prompts, agent memories, and vector databases (`LanceDB`) must reside natively on the user's edge hardware device.
 *   **Consensus Engine**: Peer synchronization operates asynchronously over decentralized, append-only logs (`Autobase`/`Corestore`) linearized via multi-writer consensus, ensuring robust offline functionality without central PostgreSQL clusters.
 
 ### 2.2 Dual-Protocol Orchestration Stack
@@ -54,7 +54,7 @@ We permanently lock in the following four core architectural decision records (A
 *   **Horizontal Coordination (ACP)**: IBM's Agent Communication Protocol is integrated natively over Hyperswarm RPC sockets for Agent-to-Agent (A2A) task delegation, reducing federated communication latency by 40%.
 
 ### 2.3 Zero-Trust Identity
-*   **W3C Decentralized Identifiers**: Every StratosAgent generates its own sovereign key pair and hosts its DID document utilizing the `did:atmos` (base58btc multibase SHA-256) method. No third-party certificate authorities are permitted.
+*   **W3C Decentralized Identifiers**: Every StratosAgent generates its own sovereign key pair and hosts its DID document utilizing the `did:atmos` method. No third-party certificate authorities are permitted.
 
 ### 2.4 Tiered Security & Formal Verification
 *   **Tier 1 (Read-Only)**: Static analysis linting running on every compile path.
@@ -80,15 +80,104 @@ To guarantee absolute memory hygiene within Node.js garbage-collected environmen
 
 ---
 
-## 💻 4. Operational Run & Auditing Settings
+## 🆔 4. W3C Decentralized Identifier (`did:atmos`) Specification
+
+To achieve absolute sovereign transport identity without relying on hierarchical DNS or centralized certificate authorities, the Atmosphere network defines the native `did:atmos` method.
+
+### 4.1 DID Syntax and Derivation
+A sovereign Atmosphere Decentralized Identifier (DID) is cryptographically bound to the node's hybrid keypair:
+```
+did:atmos:<multibase-encoded-sha256-hash-of-hybrid-public-key-bundle>
+```
+The derivation pipeline is defined as:
+1. **Key Aggregation**: Combine the DER-encoded public key bytes of the classical `Ed25519` key and the post-quantum `ML-DSA-65` key:
+   ```
+   CompositeBundle = Concat(Ed25519_SPKI_DER, MLDSA65_SPKI_DER)
+   ```
+2. **Hashing**: Apply SHA-256 hashing to `CompositeBundle` to produce a 32-byte digest.
+3. **Multibase Encoding**: Prefix the digest with the standard multibase prefix for `base58btc` (`z`) and encode the hash bytes. 
+4. **Formatting**: Prepend the method prefix `did:atmos:`. Example: `did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePq...`
+
+### 4.2 DID Document JSON-LD Schema
+The DID document serves as the local cryptographic anchor. When queried by a remote peer during the Hyperswarm noise handshake, the node resolves and transmits its self-signed DID Document:
+
+```json
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/suites/ed25519-2020/v1",
+    "https://w3id.org/security/suites/mldsa-2026/v1"
+  ],
+  "id": "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7",
+  "verificationMethod": [
+    {
+      "id": "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7#key-ed25519-1",
+      "type": "Ed25519VerificationKey2020",
+      "controller": "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7",
+      "publicKeyMultibase": "z6MkmT5WbXv4YfGq..."
+    },
+    {
+      "id": "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7#key-mldsa65-1",
+      "type": "Mldsa65VerificationKey2026",
+      "controller": "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7",
+      "publicKeyMultibase": "zML8v4YfhJjKlo..."
+    }
+  ],
+  "authentication": [
+    "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7#key-ed25519-1",
+    "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7#key-mldsa65-1"
+  ],
+  "assertionMethod": [
+    "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7#key-ed25519-1",
+    "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7#key-mldsa65-1"
+  ],
+  "service": [
+    {
+      "id": "did:atmos:zQ3shMhgFspDaeN1T8s7vXo4F5ePqWJv7#p2p-overlay",
+      "type": "HyperswarmRPCEndpoint",
+      "serviceEndpoint": "hyperswarm://dht-topic-hash"
+    }
+  ]
+}
+```
+
+---
+
+## 🕵️ 5. Zero-Trust Cryptographic Memory Auditing Specification
+
+Node.js executes inside the V8 engine, which uses a garbage-collected, generational heap. Simply relying on variables falling out of scope does **not** erase physical RAM. Under traditional designs, key segments can linger in older generations of heap pages indefinitely, exposing them to memory dump exploitation or Side-Channel attacks.
+
+### 5.1 The "String Immutability Leakage" Hardening
+*   **The Flaw**: JavaScript `String` primitive types are completely immutable. Any operations on strings (concatenations, trims, or conversions to buffers) create new instances in the V8 heap string table. It is physically impossible in JavaScript to zero-fill or clear a String.
+*   **The Mandate**: All API entry points, RPC layers, and decrypters MUST ingest, process, and pass the user's master passcode exclusively as a mutable TypedArray (`Buffer` or `Uint8Array`). Immediately after executing `pbkdf2Sync`, the raw passcode Buffer must be explicitly zeroed using `.fill(0)`.
+
+### 5.2 Live V8 Heap Snapshot Programmatic Audit
+To mathematically assert the success of memory zeroization, the integration suite incorporates a programmatic Heap Audit script that:
+1. **Marker Ingestion**: Derives keying structures using highly specific, high-entropy unique markers (e.g. `'LEAK_CHECK_PASSCODE_ABCD_9999'` and `'LEAK_CHECK_SEED_XYZ_7777'`).
+2. **Decryption Cycle**: Triggers `decryptSeed` and WASI initialization, performing all standard `.fill(0)` cleanups.
+3. **Forced Garbage Collection**: Triggers global GC synchronously to purge all reachable temporary references (runs Node.js with `--expose-gc`).
+4. **Snapshot Capture**: Invokes `v8.getHeapSnapshot()` to stream the raw serialized engine heap.
+5. **Memory Scan**: Parses the heap snapshot objects, searching all memory buffers and string tables.
+6. **Assertion**: If any occurrence of the unique marker buffers is found, the audit fails immediately with a security breach exception.
+
+### 5.3 Hostinger VPS Sovereign Environment Tuning
+*   **Swap Isolation**: Run `sudo swapoff -a` on VPS hosts to prevent decrypted enclave memories from being written to unencrypted Linux swap pages on local SSDs.
+*   **Zero-Fill Allocations**: Run all Atmos node services using the Node.js flag `--zero-fill-buffers` to force the OS to pre-wipe recycled RAM partitions.
+
+---
+
+## 💻 6. Operational Run & Auditing Settings
 
 To enforce FIPS-compliant, quantum-hardened execution on Node.js runtimes:
 
-### 4.1 FIPS Node.js Execution Commands
+### 6.1 FIPS Node.js Execution Commands
 ```bash
 # Execute local RAG and deep-scan tests under native FIPS configuration
 node --enable-fips packages/stratos-agent/test-deepscan-telegram.js
 ```
 
-### 4.2 Security Auditing Script
-*   **Heap Snapshot Audits**: Programmatic instantiation of `v8.writeHeapSnapshot()` is run under testing to verify that no traces of decrypted private keys or seed fragments reside in standard GC memory outside the WASM boundary.
+### 6.2 Security Auditing Script Execution
+```bash
+# Force garbage collection and execute programmatic zero-trust heap scan
+node --expose-gc packages/stratos-agent/src/security/audit-zeroization.js
+```

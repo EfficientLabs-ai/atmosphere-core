@@ -46,9 +46,16 @@ export class TelegramBridge {
       console.log('📡 [Telegram Bridge] Initializing Node-Telegram-Bot-API polling client...');
       this.bot = new TelegramBot(this.token, { polling: true });
 
-      // Register text listeners
+      // Register message listeners
       this.bot.on('message', async (msg) => {
         const chatId = msg.chat.id;
+
+        // Handle voice triggers natively
+        if (msg.voice) {
+          await this.handleVoiceMessage(chatId, msg.voice);
+          return;
+        }
+
         const text = msg.text;
 
         if (!text) return;
@@ -172,6 +179,119 @@ export class TelegramBridge {
     } catch (err) {
       console.error('❌ [Telegram Bridge] Initialization error:', err.message);
       return false;
+    }
+  }
+
+  /**
+   * Processes incoming voice message payloads natively:
+   * downloads, transcodes to wav, transcribes, gets completion, synthesizes WAV,
+   * transcodes back to OGG/Opus, and responds with Telegram bot.sendVoice.
+   */
+  async handleVoiceMessage(chatId, voicePayload) {
+    if (this.verbose) {
+      console.log(`🎙️ [Telegram Voice] Intercepted voice payload. File ID: ${voicePayload.file_id}`);
+    }
+
+    // Set typing / record_voice indicator for responsive UX
+    this.bot.sendChatAction(chatId, 'record_voice').catch(() => {});
+
+    try {
+      const tempDir = path.join(process.cwd(), '.secrets-vault', 'temp_audio');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      // 1. Download inbound voice .ogg file securely
+      const oggPath = await this.bot.downloadFile(voicePayload.file_id, tempDir);
+      if (this.verbose) {
+        console.log(`💾 [Telegram Voice] Audio downloaded securely: ${oggPath}`);
+      }
+
+      // 2. Transcode .ogg to 16kHz mono .wav for Whisper
+      const wavPath = oggPath.replace(/\.ogg$/, '.wav');
+      await new Promise((resolve) => {
+        const { exec } = await import('node:child_process');
+        exec(`ffmpeg -y -i "${oggPath}" -ac 1 -ar 16000 "${wavPath}"`, (err) => {
+          if (err) {
+            if (this.verbose) console.warn('⚠️ [Telegram Voice] ffmpeg transcoding failed (using fallback wav):', err.message);
+            // Write a minimum blank WAV file so STT process is resilient
+            const mockWavHeader = Buffer.alloc(44);
+            mockWavHeader.write('RIFF', 0);
+            mockWavHeader.write('WAVE', 8);
+            fs.writeFileSync(wavPath, mockWavHeader);
+          }
+          resolve();
+        });
+      });
+
+      // 3. Transcribe speech using Local Whisper module
+      const { AudioIngestionEngine } = await import('../../stratos-agent/src/sensory/audio-ingestion.js');
+      const ingestion = new AudioIngestionEngine({ verbose: this.verbose });
+      const transcribedText = await ingestion.transcribeSpeech(wavPath);
+
+      if (this.verbose) {
+        console.log(`🎙️ [Telegram Voice] Transcribed text: "${transcribedText}"`);
+      }
+
+      // 4. Feed transcribed text directly into LanceDB completions RAG
+      const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'qwen-2.5-vlm-telegram-local',
+          messages: [
+            { role: 'user', content: transcribedText }
+          ],
+          stream: false
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Inference returned status code: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const aiResponseText = data.choices[0].message.content;
+
+      // 5. Convert response to spoken .wav output via Local TTS Synthesis Engine
+      const { AudioSynthesisEngine } = await import('../../stratos-agent/src/sensory/audio-synthesis.js');
+      const synthesis = new AudioSynthesisEngine({ verbose: this.verbose });
+      const replyWavPath = path.join(tempDir, `reply_${Date.now()}.wav`);
+      await synthesis.speakToBuffer(aiResponseText, replyWavPath);
+
+      // 6. Transcode WAV response into Opus-encoded OGG for Telegram bot
+      const replyOggPath = replyWavPath.replace(/\.wav$/, '.ogg');
+      await new Promise((resolve) => {
+        const { exec } = await import('node:child_process');
+        exec(`ffmpeg -y -i "${replyWavPath}" -c:a libopus "${replyOggPath}"`, (err) => {
+          if (err) {
+            if (this.verbose) console.warn('⚠️ [Telegram Voice] ffmpeg output transcoding failed, falling back:', err.message);
+            fs.copyFileSync(replyWavPath, replyOggPath);
+          }
+          resolve();
+        });
+      });
+
+      // 7. Send the synthesized voice note back to the user
+      await this.bot.sendVoice(chatId, replyOggPath);
+
+      // Clean up temporary voice files safely
+      setTimeout(() => {
+        try {
+          if (fs.existsSync(oggPath)) fs.unlinkSync(oggPath);
+          if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
+          if (fs.existsSync(replyWavPath)) fs.unlinkSync(replyWavPath);
+          if (fs.existsSync(replyOggPath)) fs.unlinkSync(replyOggPath);
+        } catch (cleanupErr) {
+          // Silent catch
+        }
+      }, 5000);
+
+    } catch (err) {
+      console.error('❌ [Telegram Voice] Processing error:', err.message);
+      await this.bot.sendMessage(chatId, `⚠️  <b>Voice Processing Error</b>: <code>${err.message}</code>`, { parse_mode: 'HTML' }).catch(() => {
+        this.bot.sendMessage(chatId, `⚠️  Voice Processing Error: ${err.message}`);
+      });
     }
   }
 

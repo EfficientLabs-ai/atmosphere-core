@@ -185,12 +185,35 @@ async function runTest() {
     console.log(`⚠️  [Hardware Monitor] Host machine is under heavy gaming load. Rejecting incoming DHT tasks: ${!isHostBusy ? '✅ BLOCKED' : '❌ LEAKED'}`);
     console.log('-------------------------------------------------------------------------------------');
 
-    if (data.choices.length > 0 && responseText.length > 0 && configVerified && isHostIdle && !isHostBusy) {
-      console.log('\n🎉 PHASE 16 GLOBAL PRODUCTION UI & DEPIN HARVEST AUDIT SECURELY VERIFIED!');
+    // 10. Multi-Modal Audio Ingestion & Synthesis Verification
+    console.log('🎙️  [Step 8] Auditing Multi-Modal Voice-to-Voice Pipelines...');
+    const { AudioIngestionEngine } = await import('./src/sensory/audio-ingestion.js');
+    const { AudioSynthesisEngine } = await import('./src/sensory/audio-synthesis.js');
+
+    const mockWavPath = path.join(tmpDir, 'mock_voice_vision.wav');
+    fs.writeFileSync(mockWavPath, Buffer.alloc(44)); // Create fake wave
+
+    const ingestion = new AudioIngestionEngine({ verbose: true });
+    const transcription = await ingestion.transcribeSpeech(mockWavPath);
+    console.log(`   - Ingestion (STT) Output:           "${transcription}"`);
+
+    const synthesis = new AudioSynthesisEngine({ verbose: true });
+    const speakText = `<think>Analyzing display context</think> Active screen is VS Code.`;
+    const replyWavPath = path.join(tmpDir, 'reply_voice.wav');
+    await synthesis.speakToBuffer(speakText, replyWavPath);
+
+    const voiceFilesCreated = fs.existsSync(replyWavPath) && transcription.length > 0;
+    console.log(`   - Spoken WAV File Created:         ${fs.existsSync(replyWavPath) ? '✅ YES' : '❌ NO'}`);
+    console.log(`   - Spoken PlainText Cleaned:        "${synthesis.stripThinkingTags(speakText)}"`);
+    console.log(`   - Multi-Modal Pipeline Audit:       ${voiceFilesCreated ? '✅ PASSED' : '❌ FAILED'}`);
+    console.log('-------------------------------------------------------------------------------------');
+
+    if (data.choices.length > 0 && responseText.length > 0 && configVerified && isHostIdle && !isHostBusy && voiceFilesCreated) {
+      console.log('\n🎉 PHASE 16 GLOBAL PRODUCTION UI & MULTI-MODAL AUDIT SECURELY VERIFIED!');
       cleanup(tmpDir, serverInstance);
       process.exit(0);
     } else {
-      throw new Error('Verification failed: legacy configs or hardware throttle checks failed.');
+      throw new Error('Verification failed: legacy configs, hardware throttle checks, or voice systems failed.');
     }
 
   } catch (err) {

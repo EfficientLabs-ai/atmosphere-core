@@ -81,20 +81,29 @@ export class TelegramBridge {
           const data = await response.json();
           const aiResponseText = data.choices[0].message.content;
 
-          // Process and format Monaco-style thinking tags elegantly in Telegram HTML
+          // Process and format Monaco-style thinking tags elegantly in Telegram Markdown
           let formattedText = aiResponseText;
           if (formattedText.includes('<think>')) {
             formattedText = formattedText
-              .replace('<think>', '🧠 *[Sovereign Thinking Process]*\n`')
-              .replace('</think>', '`\n\n💬 *[Local Response]*\n');
+              .replace('<think>', '🧠 *[Sovereign Thinking Process]*\n```\n')
+              .replace('</think>', '\n```\n\n💬 *[Local Response]*\n');
           }
 
-          // Reply back to Telegram
-          await this.bot.sendMessage(chatId, formattedText, { parse_mode: 'Markdown' });
+          // Reply back to Telegram with resilient plaintext fallback
+          try {
+            await this.bot.sendMessage(chatId, formattedText, { parse_mode: 'Markdown' });
+          } catch (sendErr) {
+            console.warn('⚠️  [Telegram Bridge] Markdown parse failed, retrying in Plaintext:', sendErr.message);
+            await this.bot.sendMessage(chatId, aiResponseText);
+          }
 
         } catch (err) {
           console.error('❌ [Telegram Bridge] Completions processing error:', err.message);
-          this.bot.sendMessage(chatId, `⚠️  *Local Processing Error*: ${err.message}`, { parse_mode: 'Markdown' });
+          try {
+            this.bot.sendMessage(chatId, `⚠️  *Local Processing Error*: ${err.message}`, { parse_mode: 'Markdown' });
+          } catch (e) {
+            this.bot.sendMessage(chatId, `⚠️  Local Processing Error: ${err.message}`);
+          }
         }
       });
 

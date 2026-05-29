@@ -7,11 +7,17 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "npm run test --workspaces --if-present",
-    "start:shim": "npm run start --workspace=packages/api-shim",
+    "test": "node packages/stratos-agent/test-deepscan-telegram.js",
+    "test:fips": "node --enable-fips packages/stratos-agent/test-deepscan-telegram.js",
+    "test:all": "npm run test --workspaces --if-present",
+    "start:shim": "node packages/api-shim/index.js",
+    "start:shim:fips": "node --enable-fips packages/api-shim/index.js",
     "start:maximus": "npm run start --workspace=packages/maximus-telemetry",
     "start:desktop": "npm run tauri dev --workspace=packages/atmos-desktop"
   },
   "devDependencies": {},
-  "dependencies": {}
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "@lancedb/lancedb": "^0.29.0"
+  }
 }

@@ -1,0 +1,26 @@
+Business Source License 1.1
+
+Licensor: Efficient Labs
+Software: efficient-labs-corestore
+Change Date: May 29, 2030
+Change License: Apache License, Version 2.0
+Additional Use Grant: You may use the Licensed Work for any non-production purpose. For production purposes, you may use the Licensed Work only as part of Atmosphere Network and StratosAgent deployments.
+
+Terms of the License
+
+1. Grant of License. The Licensor hereby grants you the right to copy and modify the Software, and to use the Software, solely for the purposes permitted under the Additional Use Grant.
+
+2. Change of License. Effective on the Change Date, the Licensor hereby grants you a license to use, copy, modify, and distribute the Software under the terms of the Change License.
+
+3. Termination. This License and your rights under it terminate automatically if you breach any of its terms.
+
+4. Intellectual Property. The Licensor reserves all rights not expressly granted under this License.
+
+5. Disclaimer of Warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+This software comprises modifications and forks of the original 'corestore' library created by Holepunch:
+Copyright (c) Holepunch
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of the original software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software.

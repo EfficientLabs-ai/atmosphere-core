@@ -166,17 +166,80 @@ To mathematically assert the success of memory zeroization, the integration suit
 
 ---
 
-## 💻 6. Operational Run & Auditing Settings
+## ⚖️ 6. Holepunch MIT Sublicensing & Business Source License 1.1 (BSL 1.1)
+
+To protect the intellectual property, research, and long-term sovereignty of the Atmosphere mesh and StratosAgent frameworks before these systems go public, all core transport and coordination protocols cloned or extracted from the Holepunch ecosystem (`hypercore`, `hyperswarm`, `corestore`, `autobase`) will be extracted, renamed, and sublicensed under the **Business Source License 1.1 (BSL 1.1)** of Efficient Labs.
+
+### 6.1 MIT Sublicensing Compliance Rules
+Under Section 1 of the standard MIT License, users are granted broad authority to modify, merge, and sublicense the code, provided that the original copyright notice and permission notice are preserved. To remain 100% compliant:
+1. All files extracted from Holepunch libraries MUST preserve their original copyright header (e.g., `Copyright (c) Holepunch`).
+2. A new, comprehensive `LICENSE` file is generated at the root of each forked package, prepending the **Business Source License 1.1** terms.
+
+### 6.2 BSL 1.1 Parameter Specification
+The BSL 1.1 licenses for the forks are defined with the following strict parameters:
+*   **Licensor**: Efficient Labs
+*   **Software**: The respective forked repository:
+    *   `efficient-labs-hypercore`
+    *   `efficient-labs-hyperswarm`
+    *   `efficient-labs-corestore`
+    *   `efficient-labs-autobase`
+*   **Change Date**: May 29, 2030
+*   **Change License**: Apache License, Version 2.0
+*   **Additional Use Grant**: You may use the Licensed Work for any non-production purpose. For production purposes, you may make use of the Licensed Work only as part of Atmosphere Network and StratosAgent deployments.
+
+---
+
+## 🛠️ 7. VPS Resource Reclamation & Lynis Hardening (Score 90+)
+
+To free up hardware memory and CPU compute resources on the Hostinger VPS (`neo@efficient-labs`) in preparation for hosting our first lightweight, open-weight local Large Language Model, and to harden the operating system security to a Lynis score of 90+, the system executes the following resource sweep and configuration locks:
+
+### 7.1 Wiping Legacy Services & Reclaiming RAM
+We permanently disable and terminate the heavy legacy services of the old system slice, reclaiming over 4.5 GB of active RAM:
+1. **matrix-synapse.service** (`sudo systemctl stop matrix-synapse && sudo systemctl disable matrix-synapse`): Wipes the heavy Python matrix homeserver (reclaiming ~1.5 GB RAM).
+2. **n8n.service** (`sudo systemctl stop n8n && sudo systemctl disable n8n`): Wipes the self-hosted workflow automation service (reclaiming ~800 MB RAM).
+3. **memcompute.service** (`sudo systemctl stop memcompute && sudo systemctl disable memcompute`): Reclaims ~300 MB RAM.
+4. **efficient-labs-telegram-operator-bot.service** (`systemctl --user stop efficient-labs-telegram-operator-bot && systemctl --user disable efficient-labs-telegram-operator-bot`): Wipes the user-level background daemon.
+5. **Legacy Cron Jobs**: Clear all old crontab items running `audit_delivery_worker.js`, `audit_followup_worker.js`, and `launch-supervisor.sh` scripts.
+6. **Active Processes Audit**: Execute `kill -9` on all orphaned python gunicorn instances, codex MCP servers, and redundant tmux sessions.
+
+### 7.2 Directory Clean Sweeps & Secure Backups
+*   **Backup**: Compress `/home/neo/vault` and `/home/neo/bin` into `/home/neo/vault_backup.tar.gz` and `/home/neo/bin_backup.tar.gz`.
+*   **Wipe**: Recursively remove (`rm -rf`):
+    *   `/home/neo/work/Solo-AI`
+    *   `/home/neo/work/Orchestral`
+    *   `/home/neo/work/Efficient-Labs`
+    *   `/home/neo/work/browser-harness`
+    *   `/home/neo/work/hubspot-ai-native-extractor`
+    *   `/home/neo/work/references`
+    *   `/home/neo/work/screenshots`
+    *   `/home/neo/work/sovereign-core`
+    *   `/home/neo/work/.pending-handoffs`
+
+### 7.3 Virtual Memory (Swap) Allocation
+Since the VPS operates with zero swap space, loading a large model would trigger OOM kernel panics. The VPS configures:
+*   An **8GB secure swap file** located at `/swapfile`.
+*   Strict permissions (`chmod 600`) and standard entry in `/etc/fstab` to ensure swap persistence across reboots.
+
+### 7.4 Lynis 90+ Target Security Hardening Actions
+We execute four highly specific, low-risk hardening measures:
+1. **Enable Legal Warning Banner (sshd-banner)**: Configure `Banner /etc/issue.net` in `/etc/ssh/sshd_config` to display our authorization warning and comply with international access logging laws.
+2. **Disable Debian OS Version Leak (sshd-debian-banner)**: Configure `DebianBanner no` in the SSH daemon configuration to block OS fingerprinting.
+3. **Install APT Security Checks (deb-bugs)**: Install `apt-listbugs` via `apt-get` to alert on critical package bugs before updates.
+4. **PAM Isolation (pam-tmpdir)**: Install `libpam-tmpdir` to isolate per-user temporary folders (`/tmp/user/$UID`) and prevent file traversal leaks between localized shell users.
+
+---
+
+## 💻 8. Operational Run & Auditing Settings
 
 To enforce FIPS-compliant, quantum-hardened execution on Node.js runtimes:
 
-### 6.1 FIPS Node.js Execution Commands
+### 8.1 FIPS Node.js Execution Commands
 ```bash
 # Execute local RAG and deep-scan tests under native FIPS configuration
 node --enable-fips packages/stratos-agent/test-deepscan-telegram.js
 ```
 
-### 6.2 Security Auditing Script Execution
+### 8.2 Security Auditing Script Execution
 ```bash
 # Force garbage collection and execute programmatic zero-trust heap scan
 node --expose-gc packages/stratos-agent/src/security/audit-zeroization.js

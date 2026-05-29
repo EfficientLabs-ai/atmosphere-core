@@ -1,0 +1,19 @@
+[package]
+name = "atmos-desktop"
+version = "1.0.0"
+description = "Atmos Tauri system tray wrapper"
+authors = ["Atmos Developers"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5" }
+
+[dependencies]
+tauri = { version = "1.5", features = ["system-tray", "api-all", "shell-open", "notification"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ureq = "2.9"
+
+[features]
+default = [ "custom-protocol" ]
+custom-protocol = [ "tauri/custom-protocol" ]

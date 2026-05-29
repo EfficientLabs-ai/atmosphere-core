@@ -1,0 +1,17 @@
+{
+  "name": "atmos-monorepo",
+  "version": "1.0.0",
+  "description": "Sovereign P2P compute layer and StratosAgent browser automation framework",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "start:shim": "npm run start --workspace=packages/api-shim",
+    "start:maximus": "npm run start --workspace=packages/maximus-telemetry",
+    "start:desktop": "npm run tauri dev --workspace=packages/atmos-desktop"
+  },
+  "devDependencies": {},
+  "dependencies": {}
+}

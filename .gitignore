@@ -1,0 +1,35 @@
+# Dependency Directories
+node_modules/
+jspm_packages/
+web_modules/
+
+# Secrets Vault and Private Keys (Strict Quarantine Lock!)
+.secrets-vault/
+.env
+.env.*
+*.pem
+*.key
+*.pat
+
+# Local Storage, Vector Banks, Databases, and Local Profiles
+.stratos-vector-store/
+.stratos-profile/
+*.db
+*.db-shm
+*.db-wal
+
+# Temporary / Stress Testing Sandboxes
+tmp-*/
+tmp/
+temp/
+logs/
+*.log
+
+# Compiled WASM Skills Output
+dist/skills/
+
+# OS/IDE Configurations
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

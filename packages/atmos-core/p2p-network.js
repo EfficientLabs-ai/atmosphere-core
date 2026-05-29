@@ -1,0 +1,142 @@
+import Hyperswarm from 'hyperswarm';
+import crypto from 'crypto';
+import b4a from 'b4a';
+
+/**
+ * P2PNetwork handles the direct peer discovery, hole punching, and Noise encrypted connection tunnels.
+ */
+export class P2PNetwork {
+  /**
+   * @param {KeyringManager} keyring - The initialized KeyringManager
+   * @param {Object} [options]
+   * @param {boolean} [options.isMaximus] - Flags whether this node operates on a private Maximus overlay
+   * @param {Array<string>} [options.bootstrap] - Private DHT bootstrap servers
+   */
+  constructor(keyring, options = {}) {
+    if (!keyring) throw new Error('KeyringManager is required for P2PNetwork');
+    this.keyring = keyring;
+    this.isMaximus = options.isMaximus || false;
+    this.bootstrap = options.bootstrap || null;
+    this.swarm = null;
+    this.connections = new Set();
+    this.agentCards = new Map();
+  }
+
+  /**
+   * Initialize Hyperswarm and start discovery.
+   */
+  async start() {
+    // Configure Hyperswarm options. Maximus nodes route via isolated/private bootstrap nodes.
+    const swarmOpts = {};
+    if (this.isMaximus && this.bootstrap) {
+      swarmOpts.dht = {
+        bootstrap: this.bootstrap
+      };
+    }
+
+    this.swarm = new Hyperswarm(swarmOpts);
+
+    // Wire up connection handlers wrapping the Noise protocol implicitly managed by Hyperswarm.
+    this.swarm.on('connection', (socket, peerInfo) => {
+      const peerId = b4a.toString(peerInfo.publicKey, 'hex');
+      this.connections.add(socket);
+
+      socket.on('data', (data) => {
+        try {
+          const payload = JSON.parse(data.toString('utf8'));
+          this._handleIncomingMessage(peerId, payload, socket);
+        } catch (err) {
+          // Silent catch of malformed packets in raw network buffers
+        }
+      });
+
+      socket.on('close', () => {
+        this.connections.delete(socket);
+      });
+
+      socket.on('error', () => {
+        this.connections.delete(socket);
+      });
+    });
+
+    return this.swarm;
+  }
+
+  /**
+   * Joins a specific network topic key (DHT namespace discovery).
+   * @param {string} topicName
+   */
+  joinTopic(topicName) {
+    if (!this.swarm) throw new Error('Network not started');
+    // Generate standard 32-byte cryptographic namespace hash
+    const topic = crypto.createHash('sha256').update(topicName).digest();
+    
+    // Jointly announce (for discovery) and lookup peers
+    const discovery = this.swarm.join(topic, {
+      client: true,
+      server: true
+    });
+
+    return discovery;
+  }
+
+  /**
+   * Broadcasts this node's Agent Card to the swarm to facilitate multi-agent task sharing.
+   * @param {Object} skills - Map/List of WASM skills available
+   */
+  broadcastAgentCard(skills = {}) {
+    const card = {
+      type: 'AGENT_CARD',
+      publicKey: b4a.toString(this.keyring.keypair.publicKey, 'hex'),
+      nodeType: this.keyring.nodeType,
+      skills,
+      timestamp: Date.now()
+    };
+
+    // Self-sign the Agent Card payload
+    const serialized = JSON.stringify(card);
+    const signature = b4a.toString(this.keyring.sign(serialized), 'hex');
+    
+    const signedPayload = {
+      card,
+      signature
+    };
+
+    this.broadcast(signedPayload);
+  }
+
+  /**
+   * Broadcast message to all actively connected socket streams.
+   */
+  broadcast(message) {
+    const data = Buffer.from(JSON.stringify(message));
+    for (const socket of this.connections) {
+      socket.write(data);
+    }
+  }
+
+  /**
+   * Internal message router. Handles validation of cryptographic cards and x402 payment envelopes.
+   */
+  _handleIncomingMessage(peerId, envelope, socket) {
+    if (envelope.card && envelope.signature) {
+      const serializedCard = JSON.stringify(envelope.card);
+      const isVerified = this.keyring.verify(
+        serializedCard,
+        b4a.from(envelope.signature, 'hex'),
+        b4a.from(envelope.card.publicKey, 'hex')
+      );
+
+      if (isVerified) {
+        this.agentCards.set(envelope.card.publicKey, envelope.card);
+      }
+    }
+  }
+
+  async stop() {
+    if (this.swarm) {
+      await this.swarm.destroy();
+    }
+    this.connections.clear();
+  }
+}

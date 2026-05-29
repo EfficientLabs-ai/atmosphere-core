@@ -1,0 +1,15 @@
+{
+  "name": "atmos-desktop",
+  "version": "1.0.0",
+  "description": "Atmos Tauri system tray wrapper to manage Pear runtime and local API proxy",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^1.5.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.5.11"
+  }
+}

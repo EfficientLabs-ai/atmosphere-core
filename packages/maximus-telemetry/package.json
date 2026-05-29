@@ -1,0 +1,13 @@
+{
+  "name": "maximus-telemetry",
+  "version": "1.0.0",
+  "description": "Atmos Maximus Nodes secure hardware metrics and telemetry RPC provider",
+  "main": "telemetry.js",
+  "type": "module",
+  "scripts": {
+    "start": "node telemetry.js"
+  },
+  "dependencies": {
+    "atmos-core": "file:../atmos-core"
+  }
+}

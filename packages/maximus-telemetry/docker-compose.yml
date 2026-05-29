@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  maximus-node-1:
+    build:
+      context: ../..
+      dockerfile: packages/maximus-telemetry/Dockerfile
+    container_name: atmos-maximus-node-1
+    environment:
+      - NODE_ENV=production
+      - HSM_KEY=maximus-secure-hsm-key-node-1
+      - DHT_TOPIC=atmos-maximus-mesh-test-grid
+      - TELEMETRY_INTERVAL_MS=3000
+    ports:
+      - "4001:4000"
+    restart: unless-stopped
+    networks:
+      - atmos-test-grid
+
+  maximus-node-2:
+    build:
+      context: ../..
+      dockerfile: packages/maximus-telemetry/Dockerfile
+    container_name: atmos-maximus-node-2
+    environment:
+      - NODE_ENV=production
+      - HSM_KEY=maximus-secure-hsm-key-node-2
+      - DHT_TOPIC=atmos-maximus-mesh-test-grid
+      - TELEMETRY_INTERVAL_MS=3000
+    ports:
+      - "4002:4000"
+    restart: unless-stopped
+    networks:
+      - atmos-test-grid
+
+  maximus-node-3:
+    build:
+      context: ../..
+      dockerfile: packages/maximus-telemetry/Dockerfile
+    container_name: atmos-maximus-node-3
+    environment:
+      - NODE_ENV=production
+      - HSM_KEY=maximus-secure-hsm-key-node-3
+      - DHT_TOPIC=atmos-maximus-mesh-test-grid
+      - TELEMETRY_INTERVAL_MS=3000
+    ports:
+      - "4003:4000"
+    restart: unless-stopped
+    networks:
+      - atmos-test-grid
+
+networks:
+  atmos-test-grid:
+    driver: bridge

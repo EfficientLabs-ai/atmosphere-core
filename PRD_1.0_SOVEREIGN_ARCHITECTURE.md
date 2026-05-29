@@ -54,7 +54,7 @@ We permanently lock in the following four core architectural decision records (A
 *   **Horizontal Coordination (ACP)**: IBM's Agent Communication Protocol is integrated natively over Hyperswarm RPC sockets for Agent-to-Agent (A2A) task delegation, reducing federated communication latency by 40%.
 
 ### 2.3 Zero-Trust Identity
-*   **W3C Decentralized Identifiers**: Every StratosAgent generates its own sovereign key pair and hosts its DID document utilizing the `did:wba` (Web-based/Node-based) method. No third-party certificate authorities are permitted.
+*   **W3C Decentralized Identifiers**: Every StratosAgent generates its own sovereign key pair and hosts its DID document utilizing the `did:atmos` (base58btc multibase SHA-256) method. No third-party certificate authorities are permitted.
 
 ### 2.4 Tiered Security & Formal Verification
 *   **Tier 1 (Read-Only)**: Static analysis linting running on every compile path.
@@ -63,18 +63,32 @@ We permanently lock in the following four core architectural decision records (A
 
 ---
 
-## 💻 3. Operational Environment Configurations
+## 🔒 3. Memory Security & Decryption Specifications
+
+To guarantee absolute memory hygiene within Node.js garbage-collected environments:
 
 ### 3.1 Node.js Cryptographic Integration (Node.js v24.7+)
-*   Utilize native `node:crypto` library configured with FIPS flags to execute lattice-based calculations natively:
-    ```javascript
-    import { generateKeyPairSync, kem } from 'node:crypto';
-    // Native post-quantum ML-KEM-768/ML-DSA-65 algorithms bindings
-    ```
+*   Utilize native `node:crypto` library configured with FIPS flags to execute lattice-based calculations natively.
 
-### 3.2 Monorepo Startup & Verification Command Specs
+### 3.2 Secure Seed Decryption (AES-GCM-256)
+*   The raw 32-byte seed is derived using PBKDF2-HMAC-SHA256 from a user master passcode and salt.
+*   Decryption utilizes native `createDecipheriv` with a 12-byte IV and a 16-byte authentication tag.
+*   Upon successful decryption and hand-off to the WASM linear memory heap, all intermediate buffers (including the PBKDF2 derived key, salt, and decrypted seed) are explicitly zeroed out utilizing `.fill(0)`.
+
+### 3.3 WASM Guest Memory Wiping (Zeroize)
+*   The private `ML-DSA-65` key pair computed inside the WASM linear memory heap is wrapped in Rust's `zeroize` and `ZeroizeOnDrop` traits, ensuring that all lattice private key bytes are explicitly scrubbed from hardware RAM as soon as the enclave instance is dropped.
+
+---
+
+## 💻 4. Operational Run & Auditing Settings
+
 To enforce FIPS-compliant, quantum-hardened execution on Node.js runtimes:
+
+### 4.1 FIPS Node.js Execution Commands
 ```bash
 # Execute local RAG and deep-scan tests under native FIPS configuration
 node --enable-fips packages/stratos-agent/test-deepscan-telegram.js
 ```
+
+### 4.2 Security Auditing Script
+*   **Heap Snapshot Audits**: Programmatic instantiation of `v8.writeHeapSnapshot()` is run under testing to verify that no traces of decrypted private keys or seed fragments reside in standard GC memory outside the WASM boundary.

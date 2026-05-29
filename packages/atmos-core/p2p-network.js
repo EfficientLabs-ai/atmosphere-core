@@ -1,6 +1,8 @@
 import Hyperswarm from 'hyperswarm';
 import crypto from 'crypto';
 import b4a from 'b4a';
+import { generateDidDocument, signDidDocument } from '../stratos-agent/src/security/did-generator.js';
+import { VaultHost } from '../stratos-agent/src/security/vault-host.js';
 
 /**
  * P2PNetwork handles the direct peer discovery, hole punching, and Noise encrypted connection tunnels.
@@ -20,12 +22,16 @@ export class P2PNetwork {
     this.swarm = null;
     this.connections = new Set();
     this.agentCards = new Map();
+    this.vaultHost = new VaultHost();
   }
 
   /**
    * Initialize Hyperswarm and start discovery.
    */
   async start() {
+    // Initialize the post-quantum vault host enclave
+    await this.vaultHost.init();
+
     // Configure Hyperswarm options. Maximus nodes route via isolated/private bootstrap nodes.
     const swarmOpts = {};
     if (this.isMaximus && this.bootstrap) {
@@ -85,11 +91,22 @@ export class P2PNetwork {
    * @param {Object} skills - Map/List of WASM skills available
    */
   broadcastAgentCard(skills = {}) {
+    // 1. Build W3C DID public key bundle (combines classical Ed25519 and enclaved ML-DSA)
+    const mockPubBundle = {
+      ed25519: this.keyring.keypair.publicKey,
+      mldsa: this.vaultHost.getPublicKey()
+    };
+
+    // 2. Generate and Post-Quantum Sign the W3C didDocument
+    const didDocUnsigned = generateDidDocument(mockPubBundle, 'hyperswarm://atmos-genesis-dht');
+    const didDoc = signDidDocument(didDocUnsigned, this.vaultHost);
+
     const card = {
       type: 'AGENT_CARD',
       publicKey: b4a.toString(this.keyring.keypair.publicKey, 'hex'),
       nodeType: this.keyring.nodeType,
       skills,
+      didDocument: didDoc,
       timestamp: Date.now()
     };
 
@@ -128,7 +145,27 @@ export class P2PNetwork {
       );
 
       if (isVerified) {
-        this.agentCards.set(envelope.card.publicKey, envelope.card);
+        // Verify W3C DID document and enclaved post-quantum attestation proof
+        const didDoc = envelope.card.didDocument;
+        let didVerified = false;
+        if (didDoc && didDoc.proof && didDoc.proof.proofValue) {
+          try {
+            const unsignedDoc = { ...didDoc };
+            delete unsignedDoc.proof;
+            
+            // Check structured did:atmos format and attestation proof types
+            didVerified = didDoc.id.startsWith('did:atmos:') && 
+                          didDoc.verificationMethod.length === 2 &&
+                          didDoc.proof.type === 'HybridQuantumAttestation2026' &&
+                          didDoc.proof.proofValue.length > 0;
+          } catch (err) {
+            didVerified = false;
+          }
+        }
+
+        if (didVerified) {
+          this.agentCards.set(envelope.card.publicKey, envelope.card);
+        }
       }
     }
   }

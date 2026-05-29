@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { exec } from 'node:child_process';
 import fetch from 'node-fetch';
 import TelegramBot from 'node-telegram-bot-api';
 
@@ -210,7 +211,6 @@ export class TelegramBridge {
       // 2. Transcode .ogg to 16kHz mono .wav for Whisper
       const wavPath = oggPath.replace(/\.ogg$/, '.wav');
       await new Promise((resolve) => {
-        const { exec } = await import('node:child_process');
         exec(`ffmpeg -y -i "${oggPath}" -ac 1 -ar 16000 "${wavPath}"`, (err) => {
           if (err) {
             if (this.verbose) console.warn('⚠️ [Telegram Voice] ffmpeg transcoding failed (using fallback wav):', err.message);
@@ -262,7 +262,6 @@ export class TelegramBridge {
       // 6. Transcode WAV response into Opus-encoded OGG for Telegram bot
       const replyOggPath = replyWavPath.replace(/\.wav$/, '.ogg');
       await new Promise((resolve) => {
-        const { exec } = await import('node:child_process');
         exec(`ffmpeg -y -i "${replyWavPath}" -c:a libopus "${replyOggPath}"`, (err) => {
           if (err) {
             if (this.verbose) console.warn('⚠️ [Telegram Voice] ffmpeg output transcoding failed, falling back:', err.message);

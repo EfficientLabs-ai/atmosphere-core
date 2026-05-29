@@ -1,7 +1,7 @@
 import { KeyringManager } from './keyring.js';
 import { P2PNetwork } from './p2p-network.js';
 import { VaultHost } from '../stratos-agent/src/security/vault-host.js';
-import { WealthOSEnclave } from './src/billing/wealth-os-enclave.js';
+import { SmtTransactionEnclave } from './src/billing/smt-transaction-enclave.js';
 import { LatticeMessaging } from './src/messaging/lattice-messaging.js';
 import { generateHybridKeyPair } from '../stratos-agent/src/security/quantum-crypto.js';
 import { deriveAtmosDid } from '../stratos-agent/src/security/did-generator.js';
@@ -111,14 +111,14 @@ async function runSovereignPhasesTest() {
 
 
   // --- PHASE 20: AUTONOMOUS ENCLAVED WORKFLOWS & Z3 SMT VERIFICATION ---
-  console.log('🔒 [PHASE 20] Verifying Autonomous Wealth OS Enclave & Z3 SMT Solver Invariants...');
+  console.log('🔒 [PHASE 20] Verifying Autonomous Transaction Enclave & Z3 SMT Solver Invariants...');
 
-  const wealthEnclave = new WealthOSEnclave({ maxAmount: 1000 });
+  const txEnclave = new SmtTransactionEnclave({ maxAmount: 1000 });
   const bobDid = bobDidDoc().id;
 
-  // Authorize Bob's DID in the Wealth OS registry
-  wealthEnclave.authorizeDid(bobDid);
-  console.log(`✅ Success: Registered Bob's identity '${bobDid}' as an authorized capital allocator.`);
+  // Authorize Bob's DID in the enclave registry
+  txEnclave.authorizeDid(bobDid);
+  console.log(`✅ Success: Registered Bob's identity '${bobDid}' as an authorized node coordinator.`);
 
   // Helpers to fetch DID from Bob's actual document
   function bobDidDoc() {
@@ -133,7 +133,7 @@ async function runSovereignPhasesTest() {
     timestamp: Date.now()
   };
 
-  const satResult = wealthEnclave.processTransaction(txSat, aliceVault);
+  const satResult = txEnclave.processTransaction(txSat, aliceVault);
   console.log(`   SMT Solver Output: ${satResult.status}`);
   console.log(`   Transaction Status: ${satResult.success ? 'APPROVED' : 'QUARANTINED'}`);
   if (!satResult.success) {
@@ -154,7 +154,7 @@ async function runSovereignPhasesTest() {
     timestamp: Date.now()
   };
 
-  const unsatLimitResult = wealthEnclave.processTransaction(txUnsatLimit, aliceVault);
+  const unsatLimitResult = txEnclave.processTransaction(txUnsatLimit, aliceVault);
   console.log(`   SMT Solver Output: ${unsatLimitResult.status}`);
   console.log(`   Transaction Status: ${unsatLimitResult.success ? 'APPROVED' : 'QUARANTINED'}`);
   if (unsatLimitResult.success) {
@@ -170,7 +170,7 @@ async function runSovereignPhasesTest() {
     timestamp: Date.now()
   };
 
-  const unsatIdResult = wealthEnclave.processTransaction(txUnsatIdentity, aliceVault);
+  const unsatIdResult = txEnclave.processTransaction(txUnsatIdentity, aliceVault);
   console.log(`   SMT Solver Output: ${unsatIdResult.status}`);
   console.log(`   Transaction Status: ${unsatIdResult.success ? 'APPROVED' : 'QUARANTINED'}`);
   if (unsatIdResult.success) {
@@ -186,7 +186,7 @@ async function runSovereignPhasesTest() {
     timestamp: Date.now() - 60 * 60 * 1000 // 1 hour ago
   };
 
-  const unsatTimeResult = wealthEnclave.processTransaction(txUnsatTime, aliceVault);
+  const unsatTimeResult = txEnclave.processTransaction(txUnsatTime, aliceVault);
   console.log(`   SMT Solver Output: ${unsatTimeResult.status}`);
   console.log(`   Transaction Status: ${unsatTimeResult.success ? 'APPROVED' : 'QUARANTINED'}`);
   if (unsatTimeResult.success) {
@@ -195,8 +195,8 @@ async function runSovereignPhasesTest() {
   console.log('   Violations Reported:', unsatTimeResult.violations);
 
   // --- Quarantine Registry Audit ---
-  const quarantined = wealthEnclave.getQuarantinedTransactions();
-  console.log(`\n🛡️  Auditing Wealth OS Quarantine Registry:`);
+  const quarantined = txEnclave.getQuarantinedTransactions();
+  console.log(`\n🛡️  Auditing Transaction Enclave Quarantine Registry:`);
   console.log(`   Total Quarantined Violations: ${quarantined.length} transactions`);
   if (quarantined.length !== 3) {
     throw new Error(`❌ Phase 20 Failed: Expected 3 quarantined violations, got ${quarantined.length}`);
@@ -204,11 +204,11 @@ async function runSovereignPhasesTest() {
 
   // Verify memory zeroization
   console.log('🧹 Executing memory sweep and zeroing out transaction logs...');
-  wealthEnclave.wipeMemory();
-  if (wealthEnclave.getQuarantinedTransactions().length !== 0) {
+  txEnclave.wipeMemory();
+  if (txEnclave.getQuarantinedTransactions().length !== 0) {
     throw new Error('❌ Phase 20 Failed: Memory zeroization did not clear the quarantine logs.');
   }
-  console.log('✅ Success: Wealth OS Enclave safely verified invariants, quarantined all 3 violations, and successfully zeroized heap logs!\n');
+  console.log('✅ Success: Sovereign Transaction Enclave safely verified invariants, quarantined all 3 violations, and successfully zeroized heap logs!\n');
 
 
   // --- PHASE 21: LATTICE-BASED E2E PEER MESSAGING ---
@@ -219,7 +219,7 @@ async function runSovereignPhasesTest() {
   const aliceKeys = generateHybridKeyPair();
   const bobKeys = generateHybridKeyPair();
 
-  const secretPayload = '🚨 URGENT WARD FAMILY TRUST TRANSACTION PROTOCOL 9: REALLOCATE 850 USDC IMMEDIATELY.';
+  const secretPayload = '🚨 URGENT CORE ROUTER STATE REALLOCATION TRANSACTION PROPOSAL - LEVEL 5';
   console.log(`💬 Original secret message: "${secretPayload}"`);
 
   // 2. Alice encrypts the message targeting Bob's public key bundle

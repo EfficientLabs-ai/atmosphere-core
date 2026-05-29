@@ -1,11 +1,11 @@
 import crypto from 'node:crypto';
 
 /**
- * WealthOSEnclave: Implements the Ward Family Wealth OS secure state manager.
+ * SmtTransactionEnclave: Implements the sovereign SMT-verified state manager.
  * Connects the WASM Secure Enclave to authorize high-stakes capital transactions,
  * verified mathematically via a simulated Z3 SMT solver before state release.
  */
-export class WealthOSEnclave {
+export class SmtTransactionEnclave {
   /**
    * @param {Object} [options]
    * @param {number} [options.maxAmount] - Maximum transaction limit (default: 1000 USDC)
@@ -18,12 +18,12 @@ export class WealthOSEnclave {
   }
 
   /**
-   * Authorizes a W3C DID as a verified Wealth OS operator.
+   * Authorizes a W3C DID as a verified Transaction Enclave operator.
    * @param {string} did
    */
   authorizeDid(did) {
     if (!did || !did.startsWith('did:atmos:')) {
-      throw new Error('⚠️ [WealthOSEnclave] Invalid DID format. Must be a valid did:atmos identity.');
+      throw new Error('⚠️ [SmtTransactionEnclave] Invalid DID format. Must be a valid did:atmos identity.');
     }
     this.authorizedDids.add(did);
   }
@@ -98,7 +98,7 @@ export class WealthOSEnclave {
       }
     }
     if (!isAuthorized) {
-      violations.push(`INVARIANT_VIOLATION: recipient identity '${recipientDid}' is not in the Wealth OS authorized capability registry.`);
+      violations.push(`INVARIANT_VIOLATION: recipient identity '${recipientDid}' is not in the transaction authorized capability registry.`);
     }
     if (!timeValid) {
       violations.push(`INVARIANT_VIOLATION: transaction timestamp delta (${Math.round(timeDelta / 1000)}s) violates the strict 5-minute replay resistance time window.`);
@@ -115,7 +115,7 @@ export class WealthOSEnclave {
 
   /**
    * Processes a transaction. Runs Z3 SMT solver, and if SAT, seals the transaction
-   * using the WASI VaultHost ML-DSA-65 post-quantum signature. If UNSAT, quaratines it.
+   * using the WASI VaultHost ML-DSA-65 post-quantum signature. If UNSAT, quarantines it.
    * 
    * @param {Object} transaction - Transaction containing amount, recipientDid, and timestamp
    * @param {VaultHost} vaultHost - VaultHost instance
@@ -123,7 +123,7 @@ export class WealthOSEnclave {
    */
   processTransaction(transaction, vaultHost) {
     if (!vaultHost || typeof vaultHost.sign !== 'function') {
-      throw new Error('⚠️ [WealthOSEnclave] VaultHost instance is required to execute enclaved signing operations.');
+      throw new Error('⚠️ [SmtTransactionEnclave] VaultHost instance is required to execute enclaved signing operations.');
     }
 
     // Mathematical safety check
@@ -164,7 +164,7 @@ export class WealthOSEnclave {
       this.quarantineLog.push(quarantinedEvent);
 
       // Erase memory traces in transaction variables if security threshold dictates
-      console.warn(`🛑 [WealthOSEnclave] UNSAT safety breach detected! Capital allocation quarantined:`, audit.violations);
+      console.warn(`🛑 [SmtTransactionEnclave] UNSAT safety breach detected! Capital allocation quarantined:`, audit.violations);
 
       return {
         success: false,

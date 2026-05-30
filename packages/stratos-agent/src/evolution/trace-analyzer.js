@@ -4,6 +4,7 @@
  * and prepares them for dynamic WASM compilation, replacing legacy mutation mechanics (DSPy).
  */
 import crypto from 'node:crypto';
+import { induceComputation } from './skill-induction.js';
 
 export class TraceAnalyzer {
   constructor(options = {}) {
@@ -111,6 +112,19 @@ export class TraceAnalyzer {
     if (ast.computation && typeof ast.computation === 'object' && ast.computation.type) {
       return { kind: 'computational', computation: ast.computation, steps: null };
     }
+
+    // No hand-supplied spec? Try to SYNTHESIZE one from observed input→output examples
+    // (Tier A deterministic induction). This is what removes "you supply the spec".
+    if (Array.isArray(ast.examples) && ast.examples.length) {
+      const induced = induceComputation(ast.examples);
+      if (induced) {
+        if (this.verbose) {
+          console.log(`🔬 [TraceAnalyzer] Induced ${induced.type} computation from ${ast.examples.length} examples.`);
+        }
+        return { kind: 'computational', computation: induced, steps: null, induced: true };
+      }
+    }
+
     const steps = this.sanitizeStepFlow(ast.steps || record.steps || []);
     return { kind: 'automation', computation: null, steps };
   }

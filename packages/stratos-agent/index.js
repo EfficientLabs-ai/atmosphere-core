@@ -8,6 +8,7 @@ import { P2pSkillSync } from './src/memory/p2p-skill-sync.js';
 import { TraceAnalyzer } from './src/evolution/trace-analyzer.js';
 import { NightShiftCompiler } from './src/evolution/night-shift-compiler.js';
 import { SkillExecutor } from './src/evolution/skill-executor.js';
+import { SkillInductionEngine } from './src/evolution/skill-induction.js';
 
 export {
   BrowserHarness,
@@ -19,7 +20,8 @@ export {
   P2pSkillSync,
   TraceAnalyzer,
   NightShiftCompiler,
-  SkillExecutor
+  SkillExecutor,
+  SkillInductionEngine
 };
 
 export default {
@@ -32,5 +34,6 @@ export default {
   P2pSkillSync,
   TraceAnalyzer,
   NightShiftCompiler,
-  SkillExecutor
+  SkillExecutor,
+  SkillInductionEngine
 };

@@ -33,6 +33,18 @@ function watForComputation(computation, pathwayLen) {
   (memory (export "memory") 1)
   (func (export "compute") (result i32) (i32.const ${computation.value | 0})))`;
   }
+  if (computation && computation.type === 'poly2') {
+    // c2*x^2 + c1*x + c0  — induced quadratic, executes for real.
+    const c2 = (computation.c2 | 0), c1 = (computation.c1 | 0), c0 = (computation.c0 | 0);
+    return `(module
+  (memory (export "memory") 1)
+  (func (export "compute") (param $x i32) (result i32)
+    (i32.add
+      (i32.add
+        (i32.mul (i32.mul (local.get $x) (local.get $x)) (i32.const ${c2}))
+        (i32.mul (local.get $x) (i32.const ${c1})))
+      (i32.const ${c0}))))`;
+  }
   // Default: real integrity compute() returning the signed manifest byte length.
   return `(module
   (memory (export "memory") 1)

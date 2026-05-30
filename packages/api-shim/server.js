@@ -6,10 +6,12 @@ import fetch from 'node-fetch';
 import { handleOpenAIFallback, handleAnthropicFallback } from './local-fallback.js';
 import path from 'path';
 import { LocalInferenceEngine } from './src/local-inference.js';
+import { TaskClassifierRouter } from './src/task-router.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 
 const localInference = new LocalInferenceEngine();
+const taskRouter = new TaskClassifierRouter({ verbose: true });
 
 let BrowserHarness;
 try {
@@ -208,8 +210,14 @@ app.post('/v1/chat/completions', async (req, res) => {
     ? req.body.messages.map(m => `${m.role}: ${m.content}`).join('\n') 
     : 'No message logs parsed';
 
-  if (isLocalRequest) {
-    console.log('[API-SHIM] 🤖 Explicit local model request. Routing to Local Inference Engine with RAG...');
+  const saveApiCostEnabled = process.env.SAVE_API_COST_ENABLED === 'true' || process.env.LOCAL_FALLBACK_ENABLED === 'true';
+  
+  // Run dynamic Task Classifier & Router (TCR)
+  const classification = await taskRouter.classify(req.body.messages, req.body.model);
+  const shouldRouteLocally = classification.decision === 'local' && (isLocalRequest || saveApiCostEnabled);
+
+  if (shouldRouteLocally) {
+    console.log(`[API-SHIM] 🧠 TCR Classifier: ${classification.reason} -> Routing to local inference.`);
     // We wrap the response to harvest telemetry as well
     const originalJson = res.json.bind(res);
     res.json = (data) => {
@@ -218,25 +226,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
       return originalJson(data);
     };
-    return localInference.executeChatCompletion(req, res);
-  }
-  
-  const saveApiCostEnabled = process.env.SAVE_API_COST_ENABLED === 'true' || process.env.LOCAL_FALLBACK_ENABLED === 'true';
-  const isCloudModel = req.body.model && (
-    req.body.model.startsWith('gpt-') ||
-    req.body.model.startsWith('claude-') ||
-    req.body.model.startsWith('gemini-')
-  );
-
-  if (saveApiCostEnabled && isCloudModel) {
-    console.log(`[API-SHIM] 💰 Save API Cost active. Intercepting cloud model [${req.body.model}] and routing to local inference...`);
-    const originalJson = res.json.bind(res);
-    res.json = (data) => {
-      if (data && data.choices && data.choices[0] && data.choices[0].message) {
-        harvestTelemetry(promptText, data.choices[0].message.content);
-      }
-      return originalJson(data);
-    };
+    req.body.model = classification.targetModel;
     return localInference.executeChatCompletion(req, res);
   }
 
@@ -343,15 +333,25 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.post('/v1/messages', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
-  const saveApiCostEnabled = process.env.SAVE_API_COST_ENABLED === 'true' || process.env.LOCAL_FALLBACK_ENABLED === 'true';
-  const isCloudModel = req.body.model && (
-    req.body.model.startsWith('claude-') ||
-    req.body.model.startsWith('gpt-') ||
-    req.body.model.startsWith('gemini-')
+  const isLocalRequest = req.body.model && (
+    req.body.model.includes('local') || 
+    req.body.model.includes('quantized') || 
+    req.body.model.includes('qwen') || 
+    req.body.model.includes('llama')
   );
 
-  if (saveApiCostEnabled && isCloudModel) {
-    console.log(`[API-SHIM] 💰 Save API Cost active. Intercepting cloud model [${req.body.model}] and routing to local Anthropic fallback...`);
+  const promptText = req.body.messages 
+    ? req.body.messages.map(m => `${m.role}: ${m.content}`).join('\n') 
+    : 'No messages logged';
+
+  const saveApiCostEnabled = process.env.SAVE_API_COST_ENABLED === 'true' || process.env.LOCAL_FALLBACK_ENABLED === 'true';
+
+  // Run dynamic Task Classifier & Router (TCR)
+  const classification = await taskRouter.classify(req.body.messages, req.body.model);
+  const shouldRouteLocally = classification.decision === 'local' && (isLocalRequest || saveApiCostEnabled);
+
+  if (shouldRouteLocally) {
+    console.log(`[API-SHIM] 🧠 TCR Classifier: ${classification.reason} -> Routing to local Anthropic fallback.`);
     const originalJson = res.json.bind(res);
     res.json = (data) => {
       if (data && data.content && data.content[0]) {
@@ -359,17 +359,9 @@ app.post('/v1/messages', async (req, res) => {
       }
       return originalJson(data);
     };
+    req.body.model = classification.targetModel;
     return handleAnthropicFallback(req, res);
   }
-
-  let shouldFallback = false;
-  let response;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), STRATOS_TIMEOUT);
-
-  const promptText = req.body.messages 
-    ? req.body.messages.map(m => `${m.role}: ${m.content}`).join('\n') 
-    : 'No messages logged';
 
   try {
     const proxyHeaders = { ...req.headers };

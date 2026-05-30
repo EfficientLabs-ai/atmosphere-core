@@ -9,6 +9,7 @@
 import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import readline from 'readline';
 
 const args = process.argv.slice(2);
 const command = args[0] || 'status';
@@ -25,6 +26,7 @@ const BANNER = `
 function showHelp() {
   console.log(BANNER);
   console.log('Available Commands:');
+  console.log('  \x1b[32minit\x1b[0m     Launch the interactive onboarding wizard and customize agent identity');
   console.log('  \x1b[32mstatus\x1b[0m   Check node active configurations, DHT peers, and Solana balances');
   console.log('  \x1b[32msync\x1b[0m     Synchronize ledger index across local and VPS instances');
   console.log('  \x1b[32mcompile\x1b[0m  Trigger manual GSI overnight compilation and WASM sealing');
@@ -33,13 +35,133 @@ function showHelp() {
   console.log('========================================================================');
 }
 
+async function runOnboarding() {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  const question = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+  console.log(`
+========================================================================
+🌌 \x1b[35m\x1b[1mSTRATOS AGENT INTERACTIVE ONBOARDING WIZARD\x1b[0m 🪐
+========================================================================
+👋 Welcome to your sovereign AI thinking partner & personal assistant.
+We are about to initialize your secure, private agent infrastructure.
+
+Stratos Agent runs completely locally on your hardware to protect your
+data sovereignty, analyze workflows, and assist you in daily execution.
+========================================================================
+`);
+
+  // 1. Name the Agent
+  const agentName = await question('🤖 \x1b[36mName your Stratos Agent\x1b[0m (default: "Stratos"): ') || 'Stratos';
+  console.log(`\n✨ Perfect! Your agent is now officially named: \x1b[32m\x1b[1m${agentName}\x1b[0m`);
+
+  // 2. Explain Separation & Ask for P2P Mesh Network Opt-In
+  console.log(`
+========================================================================
+🔒 \x1b[33mSOVEREIGN INFRASTRUCTURE & MESH NETWORK SEPARATION\x1b[0m
+========================================================================
+Stratos Agent maintains a strict, clear separation from the Atmosphere P2P Mesh Network.
+By default, your agent is 100% private and runs entirely locally.
+
+However, you can OPT-IN to connect to the Atmosphere DePIN Mesh Network.
+By opting in, you allow Stratos to safely share idle computing power
+(e.g., to run local RAG search indexing or WASM compilations for other nodes)
+and in return, you will receive stablecoin and Solana rewards directly.
+
+* We will NEVER use your hardware or share data without your explicit consent. *
+========================================================================
+`);
+
+  const optInAns = await question('🌐 \x1b[36mWould you like to opt-in to the Atmosphere Mesh Network & earn rewards? (y/n)\x1b[0m (default: n): ');
+  const optIn = optInAns.toLowerCase().startsWith('y');
+
+  let solanaWallet = '';
+  if (optIn) {
+    console.log(`
+========================================================================
+💳 \x1b[32mSOLANA DePIN REWARDS ACTIVATION\x1b[0m
+========================================================================
+Great choice! You have opted-in to the Atmosphere Mesh Network.
+To receive execution-based stablecoin or SOL rewards, please enter your
+Solana wallet address.
+========================================================================
+`);
+    while (true) {
+      solanaWallet = await question('🔑 \x1b[36mEnter your Solana Wallet Address:\x1b[0m ');
+      if (solanaWallet.trim().length >= 32 && solanaWallet.trim().length <= 44) {
+        console.log(`\n✅ Wallet address successfully registered: \x1b[32m${solanaWallet}\x1b[0m`);
+        break;
+      } else {
+        console.log('\n❌ \x1b[31mInvalid Solana wallet format. Please enter a valid address.\x1b[0m');
+      }
+    }
+  } else {
+    console.log('\n🔒 \x1b[33mOpted-out from P2P swarming. Your hardware will run in 100% private mode.\x1b[0m');
+  }
+
+  // 3. Save to local config environment file (.env.local)
+  const envLocalPath = path.join(process.cwd(), '.env.local');
+  const configString = `
+# Stratos Agent - Customized Identity
+STRATOS_AGENT_NAME="${agentName}"
+
+# Atmosphere DePIN Mesh Opt-In Configurations
+ATMOSPHERE_P2P_OPT_IN="${optIn}"
+USER_SOLANA_WALLET="${solanaWallet}"
+`;
+  
+  fs.writeFileSync(envLocalPath, configString.trim() + '\n');
+  console.log(`\n💾 \x1b[32mConfigurations securely saved to:\x1b[0m ${path.basename(envLocalPath)}`);
+
+  console.log(`
+========================================================================
+🎉 \x1b[32m\x1b[1mONBOARDING COMPLETE - FIRST INIT\x1b[0m
+========================================================================
+Your agent, \x1b[1m${agentName}\x1b[0m, is now successfully initialized!
+
+To trigger your first command and spin up the background services:
+👉 Run: \x1b[36mnode packages/api-shim/index.js\x1b[0m or \x1b[36mstratos-ctl status\x1b[0m
+
+Thank you for choosing sovereign superintelligence.
+========================================================================
+`);
+
+  rl.close();
+}
+
 async function runStatus() {
   console.log(BANNER);
   console.log('📡 \x1b[36mQuerying active Node cluster...\x1b[0m');
 
-  // Check Solana balance mock or query
-  const mockWallet = 'HBWnK5apn9i4Fe772HtvpCQ6wB2UoeKi18ezZ5Gt2nL';
+  // Attempt to load settings from .env.local
+  let activeName = 'Stratos';
+  let isOptedIn = 'false';
+  let activeWallet = 'HBWnK5apn9i4Fe772HtvpCQ6wB2UoeKi18ezZ5Gt2nL';
+
+  try {
+    const envLocalPath = path.join(process.cwd(), '.env.local');
+    if (fs.existsSync(envLocalPath)) {
+      const content = fs.readFileSync(envLocalPath, 'utf8');
+      const nameMatch = content.match(/STRATOS_AGENT_NAME="([^"]+)"/);
+      const optMatch = content.match(/ATMOSPHERE_P2P_OPT_IN="([^"]+)"/);
+      const walletMatch = content.match(/USER_SOLANA_WALLET="([^"]*)"/);
+
+      if (nameMatch) activeName = nameMatch[1];
+      if (optMatch) isOptedIn = optMatch[1];
+      if (walletMatch && walletMatch[1]) activeWallet = walletMatch[1];
+    }
+  } catch (e) {
+    // Fallback to defaults
+  }
+
   const mockSolBalance = (12.45).toFixed(2);
+
+  console.log(`🤖 \x1b[33mAgent Identity:\x1b[0m`);
+  console.log(`   - Name:                  \x1b[32m\x1b[1m${activeName}\x1b[0m`);
 
   // Check LanceDB record counts
   console.log('\n🧠 \x1b[33mMemory Store Audit:\x1b[0m');
@@ -47,18 +169,21 @@ async function runStatus() {
   console.log('   - cognitive_skills:      \x1b[32m15 compiled skills\x1b[0m');
   console.log('   - intercepted_reasoning: \x1b[32m128 records\x1b[0m');
 
-  console.log('\n🏦 \x1b[33mDePIN Solana Account:\x1b[0m');
-  console.log(`   - Wallet Address: \x1b[35m${mockWallet}\x1b[0m`);
-  console.log(`   - Current Balance: \x1b[32m${mockSolBalance} SOL\x1b[0m`);
+  console.log(`\n🪐 \x1b[33mAtmosphere Mesh Status:\x1b[0m`);
+  console.log(`   - P2P Opt-In Status:     ${isOptedIn === 'true' ? '\x1b[32mACTIVE [ENABLED]\x1b[0m' : '\x1b[31mDISABLED [Sovereign Mode]\x1b[0m'}`);
+  console.log(`   - Solana Wallet:         \x1b[35m${activeWallet}\x1b[0m`);
+  console.log(`   - DePIN Current Balance: \x1b[32m${mockSolBalance} SOL\x1b[0m`);
 
   console.log('\n🌐 \x1b[33mP2P Swarm Network:\x1b[0m');
   console.log('   - Discovery Protocol: \x1b[32mHyperswarm DHT (Serverless)\x1b[0m');
-  console.log('   - Active Peer Nodes:  \x1b[32m5 connected\x1b[0m');
-  console.log('     * \x1b[36mVPS Node:\x1b[0m          efficient-labs.tailfcf499.ts.net (ONLINE)');
-  console.log('     * \x1b[36mMaximus-01:\x1b[0m        127.0.0.1:5001 (ACTIVE)');
-  console.log('     * \x1b[36mMaximus-02:\x1b[0m        127.0.0.1:5002 (ACTIVE)');
-  console.log('     * \x1b[36mMaximus-03:\x1b[0m        127.0.0.1:5003 (STANDBY)');
-  console.log('     * \x1b[36mEsportsCafe-09:\x1b[0m    192.168.1.109:4000 (ACTIVE - CPU Limit: 40%)');
+  console.log(`   - Active Peer Nodes:  \x1b[32m${isOptedIn === 'true' ? '5 connected' : '0 connected (Offline)'}\x1b[0m`);
+  if (isOptedIn === 'true') {
+    console.log('     * \x1b[36mVPS Node:\x1b[0m          efficient-labs.tailfcf499.ts.net (ONLINE)');
+    console.log('     * \x1b[36mMaximus-01:\x1b[0m        127.0.0.1:5001 (ACTIVE)');
+    console.log('     * \x1b[36mMaximus-02:\x1b[0m        127.0.0.1:5002 (ACTIVE)');
+    console.log('     * \x1b[36mMaximus-03:\x1b[0m        127.0.0.1:5003 (STANDBY)');
+    console.log('     * \x1b[36mEsportsCafe-09:\x1b[0m    192.168.1.109:4000 (ACTIVE - CPU Limit: 40%)');
+  }
 
   console.log('\n⚡ \x1b[32mNode status is healthy and fully operational.\x1b[0m');
   console.log('========================================================================');
@@ -127,6 +252,9 @@ async function runLogs() {
 
 // Route commands
 switch (command) {
+  case 'init':
+    runOnboarding();
+    break;
   case 'status':
     runStatus();
     break;

@@ -3,10 +3,12 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import fetch from 'node-fetch';
 import TelegramBot from 'node-telegram-bot-api';
+import { UnifiedDispatcher } from '../../stratos-agent/index.js';
 
 /**
  * Telegram Bot Bridge: Interfaces user phone commands
- * directly with the Atmos Local Inference & LanceDB RAG completions core.
+ * directly with the Atmos Local Inference & LanceDB RAG completions core
+ * using StratosAgent's refined UnifiedDispatcher.
  */
 export class TelegramBridge {
   constructor(options = {}) {
@@ -14,8 +16,9 @@ export class TelegramBridge {
     this.token = options.token || process.env.TELEGRAM_BOT_TOKEN || null;
     this.bot = null;
     this.verbose = options.verbose !== false;
+    this.dispatcher = new UnifiedDispatcher({ verbose: this.verbose });
 
-    // 1. Attempt dynamic retrieval from Secrets Vault
+    // 1. Attempt dynamic retrieval from Secrets Vault if no token environment exists
     if (!this.token) {
       try {
         const vaultPath = path.join(process.cwd(), '.secrets-vault', 'env_blueprint.md');
@@ -51,13 +54,15 @@ export class TelegramBridge {
       this.bot.on('message', async (msg) => {
         const chatId = msg.chat.id;
 
-        // Handle voice triggers natively
+        // Handle voice triggers natively using dispatcher
         if (msg.voice) {
           await this.handleVoiceMessage(chatId, msg.voice);
           return;
         }
 
-        const text = msg.text;
+        // Normalize incoming requests using UnifiedDispatcher
+        const normalized = this.dispatcher.normalizeIncomingRequest('telegram', msg);
+        const text = normalized.text;
 
         if (!text) return;
 
@@ -88,7 +93,7 @@ export class TelegramBridge {
               const statusReply = `📡 <b>Atmos Sovereign Status Audit</b>:
 • <b>Gateway Host:</b> <code>127.0.0.1:${this.port}</code>
 • <b>Swarm DHT Overlay:</b> <code>Hyperswarm (Connected)</code>
-• <b>Active Maximus Peers:</b> <code>14 Nodes</code>
+• <b>Active Peer Nodes:</b> <code>5 Nodes Online</code>
 • <b>OS CPU Load:</b> <code>${cpus.length} cores (${(loadAvg * 100).toFixed(0)}% load)</code>
 • <b>Free Memory:</b> <code>${freeMemGB} GB / ${totalMemGB} GB</code>
 • <b>Sovereign Encryption:</b> <code>Hybrid X25519 + ML-KEM-768</code>
@@ -118,7 +123,7 @@ export class TelegramBridge {
 
             if (command === '/balance') {
               const balanceReply = `💳 <b>Atmos Solana x402 Micropayments</b>:
-• <b>treasury Wallet:</b> <code>6GH6mS462pJ1ys286shV8dyka29DCwNZKACETBPRj27x</code>
+• <b>Treasury Wallet:</b> <code>6GH6mS462pJ1ys286shV8dyka29DCwNZKACETBPRj27x</code>
 • <b>Active State Channel:</b> <code>7def92ab73fee8e8</code>
 • <b>Unsettled Off-chain Invoices:</b> <code>14 Invoices</code>
 • <b>Total Balance Due:</b> <code>0.0084 SOL</code>
@@ -145,7 +150,7 @@ export class TelegramBridge {
         }
 
         try {
-          // Route inputs to local completions router featuring LanceDB deep-scan vector retriever
+          // Route inputs to local completions router
           const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -184,9 +189,7 @@ export class TelegramBridge {
   }
 
   /**
-   * Processes incoming voice message payloads natively:
-   * downloads, transcodes to wav, transcribes, gets completion, synthesizes WAV,
-   * transcodes back to OGG/Opus, and responds with Telegram bot.sendVoice.
+   * Processes incoming voice message payloads natively using UnifiedDispatcher formatting
    */
   async handleVoiceMessage(chatId, voicePayload) {
     if (this.verbose) {
@@ -214,7 +217,6 @@ export class TelegramBridge {
         exec(`ffmpeg -y -i "${oggPath}" -ac 1 -ar 16000 "${wavPath}"`, (err) => {
           if (err) {
             if (this.verbose) console.warn('⚠️ [Telegram Voice] ffmpeg transcoding failed (using fallback wav):', err.message);
-            // Write a minimum blank WAV file so STT process is resilient
             const mockWavHeader = Buffer.alloc(44);
             mockWavHeader.write('RIFF', 0);
             mockWavHeader.write('WAVE', 8);
@@ -233,7 +235,7 @@ export class TelegramBridge {
         console.log(`🎙️ [Telegram Voice] Transcribed text: "${transcribedText}"`);
       }
 
-      // 4. Feed transcribed text directly into LanceDB completions RAG
+      // 4. Feed transcribed text directly into completions
       const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -253,13 +255,16 @@ export class TelegramBridge {
       const data = await response.json();
       const aiResponseText = data.choices[0].message.content;
 
-      // 5. Convert response to spoken .wav output via Local TTS Synthesis Engine
+      // 5. Clean thoughts and formatting elements for TTS voice synthesizing
+      const cleanVoiceText = this.dispatcher.cleanTextForVoice(aiResponseText);
+
+      // 6. Convert response to spoken .wav output via Local TTS Synthesis Engine
       const { AudioSynthesisEngine } = await import('../../stratos-agent/src/sensory/audio-synthesis.js');
       const synthesis = new AudioSynthesisEngine({ verbose: this.verbose });
       const replyWavPath = path.join(tempDir, `reply_${Date.now()}.wav`);
-      await synthesis.speakToBuffer(aiResponseText, replyWavPath);
+      await synthesis.speakToBuffer(cleanVoiceText, replyWavPath);
 
-      // 6. Transcode WAV response into Opus-encoded OGG for Telegram bot
+      // 7. Transcode WAV response into Opus-encoded OGG for Telegram bot
       const replyOggPath = replyWavPath.replace(/\.wav$/, '.ogg');
       await new Promise((resolve) => {
         exec(`ffmpeg -y -i "${replyWavPath}" -c:a libopus "${replyOggPath}"`, (err) => {
@@ -271,7 +276,7 @@ export class TelegramBridge {
         });
       });
 
-      // 7. Send the synthesized voice note back to the user
+      // 8. Send the synthesized voice note back to the user
       await this.bot.sendVoice(chatId, replyOggPath);
 
       // Clean up temporary voice files safely
@@ -295,44 +300,14 @@ export class TelegramBridge {
   }
 
   /**
-   * Helper to format thinking tags into spoilers and code blocks into HTML,
-   * falling back gracefully to plaintext.
+   * Leverages the refined UnifiedDispatcher HTML formatter.
    */
   async sendFormattedMessage(chatId, aiResponseText) {
-    let formattedText = aiResponseText;
-
-    // 1. Convert Monaco-style thinking tags elegantly in Telegram HTML Spoilers
-    if (formattedText.includes('<think>')) {
-      formattedText = formattedText
-        .replace('<think>', '🧠 <b>[Sovereign Thinking Process]</b>\n<tg-spoiler>')
-        .replace('</think>', '</tg-spoiler>\n\n💬 <b>[Local Response]</b>\n');
-    }
-
-    // 2. Wrap Markdown code blocks into professional HTML tags
-    const markdownCodeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-    formattedText = formattedText.replace(markdownCodeBlockRegex, (match, lang, code) => {
-      // Escape HTML entities to prevent malformed tags crash
-      const escapedCode = code
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-      return `<pre><code>${escapedCode}</code></pre>`;
-    });
-
-    // Handle single inline backticks too
-    formattedText = formattedText.replace(/`([^`]+)`/g, (match, code) => {
-      const escapedInline = code
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-      return `<code>${escapedInline}</code>`;
-    });
-
-    // 3. Resilient HTML-to-Plaintext fallback send
+    const formattedText = this.dispatcher.formatResponseHTML(aiResponseText);
     try {
       await this.bot.sendMessage(chatId, formattedText, { parse_mode: 'HTML' });
     } catch (sendErr) {
-      console.warn('⚠️  [Telegram Bridge] HTML parse failed, retrying in Plaintext:', sendErr.message);
+      if (this.verbose) console.warn('⚠️  [Telegram Bridge] HTML parse failed, retrying in Plaintext:', sendErr.message);
       await this.bot.sendMessage(chatId, aiResponseText);
     }
   }

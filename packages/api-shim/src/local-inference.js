@@ -188,9 +188,9 @@ Use this context to formulate a high-fidelity, highly accurate response to the u
       }
     } catch (err) {
       if (this.verbose) {
-        console.warn('⚠️ [Local Model] Ollama query failed, using high-fidelity fallback mock:', err.message);
+        console.warn('⚠️ [Local Model] Ollama query failed, local inference is offline:', err.message);
       }
-      text = this.generateResponseMock(augmentedMessages, ragContext, visualContext);
+      text = "⚠️ Stratos Agent: Local inference engine is currently offline. Please ensure your open-weights model (Ollama/llama.cpp) is actively running on the host server.";
     }
     const createdTime = Math.floor(Date.now() / 1000);
     const completionId = `chatcmpl-${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2)}`;
@@ -251,65 +251,5 @@ Use this context to formulate a high-fidelity, highly accurate response to the u
         }
       });
     }
-  }
-
-  /**
-   * High-fidelity context-augmented response generator.
-   */
-  generateResponseMock(augmentedMessages, ragContext, visualContext = '') {
-    const userQuery = augmentedMessages[augmentedMessages.length - 1].content.toLowerCase();
-    
-    let think = 'Thinking Process:\n1. Intercepted request via local API shim.\n2. Detected RAG active parameter - scanning local LanceDB.';
-    if (visualContext) {
-      think += '\n3. Visual query keywords detected. Triggered GDI displays frame capture and spatial VLM element parse.';
-    }
-    if (ragContext.length > 0) {
-      think += `\n4. Found ${ragContext.length} matching vector database references! Injecting context as system prompt.\n5. Formulating answer incorporating retrieved context.`;
-    } else {
-      think += '\n4. No matches found in LanceDB. Answering using general on-device knowledge.';
-    }
-
-    let response = '';
-
-    if (visualContext) {
-      response = `[Multimodal Vision Mode - Active]
-
-I have captured a screenshot of your screen buffer and parsed it using our local Vision-Language Model. 
-
-Here is what I currently see active on your display:
-* You are running inside the focused process **"node"** or **"code"**.
-* The focused window title is: **"Atmos Sovereign Console"** or your active IDE editor workspace.
-* I see structural UI elements including:
-  - An editor canvas containing import statements: \`import { KeyringManager } from 'atmos-core';\`
-  - A terminal footer running test commands: \`node packages/atmos-desktop/test-multimodal.js\`
-  - A clock displaying the local system time: \`${new Date().toLocaleTimeString()}\`
-
-Is there a specific visual element, text block, or DOM element on this screen that you would like me to interact with using the browser orchestrator?`;
-    } else if (ragContext.length > 0) {
-      const matched = ragContext[0];
-      response = `[Retrieval Augmented Generation (RAG) Mode - Enabled]
-
-Based on successful historical agent execution traces harvested from your local machine, here is the verified output solution:
-
-${matched.response}
-
-(Context successfully parsed locally with zero-cloud API costs.)`;
-    } else {
-      if (userQuery.includes('harvest') || userQuery.includes('genesis')) {
-        response = `I see you are asking about the **Genesis Harvester** bootstrap system.
-The Genesis Harvester is fully loaded. It scans user profiles for Cursor database, Hermes history, and OpenClaw logs, and pushes prompt-response tuples into LanceDB vector memory. This allows the local LLM model to execute with complete awareness of your historical developer activity!`;
-      } else {
-        response = `Hello! I am your localized open-weights LLM running completely offline on your device.
-I have successfully received your prompt. My RAG context search in LanceDB vector memory returned 0 historical matches for this specific query, so I am answering using my general on-device model weights.
-
-How can I assist you further today?`;
-      }
-    }
-
-    return `<think>
-${think}
-</think>
-
-${response}`;
   }
 }

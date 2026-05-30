@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import crypto from 'node:crypto';
 
 const LOCAL_LLM_URL = process.env.LOCAL_LLM_URL || 'http://127.0.0.1:8080';
 
@@ -31,84 +32,6 @@ async function checkLocalServer() {
   }
 }
 
-/**
- * Generates an intelligent, dynamic mock response based on the conversation context.
- * Simulates a quantized local 7B parameter open-weight model with a reasoning trace.
- */
-function generateMockResponse(messages, systemPrompt = '') {
-  // Get last user message
-  const userMessages = messages.filter(m => m.role === 'user');
-  const lastUserMsg = userMessages.length > 0 ? userMessages[userMessages.length - 1].content : '';
-  const query = typeof lastUserMsg === 'string' ? lastUserMsg.toLowerCase() : JSON.stringify(lastUserMsg);
-
-  let think = 'Thinking Process:\n1. Intercepted request via OpenAtmos local API shim.\n2. Detected primary StratosAgent upstream offline or credentials suspended.\n3. Activating local open-weight quantized fallback mock (Simulated Llama-3.1-8B-Instruct-Q4_K_M).\n4. Formulating context-aware response for decentralization and browser orchestration.';
-  let body = '';
-
-  if (query.includes('p2p') || query.includes('atmos') || query.includes('atmosphere') || query.includes('decentralized')) {
-    think += '\n- Query contains P2P or Atmos references. Injecting sovereign computing ledger details.';
-    body = `### Atmos P2P Sovereign Core Fallback
-
-I am the **Llama-3.1-8B-Instruct** local fallback, running directly on your machine. I detect you are asking about the Atmosphere (Atmos) sovereign peer-to-peer compute layer. 
-
-Here is the current operational status of the core networking interfaces:
-*   **Keyring Manager:** Initialized securely via local DPAPI simulation (Ed25519 standard).
-*   **P2P swarm:** Hyperswarm operational, listening for Noise-encrypted tunnels.
-*   **Micropayment Engine:** Active x402 payment protocol using standard stablecoin (USDC) billing abstractions.
-
-The local system is fully sovereign. Let me know if you would like me to compile or write a script to interface with the append-only logs!`;
-  } else if (query.includes('code') || query.includes('function') || query.includes('program') || query.includes('javascript') || query.includes('js')) {
-    think += '\n- Code request detected. Preparing custom Node.js code block.';
-    body = `Here is a complete, functional ES6 module demonstrating how to bootstrap the Atmos cryptographic keyring and start a Hyperswarm listener locally:
-
-\`\`\`javascript
-import { KeyringManager, P2PNetwork } from 'atmos-core';
-
-async function bootstrapNode() {
-  console.log('⚡ Starting sovereign P2P compute client...');
-  
-  // 1. Initialize secure local DPAPI keypair
-  const keyring = new KeyringManager('consumer');
-  await keyring.init('local-secure-seed-phrase-atmos');
-  console.log('🔑 Keyring loaded. Public Key:', keyring.keypair.publicKey.toString('hex'));
-
-  // 2. Start the Hyperswarm client
-  const network = new P2PNetwork(keyring);
-  await network.start();
-  console.log('🌐 Hyperswarm interface listening...');
-
-  // 3. Join a secure P2P topic namespace
-  const discovery = network.joinTopic('atmos-compute-v1');
-  discovery.on('peer', () => {
-    console.log('🤝 Discovered new Atmos compute peer!');
-  });
-}
-
-bootstrapNode().catch(console.error);
-\`\`\``;
-  } else if (query.includes('hello') || query.includes('hi') || query.includes('hey') || query.includes('greetings')) {
-    think += '\n- Greeting detected. Replying warmly with standard developer greeting.';
-    body = `Hello! I am your local open-weight quantized model fallback (simulating a Llama-3.1-8B-Instruct instance). 
-
-I have automatically intercepted this request because the StratosAgent upstream service was either unreachable or reported a subscription auth error. I am running completely locally and offline on your system to ensure 100% service uptime.
-
-How can I assist you with your P2P orchestration, automation, or coding tasks today?`;
-  } else {
-    think += '\n- General query detected. Simulating general conversational completion.';
-    body = `I am a local open-weight quantized model running on device as a fallback. 
-
-I've intercepted this message because the primary StratosAgent API layer is currently undergoing a checkout payment gateway transition or network timeout. I will handle all of your prompts in offline mode with zero latency to the cloud.
-
-Please re-run your request or let me know what other questions, script generation, or system diagnostic commands you would like me to process locally.`;
-  }
-
-  // Combine reasoning trace and body if user query looks like a reasoning model query, or output separately.
-  // We will output with a clean <think> tag to match state-of-the-art reasoning fallbacks!
-  return `<think>
-${think}
-</think>
-
-${body}`;
-}
 
 /**
  * Handle OpenAI chat completions `/v1/chat/completions` request.
@@ -150,9 +73,9 @@ export async function handleOpenAIFallback(req, res) {
     }
   }
 
-  // If llama.cpp is not active or failed, use mock
-  console.log('🤖 Serving high-fidelity Llama-3.1 mock completion...');
-  const text = generateMockResponse(messages || []);
+  // If llama.cpp is not active or failed, return the offline error message
+  console.log('⚠️ Local inference engine is offline. Serving offline warning completion...');
+  const text = "⚠️ Stratos Agent: Local inference engine is currently offline. Please ensure your open-weights model (Ollama/llama.cpp) is actively running on the host server.";
   const createdTime = Math.floor(Date.now() / 1000);
   const completionId = `chatcmpl-${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2)}`;
 
@@ -370,9 +293,9 @@ export async function handleAnthropicFallback(req, res) {
     }
   }
 
-  // If llama.cpp is not active or failed, use mock
-  console.log('🤖 Serving high-fidelity Claude mock completion...');
-  const text = generateMockResponse(messages || [], system || '');
+  // If llama.cpp is not active or failed, return the offline error message
+  console.log('⚠️ Local inference engine is offline. Serving offline warning message...');
+  const text = "⚠️ Stratos Agent: Local inference engine is currently offline. Please ensure your open-weights model (Ollama/llama.cpp) is actively running on the host server.";
   const msgId = `msg_${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2)}`;
 
   if (stream) {

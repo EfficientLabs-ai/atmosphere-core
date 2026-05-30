@@ -166,15 +166,19 @@ Use this context to formulate a high-fidelity, highly accurate response to the u
     let text = '';
     try {
       const ollamaEndpoint = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+      let targetModel = model || 'qwen2.5:7b';
+      if (targetModel.toLowerCase().includes('qwen') || targetModel.toLowerCase().includes('local')) {
+        targetModel = 'qwen2.5:7b';
+      }
       if (this.verbose) {
-        console.log(`🤖 [Local Model] Querying real Ollama model [${model || 'qwen2.5:7b'}] at ${ollamaEndpoint}...`);
+        console.log(`🤖 [Local Model] Querying real Ollama model [${targetModel}] at ${ollamaEndpoint}...`);
       }
       
       const response = await fetch(`${ollamaEndpoint}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: model || 'qwen2.5:7b',
+          model: targetModel,
           messages: augmentedMessages,
           stream: false
         })

@@ -71,14 +71,14 @@ async function runTest() {
 
     if (rollupResult.invoicesBatched === 3 && rollupResult.lamportsSetted === 6000000n && rollupResult.serializedHex.length > 0) {
       console.log('🎉 PHASE 8 SOLANA x402 MICROPAYMENT ENGINE FULLY DEPLOYED & VERIFIED!');
-      process.exit(0);
+      setTimeout(() => process.exit(0), 100);
     } else {
       console.error('❌ Validation mismatch in rollup values.');
-      process.exit(1);
+      setTimeout(() => process.exit(1), 100);
     }
   } catch (err) {
     console.error('❌ Critical Verification Error:', err);
-    process.exit(1);
+    setTimeout(() => process.exit(1), 100);
   }
 }
 

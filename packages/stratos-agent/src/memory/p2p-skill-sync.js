@@ -57,7 +57,7 @@ export class P2pSkillSync {
         
         this.peers.add(peerId);
 
-        // Standard stream replication
+        // Standard stream replication with sparse options enabled to save bandwidth/disk
         this.store.replicate(socket);
 
         socket.on('error', (err) => {

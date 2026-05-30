@@ -85,10 +85,10 @@ async function runCognitiveChaosTest() {
   console.log('   - Process Health:            ACTIVE [100% UPTIME, ZERO CRASHES]');
 
   console.log('\n🎉 COGNITIVE BOTTLENECKING MULTIMODAL FLOOD CHAOS TEST PASSED! LOCAL QUEUES STABLE.');
-  process.exit(0);
+  setTimeout(() => process.exit(0), 100);
 }
 
 runCognitiveChaosTest().catch(err => {
   console.error('❌ Chaos Test Failed:', err);
-  process.exit(1);
+  setTimeout(() => process.exit(1), 100);
 });

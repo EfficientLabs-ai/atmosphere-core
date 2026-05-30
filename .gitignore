@@ -33,3 +33,9 @@ dist/skills/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Rust Build Targets
+target/
+**/target/
+Cargo.lock
+**/Cargo.lock

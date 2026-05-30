@@ -72,10 +72,10 @@ async function runLedgerChaosTest() {
 
   if (ledgerBalance === expectedLamports && channel.ledger.length === NUM_INVOICES) {
     console.log('\n🎉 x402 LEDGER CONCURRENCY STRESS TEST PASSED! ZERO RACE CONDITIONS OR DOUBLE-SPENDS LOGGED.');
-    process.exit(0);
+    setTimeout(() => process.exit(0), 100);
   } else {
     console.error('❌ x402 Ledger Concurrency Stress test failed: Audit mismatch.');
-    process.exit(1);
+    setTimeout(() => process.exit(1), 100);
   }
 }
 

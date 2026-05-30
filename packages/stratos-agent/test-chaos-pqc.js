@@ -95,12 +95,12 @@ async function runPqcChaosTest() {
 
     console.log('\n🎉 PQC SECURITY BREACH CHAOS TEST PASSED! VERIFICATION DISALLOWED THE ATTACK.');
     cleanup(tmpDir);
-    process.exit(0);
+    setTimeout(() => process.exit(0), 100);
 
   } catch (err) {
     console.error('❌ PQC Chaos Test Failed:', err);
     cleanup(tmpDir);
-    process.exit(1);
+    setTimeout(() => process.exit(1), 100);
   }
 }
 

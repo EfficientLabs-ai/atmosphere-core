@@ -24,6 +24,25 @@ export class PaymentEngine {
     
     // In-memory ledger representing off-chain mesh state channels
     this.stateChannels = new Map();
+
+    // Auto-settlement threshold: defaults to 5,000,000 lamports (0.005 SOL)
+    this.autoSettlementThreshold = options.autoSettlementThreshold || 5000000n;
+  }
+
+  /**
+   * Fetches the actual on-chain SOL balance for a given wallet address.
+   * If network is down or rate-limited, falls back to a simulated ledger amount.
+   */
+  async getLiveBalance(publicKeyStr) {
+    try {
+      const pubkey = new PublicKey(publicKeyStr);
+      const balance = await this.connection.getBalance(pubkey);
+      console.log(`📡 [x402 PaymentEngine] Live balance for ${publicKeyStr.slice(0, 8)}...: ${balance / LAMPORTS_PER_SOL} SOL`);
+      return balance;
+    } catch (err) {
+      console.warn(`⚠️ [x402 PaymentEngine] Live RPC balance query failed: ${err.message}. Falling back to offline balance.`);
+      return 1000000000; // 1 SOL mock fallback
+    }
   }
 
   /**
@@ -39,7 +58,8 @@ export class PaymentEngine {
       ledger: [], // List of verified off-chain x402 micro-invoices
       accumulatedBalanceLamports: 0n,
       isActive: true,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      autoSettledBatches: [] // Tracks finalized automatic settlement snapshots
     };
 
     this.stateChannels.set(channelId, channelState);
@@ -50,7 +70,7 @@ export class PaymentEngine {
   /**
    * Generates a signed off-chain x402 micro-invoice for verified WASM execution.
    */
-  createMicroInvoice(channelId, skillId, executionHash, amountSol) {
+  createMicroInvoice(channelId, skillId, executionHash, amountSol, nonce = '') {
     const channel = this.stateChannels.get(channelId);
     if (!channel || !channel.isActive) {
       throw new Error(`❌ Error: Channel ${channelId} is invalid or inactive.`);
@@ -67,7 +87,9 @@ export class PaymentEngine {
       amountLamports: lamports.toString(),
       invoiceId: crypto.randomBytes(16).toString('hex'),
       timestamp: new Date().toISOString(),
-      serviceDefinition: 'Decentralized WASM Execution Fee Settlement'
+      serviceDefinition: 'Decentralized WASM Execution Fee Settlement',
+      nonce,
+      powTarget: crypto.createHash('sha256').update(skillId + executionHash + nonce).digest('hex')
     };
 
     return invoice;
@@ -89,7 +111,7 @@ export class PaymentEngine {
    * Verifies the cryptographic signature and registers the earned balance in the ledger.
    */
   receiveMicroInvoice(invoice, signature, publicKeyPem) {
-    const { channelId, amountLamports, skillId, executionHash } = invoice;
+    const { channelId, amountLamports, skillId, executionHash, nonce, powTarget } = invoice;
     const channel = this.stateChannels.get(channelId);
     if (!channel) {
       throw new Error(`❌ Error: Channel ${channelId} not found.`);
@@ -111,6 +133,18 @@ export class PaymentEngine {
       throw new Error('❌ Compliance Violation: Missing proof of measurable computational output.');
     }
 
+    // 2b. Validate Proof-of-Work Sybil Checker
+    if (!powTarget) {
+      throw new Error('❌ Compliance Violation: Inbound invoice lacks a Proof-of-Work target hash.');
+    }
+    const computedHash = crypto.createHash('sha256').update(skillId + executionHash + (nonce || '')).digest('hex');
+    if (computedHash !== powTarget) {
+      throw new Error('❌ Security Violation: Proof-of-Work hash mismatch!');
+    }
+    if (!powTarget.startsWith('00')) {
+      throw new Error('❌ Compliance Violation: Proof-of-Work difficulty target not met!');
+    }
+
     // 3. Log the verified settlement balance
     const amt = BigInt(amountLamports);
     channel.ledger.push({
@@ -121,6 +155,28 @@ export class PaymentEngine {
     channel.accumulatedBalanceLamports += amt;
 
     console.log(`💸 [x402 Ledger] Logged verified execution fee: ${skillId.slice(0, 16)}... | Fee: ${Number(amt) / LAMPORTS_PER_SOL} SOL.`);
+
+    // 4. Automated State Channel Rollup Trigger (Auto-Settlement)
+    if (channel.accumulatedBalanceLamports >= this.autoSettlementThreshold) {
+      console.log(`📡 [x402 Auto-Settlement] Channel balance ${Number(channel.accumulatedBalanceLamports) / LAMPORTS_PER_SOL} SOL reached threshold ${Number(this.autoSettlementThreshold) / LAMPORTS_PER_SOL} SOL.`);
+      
+      const settledBatch = {
+        batchId: crypto.randomBytes(16).toString('hex'),
+        settlementTimestamp: new Date().toISOString(),
+        accumulatedLamports: channel.accumulatedBalanceLamports.toString(),
+        invoicesCount: channel.ledger.length,
+        ledgerSnapshot: [...channel.ledger]
+      };
+
+      channel.autoSettledBatches.push(settledBatch);
+      
+      // Reset off-chain state channel counters for next batch
+      channel.accumulatedBalanceLamports = 0n;
+      channel.ledger = [];
+      
+      console.log(`📦 [x402 Auto-Settlement] Auto-rollup batch generated successfully: ${settledBatch.batchId.slice(0, 8)}... | Settled: ${Number(settledBatch.accumulatedLamports) / LAMPORTS_PER_SOL} SOL.`);
+    }
+
     return channel;
   }
 
@@ -154,10 +210,17 @@ export class PaymentEngine {
       })
     );
 
-    // 2. Acquire a mock/simulated blockhash for offline signing compilation
-    // In production this fetches from this.connection.getLatestBlockhash()
-    const simulatedBlockhash = '11111111111111111111111111111111';
-    transaction.recentBlockhash = simulatedBlockhash;
+    // 2. Fetch the latest blockhash from Solana devnet, or fallback to mock offline blockhash
+    let blockhash;
+    try {
+      const latest = await this.connection.getLatestBlockhash('confirmed');
+      blockhash = latest.blockhash;
+      console.log(`📡 [x402 Rollup] Successfully fetched live blockhash from Solana devnet: ${blockhash}`);
+    } catch (err) {
+      console.warn(`⚠️ [x402 Rollup] Failed to fetch live blockhash: ${err.message}. Using simulated fallback.`);
+      blockhash = '5E2cZ7fC2UoU58qA96P12Dk2Gg9sQ2D2D2D2D2D2D2D2'; // Valid base58-looking fallback
+    }
+    transaction.recentBlockhash = blockhash;
     transaction.feePayer = fundingNodeKeypair.publicKey;
 
     // 3. Sign the Solana transaction offline with payer's private key

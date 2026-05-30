@@ -127,14 +127,14 @@ fn handle_start_proxy(app: &AppHandle, state: &SharedProxyState) {
                 let _ = tauri::api::notification::Notification::new("com.atmos.desktop")
                     .title("Atmos API Proxy")
                     .body("The P2P interceptor proxy has been successfully started.")
-                    .show(app);
+                    .show();
             }
             Err(err) => {
                 eprintln!("[Atmos Desktop] Failed to spawn Atmos API Shim child: {:?}", err);
                 let _ = tauri::api::notification::Notification::new("com.atmos.desktop")
                     .title("Atmos API Proxy Error")
                     .body(format!("Failed to start proxy: {}", err))
-                    .show(app);
+                    .show();
             }
         }
     } else {
@@ -158,7 +158,7 @@ fn handle_stop_proxy(app: &AppHandle, state: &SharedProxyState) {
                 let _ = tauri::api::notification::Notification::new("com.atmos.desktop")
                     .title("Atmos API Proxy")
                     .body("The P2P interceptor proxy has been stopped.")
-                    .show(app);
+                    .show();
             }
             Err(err) => {
                 eprintln!("[Atmos Desktop] Failed to terminate child process: {:?}", err);
@@ -186,7 +186,7 @@ fn handle_check_status(app: &AppHandle) {
                     let _ = tauri::api::notification::Notification::new("com.atmos.desktop")
                         .title("Atmos Network Status: Healthy")
                         .body("Atmos P2P Proxy is online and routing peer requests.")
-                        .show(&app_clone);
+                        .show();
                 }
             }
             Err(err) => {
@@ -194,7 +194,7 @@ fn handle_check_status(app: &AppHandle) {
                 let _ = tauri::api::notification::Notification::new("com.atmos.desktop")
                     .title("Atmos Network Status: Offline")
                     .body("Could not connect to local P2P Proxy. Is it started?")
-                    .show(&app_clone);
+                    .show();
             }
         }
     });

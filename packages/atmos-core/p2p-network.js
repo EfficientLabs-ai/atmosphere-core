@@ -18,7 +18,12 @@ export class P2PNetwork {
     if (!keyring) throw new Error('KeyringManager is required for P2PNetwork');
     this.keyring = keyring;
     this.isMaximus = options.isMaximus || false;
-    this.bootstrap = options.bootstrap || null;
+    // Hardcode Sovereign DHT Bootstrap Coordinates for Frankfurt, Singapore, and New York as a fallback overlay
+    this.bootstrap = options.bootstrap || (options.isMaximus ? [
+      '46.101.240.81:24242',   // Frankfurt (Sovereign DHT Bootstrap Node 01)
+      '128.199.231.144:24242', // Singapore (Sovereign DHT Bootstrap Node 02)
+      '165.227.80.32:24242'    // New York (Sovereign DHT Bootstrap Node 03)
+    ] : null);
     this.swarm = null;
     this.connections = new Set();
     this.agentCards = new Map();

@@ -3,6 +3,8 @@
  * from LanceDB memory banks. Isolates high-confidence success patterns (success_rate = 1.0)
  * and prepares them for dynamic WASM compilation, replacing legacy mutation mechanics (DSPy).
  */
+import crypto from 'node:crypto';
+
 export class TraceAnalyzer {
   constructor(options = {}) {
     this.verbose = options.verbose !== false;
@@ -91,5 +93,77 @@ export class TraceAnalyzer {
     
     // Clamp between 0 and 150
     return Math.min(Math.round(score), 150);
+  }
+
+  /**
+   * Classifies a raw skill record into the kind of artifact it can become:
+   *   - 'computational': the trace encodes a deterministic transform (a `computation`
+   *     spec such as {type:'affine',a,b} or {type:'const',value}). These compile to
+   *     REAL executing wasm whose `compute` returns the correct value.
+   *   - 'automation': a browser/DOM workflow (steps). These cannot run as sandboxed wasm,
+   *     so they become a signed, replayable manifest (+ an integrity `compute`).
+   */
+  classify(record) {
+    let ast = {};
+    try { ast = record.ast_graph ? JSON.parse(record.ast_graph) : (record.astGraph || {}); }
+    catch { ast = {}; }
+
+    if (ast.computation && typeof ast.computation === 'object' && ast.computation.type) {
+      return { kind: 'computational', computation: ast.computation, steps: null };
+    }
+    const steps = this.sanitizeStepFlow(ast.steps || record.steps || []);
+    return { kind: 'automation', computation: null, steps };
+  }
+
+  /**
+   * Deterministic content hash over a skill's *meaning* (kind + computation + steps +
+   * intent). Used to dedupe across nightly runs: an unchanged skill yields the same hash,
+   * so it is not recompiled. Stable key ordering → reproducible digests.
+   */
+  contentHash(spec) {
+    const canonical = JSON.stringify({
+      kind: spec.kind,
+      computation: spec.computation || null,
+      steps: spec.steps || null,
+      triggerIntent: spec.triggerIntent || ''
+    });
+    return crypto.createHash('sha256').update(canonical).digest('hex');
+  }
+
+  /**
+   * Distills raw success traces into normalized, classified, content-addressed skill
+   * descriptors ready for compilation. Each descriptor carries a clean `manifest` that
+   * becomes the signed `stratos.gsi.pathway` section of the compiled wasm.
+   *
+   * @param {Array<Object>} records - rows from cognitive_skills (success_rate, ast_graph, ...)
+   * @returns {Array<{id,kind,contentHash,qualityScore,manifest}>}
+   */
+  distill(records) {
+    const out = [];
+    for (const record of records || []) {
+      const successRate = record.success_rate ?? record.successRate ?? 0;
+      if (successRate < this.successThreshold) continue;
+
+      const id = record.skill_id || record.id;
+      const triggerIntent = record.trigger_intent || record.intent || '';
+      const cls = this.classify(record);
+      const contentHash = this.contentHash({ ...cls, triggerIntent });
+
+      const manifest = {
+        id,
+        kind: cls.kind,
+        triggerIntent,
+        computation: cls.computation,
+        steps: cls.steps,
+        contentHash
+      };
+      const qualityScore = this.calculateQualityMetric(cls.steps || [], successRate);
+      out.push({ id, kind: cls.kind, contentHash, qualityScore, manifest });
+    }
+    if (this.verbose) {
+      const comp = out.filter(d => d.kind === 'computational').length;
+      console.log(`🧪 [TraceAnalyzer] Distilled ${out.length} skills (${comp} computational, ${out.length - comp} automation).`);
+    }
+    return out;
   }
 }

@@ -3,6 +3,41 @@ import path from 'node:path';
 import cron from 'node-cron';
 import { getDatabase, queryCognitiveSkill } from './src/memory/vector-bank.js';
 import { signPayload, verifyPayload } from './src/security/quantum-crypto.js';
+import { TraceAnalyzer } from './src/evolution/trace-analyzer.js';
+import wabtFactory from 'wabt';
+
+let _wabtPromise = null;
+async function getWabt() {
+  if (!_wabtPromise) _wabtPromise = wabtFactory();
+  return _wabtPromise;
+}
+
+/**
+ * Generates REAL WebAssembly text for a skill's deterministic computation.
+ * - Computational skills (e.g. affine fee = a*x + b, or a constant) compile to wasm
+ *   whose exported `compute` genuinely executes and returns the correct value.
+ * - Automation skills (browser/DOM workflows) cannot run as sandboxed wasm; their
+ *   `compute()` returns a real integrity value (the signed manifest's byte length),
+ *   and the workflow itself is replayed from the signed `stratos.gsi.pathway` section.
+ */
+function watForComputation(computation, pathwayLen) {
+  if (computation && computation.type === 'affine') {
+    const a = (computation.a | 0), b = (computation.b | 0);
+    return `(module
+  (memory (export "memory") 1)
+  (func (export "compute") (param $x i32) (result i32)
+    (i32.add (i32.mul (local.get $x) (i32.const ${a})) (i32.const ${b}))))`;
+  }
+  if (computation && computation.type === 'const') {
+    return `(module
+  (memory (export "memory") 1)
+  (func (export "compute") (result i32) (i32.const ${computation.value | 0})))`;
+  }
+  // Default: real integrity compute() returning the signed manifest byte length.
+  return `(module
+  (memory (export "memory") 1)
+  (func (export "compute") (result i32) (i32.const ${pathwayLen | 0})))`;
+}
 
 /**
  * Helper to encode Varuint32 (variable-length unsigned 32-bit integer) for WebAssembly binary sections.
@@ -78,6 +113,51 @@ export function parseCustomSection(wasmBuf, targetName) {
 }
 
 /**
+ * Like parseCustomSection, but returns the section's byte range too:
+ *   { payload, sectionStart }  where sectionStart is the index of the section-id byte.
+ * Used by verification to reconstruct the exact prefix that was signed (everything
+ * before the trailing signature section = real code bytes + the pathway manifest).
+ */
+export function findCustomSectionRange(wasmBuf, targetName) {
+  try {
+    let idx = 8; // Skip magic (4) + version (4)
+    while (idx < wasmBuf.length) {
+      const sectionStart = idx;
+      const sectionId = wasmBuf[idx];
+      idx++;
+
+      let len = 0, shift = 0;
+      while (true) {
+        const byte = wasmBuf[idx]; idx++;
+        len |= (byte & 0x7F) << shift;
+        if ((byte & 0x80) === 0) break;
+        shift += 7;
+      }
+      const sectionEnd = idx + len;
+
+      if (sectionId === 0) {
+        let nameLen = 0, nameShift = 0;
+        while (true) {
+          const byte = wasmBuf[idx]; idx++;
+          nameLen |= (byte & 0x7F) << nameShift;
+          if ((byte & 0x80) === 0) break;
+          nameShift += 7;
+        }
+        const name = wasmBuf.subarray(idx, idx + nameLen).toString('utf8');
+        idx += nameLen;
+        if (name === targetName) {
+          return { payload: wasmBuf.subarray(idx, sectionEnd), sectionStart };
+        }
+      }
+      idx = sectionEnd;
+    }
+  } catch (err) {
+    console.error('❌ Error scanning WebAssembly custom section range:', err.message);
+  }
+  return null;
+}
+
+/**
  * GsiCompiler handles overnight trace evaluation, WebAssembly translation,
  * and post-quantum cryptographic sealing of decentralized skills.
  */
@@ -86,11 +166,24 @@ export class GsiCompiler {
     this.distSkillsDir = options.distSkillsDir || '../atmos-core/dist/skills';
     this.cronSchedule = options.cronSchedule || '0 2 * * *'; // Default 2:00 AM Night Shift
     this.cronJob = null;
+    this.verbose = options.verbose !== false;
+    this.analyzer = new TraceAnalyzer({ verbose: this.verbose });
 
     // Ensure output distribution directory exists
     if (!fs.existsSync(this.distSkillsDir)) {
       fs.mkdirSync(this.distSkillsDir, { recursive: true });
     }
+  }
+
+  // ---- skill registry (dedupe + provenance) -------------------------------
+  _registryPath() { return path.join(this.distSkillsDir, 'registry.json'); }
+  _safeName(id) { return String(id).replace(/[^a-zA-Z0-9_.-]/g, '_'); }
+  _loadRegistry() {
+    try { return JSON.parse(fs.readFileSync(this._registryPath(), 'utf8')); }
+    catch { return {}; }
+  }
+  _saveRegistry(reg) {
+    fs.writeFileSync(this._registryPath(), JSON.stringify(reg, null, 2));
   }
 
   /**
@@ -126,48 +219,66 @@ export class GsiCompiler {
    * Evaluates the LanceDB cognitive_skills store, filtering for successful state transitions,
    * compiles them to signed .wasm modules, and outputs them to the mesh distribution.
    */
-  async compileFromDatabase(privateKeyBundle) {
-    console.log('🕵️ [GsiCompiler] Evaluator: Accessing LanceDB memory banks...');
+  async compileFromDatabase(privateKeyBundle, opts = {}) {
+    if (this.verbose) console.log('🕵️ [GsiCompiler] Night Shift: harvesting LanceDB cognitive_skills...');
     const db = await getDatabase();
     const tableNames = await db.tableNames();
     if (!tableNames.includes('cognitive_skills')) {
       console.log('⚠️  No cognitive_skills table found. Aborting compiler run.');
-      return [];
+      return { compiled: [], skipped: [], failed: [], registry: this._loadRegistry() };
     }
 
     const table = await db.openTable('cognitive_skills');
-    
-    // Select all successful pathways (success_rate == 1.0)
-    // In LanceDB, we can perform standard SQL-like filtering on records
     const records = await table.query().where('success_rate = 1.0').toArray();
-    console.log(`🕵️ [GsiCompiler] Evaluator: Found ${records.length} successful pathways ready for compile.`);
+    if (this.verbose) console.log(`🕵️ [GsiCompiler] Found ${records.length} verified-success pathways.`);
 
-    const compiledFiles = [];
+    // 1. Distill raw traces -> classified, content-addressed skill descriptors.
+    const descriptors = this.analyzer.distill(records);
 
-    for (const record of records) {
+    // 2. Dedupe against the registry: only (re)compile new or changed skills.
+    const registry = this._loadRegistry();
+    const compiled = [], skipped = [], failed = [];
+
+    for (const d of descriptors) {
       try {
-        const skillId = record.skill_id;
-        const trigger = record.trigger_intent;
-        const astGraph = JSON.parse(record.ast_graph);
+        const prev = registry[d.id];
+        if (prev && prev.hash === d.contentHash && !opts.force) {
+          skipped.push({ id: d.id, kind: d.kind, reason: 'unchanged' });
+          continue;
+        }
 
-        console.log(`⚙️ [GsiCompiler] Transformer: Serializing skill "${skillId}" (${trigger})...`);
+        // 3. Compile to signed wasm. Computational -> real executing `compute`;
+        //    automation -> signed replayable manifest + integrity `compute`.
+        //    The descriptor's clean manifest becomes the signed pathway section.
+        const wasmModule = await this.compile(d.manifest, privateKeyBundle);
 
-        // Compile and sign the workflow pathway
-        const wasmModule = await this.compile(astGraph, privateKeyBundle);
-
-        // Write the signed .wasm module into the public mesh skills directory
-        const fileName = `skill_${skillId}_${Date.now()}.wasm`;
+        // 4. Deterministic filename (overwrites the prior build of the same skill).
+        const fileName = `skill_${this._safeName(d.id)}.wasm`;
         const filePath = path.join(this.distSkillsDir, fileName);
         fs.writeFileSync(filePath, wasmModule);
 
-        console.log(`✅ [GsiCompiler] PQC Sealed: Saved skill to ${filePath}`);
-        compiledFiles.push(filePath);
+        registry[d.id] = {
+          hash: d.contentHash,
+          kind: d.kind,
+          file: fileName,
+          bytes: wasmModule.length,
+          quality: d.qualityScore,
+          compiledAt: new Date().toISOString()
+        };
+        compiled.push({ id: d.id, kind: d.kind, file: filePath, bytes: wasmModule.length });
+        if (this.verbose) console.log(`✅ [GsiCompiler] Sealed ${d.kind} skill "${d.id}" -> ${fileName} (${wasmModule.length}B)`);
       } catch (err) {
-        console.error(`❌ Failed to compile skill record:`, err.message);
+        failed.push({ id: d.id, error: err.message });
+        console.error(`❌ Failed to compile skill "${d.id}":`, err.message);
       }
     }
 
-    return compiledFiles;
+    // 5. Persist the registry so the next night shift can dedupe.
+    this._saveRegistry(registry);
+    if (this.verbose) {
+      console.log(`🌙 [GsiCompiler] Night Shift complete: ${compiled.length} compiled, ${skipped.length} unchanged, ${failed.length} failed.`);
+    }
+    return { compiled, skipped, failed, registry };
   }
 
   /**
@@ -175,16 +286,10 @@ export class GsiCompiler {
    * Fuses post-quantum signature directly into the WebAssembly custom binary section.
    */
   async compile(astGraph, privateKeyBundle) {
-    // 1. Serialize the pathway to JSON
+    // Serialize the pathway, build the real executable module, then sign the WHOLE
+    // module (code bytes + manifest) — see _generateWasmBinary for the integrity model.
     const pathwayPayload = JSON.stringify(astGraph);
-
-    // 2. Generate hybrid signatures (classical Ed25519 + post-quantum FIPS 204 ML-DSA-65)
-    const signatureBundle = signPayload(pathwayPayload, privateKeyBundle);
-
-    // 3. Construct the WebAssembly binary including custom data sections
-    const wasmBinary = this._generateWasmBinary(pathwayPayload, signatureBundle);
-
-    return wasmBinary;
+    return this._generateWasmBinary(pathwayPayload, privateKeyBundle, astGraph.computation);
   }
 
   /**
@@ -192,26 +297,33 @@ export class GsiCompiler {
    *   - "stratos.gsi.pathway" -> contains the serialized logic graph JSON.
    *   - "stratos.gsi.signature" -> contains the hybrid signature bundle JSON.
    */
-  _generateWasmBinary(pathwayPayload, signatureBundle) {
-    const magicHeader = Buffer.from([0x00, 0x61, 0x73, 0x6d]);
-    const versionHeader = Buffer.from([0x01, 0x00, 0x00, 0x00]);
+  async _generateWasmBinary(pathwayPayload, privateKeyBundle, computation) {
+    // 1. Compile a REAL executable module (with a working `compute` export) from WAT.
+    const wabt = await getWabt();
+    const wat = watForComputation(computation, Buffer.byteLength(pathwayPayload, 'utf8'));
+    const parsed = wabt.parseWat('skill.wat', wat);
+    const baseWasm = Buffer.from(parsed.toBinary({}).buffer); // magic+version+type+func+mem+export+code
+    if (parsed.destroy) parsed.destroy();
 
-    // Section 1: Custom section for the AST pathway
+    // 2. Append the pathway manifest as a custom section.
     const pathwaySec = this._createCustomSection('stratos.gsi.pathway', Buffer.from(pathwayPayload, 'utf8'));
 
-    // Section 2: Custom section for the Cryptographic Signature Seal
+    // 3. Sign the ENTIRE module-so-far — executable code bytes AND the manifest. This
+    //    closes the prior integrity gap: an attacker can no longer swap the compiled
+    //    `compute` logic while keeping a valid manifest signature. Any byte change to
+    //    code or manifest invalidates the seal.
+    const signedRegion = Buffer.concat([baseWasm, pathwaySec]);
+    const signatureBundle = signPayload(signedRegion, privateKeyBundle);
+
+    // 4. Append the signature as the FINAL custom section, so verification can
+    //    reconstruct the signed prefix as everything before it.
     const sigPayload = JSON.stringify({
       ed25519Sig: signatureBundle.ed25519Sig.toString('base64'),
       mldsaSig: signatureBundle.mldsaSig.toString('base64')
     });
     const signatureSec = this._createCustomSection('stratos.gsi.signature', Buffer.from(sigPayload, 'utf8'));
 
-    return Buffer.concat([
-      magicHeader,
-      versionHeader,
-      pathwaySec,
-      signatureSec
-    ]);
+    return Buffer.concat([signedRegion, signatureSec]);
   }
 
   /**
@@ -241,31 +353,31 @@ export class GsiCompiler {
    */
   static verifyWasmSkill(wasmBinary, publicKeyBundle) {
     try {
-      // 1. Extract the custom pathway section
-      const pathwayBytes = parseCustomSection(wasmBinary, 'stratos.gsi.pathway');
-      if (!pathwayBytes) {
+      // 1. The manifest must be present (it is part of what was signed).
+      if (!parseCustomSection(wasmBinary, 'stratos.gsi.pathway')) {
         console.warn('⚠️  WebAssembly is missing "stratos.gsi.pathway" custom section.');
         return false;
       }
 
-      // 2. Extract the custom signature section
-      const signatureBytes = parseCustomSection(wasmBinary, 'stratos.gsi.signature');
-      if (!signatureBytes) {
+      // 2. Locate the trailing signature section (and where it starts).
+      const sigRange = findCustomSectionRange(wasmBinary, 'stratos.gsi.signature');
+      if (!sigRange) {
         console.warn('⚠️  WebAssembly is missing "stratos.gsi.signature" custom section.');
         return false;
       }
 
-      // 3. Deserialize signature and payload
-      const sigData = JSON.parse(signatureBytes.toString('utf8'));
+      // 3. Reconstruct the EXACT bytes that were signed: the whole module up to (not
+      //    including) the signature section = executable code + the pathway manifest.
+      const signedRegion = wasmBinary.subarray(0, sigRange.sectionStart);
+
+      const sigData = JSON.parse(sigRange.payload.toString('utf8'));
       const signatureBundle = {
         ed25519Sig: Buffer.from(sigData.ed25519Sig, 'base64'),
         mldsaSig: Buffer.from(sigData.mldsaSig, 'base64')
       };
 
-      const payloadString = pathwayBytes.toString('utf8');
-
-      // 4. Mathematically verify payload signatures (ML-DSA-65 + Ed25519)
-      return verifyPayload(payloadString, signatureBundle, publicKeyBundle);
+      // 4. Verify the hybrid seal over the full code+manifest region (ML-DSA-65 + Ed25519).
+      return verifyPayload(signedRegion, signatureBundle, publicKeyBundle);
     } catch (err) {
       console.error('❌ Critical verification failure for WASM skill:', err.message);
       return false;

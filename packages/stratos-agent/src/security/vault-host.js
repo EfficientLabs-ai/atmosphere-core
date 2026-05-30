@@ -2,6 +2,7 @@ import { WASI } from 'node:wasi';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pbkdf2Sync, createDecipheriv, generateKeyPairSync, sign } from 'node:crypto';
+import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 
 /**
  * decryptSeed: Decrypts an encrypted seed using AES-256-GCM with manual memory zeroization.
@@ -68,7 +69,7 @@ export class VaultHost {
     this.importObject = { wasi_snapshot_preview1: this.wasi.wasiImport };
     this.instance = null;
     this.vault = null;
-    this.simulatedKeypair = null; // Fallback for standard developer systems
+    this.pqcKeypair = null; // Real ML-DSA-65 (FIPS 204) identity when no WASM enclave is present
   }
 
   /**
@@ -107,17 +108,11 @@ export class VaultHost {
         }
       }
 
-      // High-Fidelity FIPS Fallback: Node.js native crypto ml-dsa-65 bindings
-      try {
-        this.simulatedKeypair = generateKeyPairSync('ml-dsa-65');
-        return true;
-      } catch (err) {
-        console.warn('⚠️  [VaultHost] Local OpenSSL lacks native ML-DSA-65 compilation support. Generating mock keypair.');
-        // Standalone fallback keys
-        const ed = generateKeyPairSync('ed25519');
-        this.simulatedKeypair = ed;
-        return true;
-      }
+      // Real post-quantum identity via @noble ML-DSA-65 (FIPS 204). No native OpenSSL
+      // PQC support is required — this is genuine lattice-based signing, not a mock.
+      this.pqcKeypair = ml_dsa65.keygen();
+      console.log('🔐 [VaultHost] Real ML-DSA-65 (FIPS 204) identity key generated.');
+      return true;
     } finally {
       if (rawSeed && (Buffer.isBuffer(rawSeed) || rawSeed instanceof Uint8Array)) {
         rawSeed.fill(0);
@@ -132,8 +127,8 @@ export class VaultHost {
     if (this.vault) {
       return Buffer.from(this.vault.get_public_key());
     }
-    if (this.simulatedKeypair) {
-      return this.simulatedKeypair.publicKey.export({ type: 'spki', format: 'der' });
+    if (this.pqcKeypair) {
+      return Buffer.from(this.pqcKeypair.publicKey); // ML-DSA-65 public key (1952 bytes)
     }
     return Buffer.alloc(32, 0xAA);
   }
@@ -146,12 +141,9 @@ export class VaultHost {
     if (this.vault) {
       return Buffer.from(this.vault.sign_message(msgBuf));
     }
-    if (this.simulatedKeypair) {
-      try {
-        return sign(null, msgBuf, this.simulatedKeypair.privateKey);
-      } catch (err) {
-        return sign(null, msgBuf, this.simulatedKeypair);
-      }
+    if (this.pqcKeypair) {
+      // FIPS 204: sign(message, secretKey) → real ML-DSA-65 signature (3309 bytes)
+      return Buffer.from(ml_dsa65.sign(new Uint8Array(msgBuf), this.pqcKeypair.secretKey));
     }
     return Buffer.alloc(64, 0xBB);
   }

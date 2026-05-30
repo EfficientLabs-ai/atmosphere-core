@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.29.0",
+    "@noble/post-quantum": "^0.6.1",
     "apache-arrow": "^18.1.0",
     "autobase": "^6.0.0",
     "b4a": "^1.6.4",

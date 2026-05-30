@@ -61,7 +61,28 @@ export class UnifiedDispatcher {
     // Format inline code (`code` -> <code>code</code>)
     escapedBody = escapedBody.replace(/`(.*?)`/g, '<code>$1</code>');
 
-    return `${thinkBlock}${escapedBody}`;
+    const result = `${thinkBlock}${escapedBody}`;
+
+    // Safety net: odd numbers of markdown delimiters produce unclosed tags, which
+    // Telegram's HTML parser rejects ("can't find end of the entity"). If the
+    // converted body has unbalanced tags, fall back to escaped plaintext (always
+    // valid HTML) while preserving the collapsible thinking block.
+    if (!this._tagsBalanced(result)) {
+      return `${thinkBlock}${this.escapeHTML(content)}`;
+    }
+    return result;
+  }
+
+  /**
+   * Returns true only if every Telegram-supported tag is balanced (equal open/close).
+   */
+  _tagsBalanced(html) {
+    for (const tag of ['b', 'i', 'code', 'pre', 'tg-spoiler']) {
+      const open = (html.match(new RegExp(`<${tag}>`, 'g')) || []).length;
+      const close = (html.match(new RegExp(`</${tag}>`, 'g')) || []).length;
+      if (open !== close) return false;
+    }
+    return true;
   }
 
   /**

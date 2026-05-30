@@ -1,34 +1,59 @@
 import * as lancedb from '@lancedb/lancedb';
 import { Schema, Field, FixedSizeList, Float32, Utf8 } from 'apache-arrow';
 
-// Standard dimension size for lightweight local embeddings (e.g. MiniLM)
-export const VECTOR_DIM = 384;
+// nomic-embed-text produces 768-dim embeddings with an 8k context (handles full
+// code/doc chunks without truncation, unlike all-minilm's 256-token limit).
+export const VECTOR_DIM = 768;
+const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+const EMBED_MODEL = process.env.EMBED_MODEL || 'nomic-embed-text';
 
 /**
- * Helper to generate a deterministic semantic embedding vector of length 384.
- * Projects text characters onto a normalized Float32 array, ensuring zero dependencies.
+ * Real semantic embedding via the local Ollama embedding model (all-minilm, 384-dim).
+ * This makes vector search genuinely semantic. If the embedding model is unreachable
+ * it falls back to a deterministic (non-semantic) char-hash so the pipeline never
+ * crashes — but a warning is logged because retrieval quality degrades in that mode.
  */
-export function generateEmbedding(text) {
-  const vector = new Float32Array(VECTOR_DIM);
-  if (!text) return vector;
+export async function generateEmbedding(text) {
+  const input = (text || '').toString().slice(0, 8000);
+  if (!input.trim()) return new Array(VECTOR_DIM).fill(0);
+  try {
+    const res = await fetch(`${OLLAMA_HOST}/api/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: EMBED_MODEL, prompt: input })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.embedding) && data.embedding.length === VECTOR_DIM) {
+        return normalizeVec(data.embedding); // unit-length → L2 distance lands in [0,2], makes thresholds meaningful
+      }
+    }
+    console.warn(`⚠️ [Embeddings] Unexpected response from ${EMBED_MODEL}; using non-semantic fallback.`);
+  } catch (err) {
+    console.warn(`⚠️ [Embeddings] Local embed model unreachable (${err.message}); using non-semantic fallback.`);
+  }
+  return fallbackEmbedding(input);
+}
 
-  // Simple, high-performance deterministic frequency & character hash projection
+/** Normalize a vector to unit length so cosine/L2 distances are comparable. */
+function normalizeVec(v) {
+  let s = 0; for (const x of v) s += x * x;
+  const m = Math.sqrt(s) || 1;
+  return v.map(x => x / m);
+}
+
+/** Deterministic, NON-semantic char-hash projection. Legacy fallback only. */
+function fallbackEmbedding(text) {
+  const vector = new Float32Array(VECTOR_DIM);
   for (let idx = 0; idx < text.length; idx++) {
     const charCode = text.charCodeAt(idx);
     const hashIdx = (charCode * (idx + 13)) % VECTOR_DIM;
     vector[hashIdx] += Math.sin(charCode + idx) * 0.55;
   }
-
-  // Normalize the projected vector
   let sumSq = 0;
-  for (let idx = 0; idx < VECTOR_DIM; idx++) {
-    sumSq += vector[idx] * vector[idx];
-  }
+  for (let idx = 0; idx < VECTOR_DIM; idx++) sumSq += vector[idx] * vector[idx];
   const magnitude = Math.sqrt(sumSq) || 1;
-  for (let idx = 0; idx < VECTOR_DIM; idx++) {
-    vector[idx] /= magnitude;
-  }
-
+  for (let idx = 0; idx < VECTOR_DIM; idx++) vector[idx] /= magnitude;
   return Array.from(vector);
 }
 
@@ -96,7 +121,7 @@ export async function initializeMemorySchema() {
 export async function insertAmbientMemory({ source, content, tags = '' }) {
   const db = await getDatabase();
   const table = await db.openTable('ambient_memory');
-  const vector = generateEmbedding(content);
+  const vector = await generateEmbedding(content);
 
   const record = {
     timestamp: new Date().toISOString(),
@@ -110,15 +135,22 @@ export async function insertAmbientMemory({ source, content, tags = '' }) {
   return record;
 }
 
-export async function queryAmbientMemory(queryText, limit = 5) {
+export async function queryAmbientMemory(queryText, limit = 5, contextTag = null) {
   const db = await getDatabase();
   const table = await db.openTable('ambient_memory');
-  const queryVector = generateEmbedding(queryText);
+  const queryVector = await generateEmbedding(queryText);
 
-  return await table
-    .vectorSearch(queryVector)
-    .limit(limit)
-    .toArray();
+  let search = table.vectorSearch(queryVector).limit(limit);
+
+  // Hard channel isolation: when a caller supplies the channel/context tag
+  // (e.g. the Slack/Discord/Telegram isolatedContextTag), restrict retrieval to
+  // vectors stored under that exact tag so context cannot bleed across channels.
+  if (contextTag) {
+    const safeTag = String(contextTag).replace(/'/g, "''");
+    search = search.where(`tags = '${safeTag}'`);
+  }
+
+  return await search.toArray();
 }
 
 // ==================== Layer 2: Cognitive Skills API ====================
@@ -126,7 +158,7 @@ export async function queryAmbientMemory(queryText, limit = 5) {
 export async function insertCognitiveSkill({ skillId, triggerIntent, astGraph, successRate = 1.0 }) {
   const db = await getDatabase();
   const table = await db.openTable('cognitive_skills');
-  const vector = generateEmbedding(triggerIntent);
+  const vector = await generateEmbedding(triggerIntent);
 
   const record = {
     skill_id: skillId,
@@ -143,7 +175,7 @@ export async function insertCognitiveSkill({ skillId, triggerIntent, astGraph, s
 export async function queryCognitiveSkill(queryText, limit = 5) {
   const db = await getDatabase();
   const table = await db.openTable('cognitive_skills');
-  const queryVector = generateEmbedding(queryText);
+  const queryVector = await generateEmbedding(queryText);
 
   return await table
     .vectorSearch(queryVector)
@@ -156,7 +188,7 @@ export async function queryCognitiveSkill(queryText, limit = 5) {
 export async function insertInterceptedReasoning({ promptHash, modelSource, reasoningTrace }) {
   const db = await getDatabase();
   const table = await db.openTable('intercepted_reasoning');
-  const vector = generateEmbedding(reasoningTrace);
+  const vector = await generateEmbedding(reasoningTrace);
 
   const record = {
     prompt_hash: promptHash,
@@ -172,7 +204,7 @@ export async function insertInterceptedReasoning({ promptHash, modelSource, reas
 export async function queryInterceptedReasoning(queryText, limit = 5) {
   const db = await getDatabase();
   const table = await db.openTable('intercepted_reasoning');
-  const queryVector = generateEmbedding(queryText);
+  const queryVector = await generateEmbedding(queryText);
 
   return await table
     .vectorSearch(queryVector)

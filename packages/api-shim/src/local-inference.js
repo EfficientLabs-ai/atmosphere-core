@@ -17,15 +17,42 @@ export class LocalInferenceEngine {
   /**
    * Performs semantic vector query on LanceDB vector tables to get relevant RAG context.
    */
-  async retrieveRagContext(userPrompt, limit = 2) {
+  /**
+   * Greetings, very short, or conversational prompts must NOT pull codebase RAG —
+   * otherwise the agent stuffs unrelated files into a simple "hello" and then
+   * hallucinates that the user asked about them.
+   */
+  _isTrivialPrompt(p) {
+    p = (p || '').trim();
+    if (p.length < 12) return true;
+    if (p.split(/\s+/).filter(Boolean).length < 3) return true;
+    if (/^(hi|hey|hello|yo|sup|test|ping|thanks|thank you|ok|okay|cool|nice|good (morning|night|evening|afternoon)|how are you|what'?s up|who are you|gm)\b/i.test(p)) return true;
+    return false;
+  }
+
+  async retrieveRagContext(userPrompt, limit = 2, contextTag = null) {
     const contextBlocks = [];
+    const prompt = (userPrompt || '').trim();
+
+    // Triviality gate — no RAG for conversational/short prompts.
+    if (this._isTrivialPrompt(prompt)) {
+      if (this.verbose) console.log('🔍 [RAG Retriever] Skipped (trivial/conversational prompt) — answering directly.');
+      return contextBlocks;
+    }
+
+    // Relevance gate — only keep genuinely-close matches when a distance is available.
+    const MAX_DIST = parseFloat(process.env.RAG_RELEVANCE_MAX_DISTANCE || '0.95');
+    const keep = (rows) => (rows || []).filter(r =>
+      typeof r._distance === 'number' ? r._distance <= MAX_DIST : true
+    );
+
     try {
       if (this.verbose) {
-        console.log(`🔍 [RAG Retriever] Querying LanceDB tables for matches to prompt: "${userPrompt.slice(0, 48)}..."`);
+        console.log(`🔍 [RAG Retriever] Querying LanceDB for: "${prompt.slice(0, 48)}..." (max_dist=${MAX_DIST})`);
       }
 
       // 1. Search cognitive_skills
-      const skills = await queryCognitiveSkill(userPrompt, limit).catch(() => []);
+      const skills = keep(await queryCognitiveSkill(prompt, limit).catch(() => []));
       for (const item of skills) {
         try {
           const parsedAst = JSON.parse(item.ast_graph);
@@ -46,7 +73,7 @@ export class LocalInferenceEngine {
       }
 
       // 2. Search intercepted_reasoning
-      const reasoning = await queryInterceptedReasoning(userPrompt, limit).catch(() => []);
+      const reasoning = keep(await queryInterceptedReasoning(prompt, limit).catch(() => []));
       for (const item of reasoning) {
         contextBlocks.push({
           source: 'Intercepted Reasoning Trace',
@@ -56,7 +83,7 @@ export class LocalInferenceEngine {
       }
 
       // 3. Search ambient_memory (for deep-scan code and ambient contexts)
-      const ambient = await queryAmbientMemory(userPrompt, limit).catch(() => []);
+      const ambient = keep(await queryAmbientMemory(prompt, limit, contextTag).catch(() => []));
       for (const item of ambient) {
         contextBlocks.push({
           source: `Ambient Memory/Deep-Scan (${item.source})`,
@@ -99,9 +126,9 @@ ${visualContext ? `Here is context harvested from your ACTIVE UI DISPLAY (Screen
 ${visualContext}
 ---` : ''}
 
-${ragContextString ? `Here is context harvested from your local environment:
+${ragContextString ? `POSSIBLY-RELEVANT reference material retrieved from local memory. It may be unrelated to the user's question. IGNORE anything not directly relevant, and do NOT assume the user is asking about these files or topics unless they clearly are:
 ${ragContextString}` : ''}
-Use this context to formulate a high-fidelity, highly accurate response to the user query.
+Answer the user's actual message directly and conversationally. Only use the reference material above if it is genuinely relevant to what they asked; otherwise ignore it completely and just respond normally.
 `;
 
     // Reconstruct messages array by injecting our RAG system prompt at the top
@@ -124,14 +151,15 @@ Use this context to formulate a high-fidelity, highly accurate response to the u
    * Executes completions locally using a context-augmented RAG + Vision workflow.
    */
   async executeChatCompletion(req, res) {
-    const { messages, stream, model } = req.body;
-    
+    const { messages, stream, model, isolatedContextTag } = req.body;
+
     // 1. Retrieve last user message
     const userMessages = messages.filter(m => m.role === 'user');
     const lastUserMsg = userMessages.length > 0 ? userMessages[userMessages.length - 1].content : '';
 
-    // 2. Query LanceDB for RAG context
-    const ragContext = await this.retrieveRagContext(lastUserMsg);
+    // 2. Query LanceDB for RAG context, scoped to the channel/context tag when the
+    //    omni-gateway provides one (prevents cross-channel context bleed).
+    const ragContext = await this.retrieveRagContext(lastUserMsg, 2, isolatedContextTag || null);
 
     // 3. Query Active Vision Engine if visual elements are requested
     let visualContext = '';
@@ -166,10 +194,16 @@ Use this context to formulate a high-fidelity, highly accurate response to the u
     let text = '';
     try {
       const ollamaEndpoint = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+      // Local inference runs on the installed open-weights model. Any cloud/alias
+      // name that reaches the local path (e.g. 'qwen-2.5-vlm-telegram-local', which
+      // Ollama 404s on) is normalized to the installed model so we never silently
+      // fall back to a mock. Only qwen2.5:7b is installed on this host.
       let targetModel = model || 'qwen2.5:7b';
-      if (targetModel.toLowerCase().includes('qwen') || targetModel.toLowerCase().includes('local')) {
-        targetModel = 'qwen2.5:7b';
+      const t = targetModel.toLowerCase();
+      if (!(t.includes('qwen') || t.includes('local') || t.includes('llama'))) {
+        if (this.verbose) console.warn(`⚠️ [Local Model] "${targetModel}" is not a local model; normalizing to installed qwen2.5:7b.`);
       }
+      targetModel = 'qwen2.5:7b';
       if (this.verbose) {
         console.log(`🤖 [Local Model] Querying real Ollama model [${targetModel}] at ${ollamaEndpoint}...`);
       }

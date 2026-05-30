@@ -211,8 +211,11 @@ export class TelegramBridge {
         console.log(`💾 [Telegram Voice] Audio downloaded securely: ${oggPath}`);
       }
 
-      // 2. Transcode .ogg to 16kHz mono .wav for Whisper
-      const wavPath = oggPath.replace(/\.ogg$/, '.wav');
+      // 2. Transcode .ogg/.oga to 16kHz mono .wav for Whisper.
+      // Telegram delivers voice notes as ".oga" (OGG audio), so a strict /\.ogg$/
+      // replace left input === output and ffmpeg refused to edit in-place.
+      let wavPath = oggPath.replace(/\.[a-z0-9]+$/i, '.wav');
+      if (wavPath === oggPath) wavPath = `${oggPath}.wav`;
       await new Promise((resolve) => {
         exec(`ffmpeg -y -i "${oggPath}" -ac 1 -ar 16000 "${wavPath}"`, (err) => {
           if (err) {

@@ -11,6 +11,9 @@ export class WasiSandbox {
     this.verbose = options.verbose !== false;
     this.allowedPaths = options.allowedPaths || {}; // Maps host directories to sandboxed mount points
     this.allowedDomains = options.allowedDomains || new Set(); // Domain whitelists for sandboxed networking
+    this.allowedEnvKeys = options.allowedEnvKeys instanceof Set
+      ? options.allowedEnvKeys
+      : new Set(options.allowedEnvKeys || []); // Explicit env passthrough allowlist (deny-by-default)
   }
 
   /**
@@ -38,13 +41,21 @@ export class WasiSandbox {
         }
       }
 
-      // 2. Initialize WASI instance with strict parameters
+      // 2. Initialize WASI instance with strict parameters.
+      // Deny-by-default environment: the guest only ever sees the two protocol
+      // markers below plus any caller-supplied vars whose keys are explicitly
+      // allowlisted. We never spread arbitrary env (it could forward secrets like
+      // API keys or SOLANA_KEYPAIR into an untrusted guest).
+      const allowEnv = {};
+      for (const [k, v] of Object.entries(env || {})) {
+        if (this.allowedEnvKeys.has(k)) allowEnv[k] = v;
+      }
       const wasi = new WASI({
         args: ['stratos-guest', ...args],
         env: {
           NODE_ENV: 'sovereign-enclave',
           ATMOS_PROTOCOL: 'x402-wasi-v1',
-          ...env
+          ...allowEnv
         },
         preopens,
         version: 'preview1'
@@ -57,10 +68,12 @@ export class WasiSandbox {
       const importObject = {
         wasi_snapshot_preview1: wasi.wasiImport,
         env: {
-          // Strict capability-governed lateral network check
+          // Strict capability-governed lateral network check.
+          // Deny-by-default: only an explicit wildcard ('*') in the allowlist
+          // grants the guest network capability. (Node WASI preview1 exposes no
+          // real sockets regardless, so this is defence-in-depth for custom hosts.)
           check_network_permission: (hostPtr, hostLen) => {
-            // Evaluates targeted domains against allowed whitelists
-            return this.allowedDomains.size > 0 ? 1 : 0;
+            return this.allowedDomains.has('*') ? 1 : 0;
           },
           // Core logging channel
           log_execution_step: (msgPtr, msgLen) => {

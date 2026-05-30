@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import fetch from 'node-fetch';
 import { queryCognitiveSkill, queryInterceptedReasoning, queryAmbientMemory } from '../../../packages/stratos-agent/src/memory/vector-bank.js';
 
 /**
@@ -161,8 +162,36 @@ Use this context to formulate a high-fidelity, highly accurate response to the u
       console.log(`🤖 [Local Model] Running inference with ${ragContext.length} injected RAG context references and ${visualContext ? 1 : 0} visual display guides.`);
     }
 
-    // 5. Generate dynamic response using mock open-weights engine fallback
-    const text = this.generateResponseMock(augmentedMessages, ragContext, visualContext);
+    // 5. Generate dynamic response using the actual local Ollama open-weights engine
+    let text = '';
+    try {
+      const ollamaEndpoint = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+      if (this.verbose) {
+        console.log(`🤖 [Local Model] Querying real Ollama model [${model || 'qwen2.5:7b'}] at ${ollamaEndpoint}...`);
+      }
+      
+      const response = await fetch(`${ollamaEndpoint}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model || 'qwen2.5:7b',
+          messages: augmentedMessages,
+          stream: false
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        text = data.choices[0].message.content;
+      } else {
+        throw new Error(`Ollama completions returned non-OK status: ${response.status}`);
+      }
+    } catch (err) {
+      if (this.verbose) {
+        console.warn('⚠️ [Local Model] Ollama query failed, using high-fidelity fallback mock:', err.message);
+      }
+      text = this.generateResponseMock(augmentedMessages, ragContext, visualContext);
+    }
     const createdTime = Math.floor(Date.now() / 1000);
     const completionId = `chatcmpl-${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2)}`;
 

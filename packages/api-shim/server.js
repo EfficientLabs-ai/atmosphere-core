@@ -221,6 +221,25 @@ app.post('/v1/chat/completions', async (req, res) => {
     return localInference.executeChatCompletion(req, res);
   }
   
+  const saveApiCostEnabled = process.env.SAVE_API_COST_ENABLED === 'true' || process.env.LOCAL_FALLBACK_ENABLED === 'true';
+  const isCloudModel = req.body.model && (
+    req.body.model.startsWith('gpt-') ||
+    req.body.model.startsWith('claude-') ||
+    req.body.model.startsWith('gemini-')
+  );
+
+  if (saveApiCostEnabled && isCloudModel) {
+    console.log(`[API-SHIM] 💰 Save API Cost active. Intercepting cloud model [${req.body.model}] and routing to local inference...`);
+    const originalJson = res.json.bind(res);
+    res.json = (data) => {
+      if (data && data.choices && data.choices[0] && data.choices[0].message) {
+        harvestTelemetry(promptText, data.choices[0].message.content);
+      }
+      return originalJson(data);
+    };
+    return localInference.executeChatCompletion(req, res);
+  }
+
   let shouldFallback = false;
   let response;
   const controller = new AbortController();
@@ -256,15 +275,26 @@ app.post('/v1/chat/completions', async (req, res) => {
   }
 
   if (shouldFallback) {
-    console.log('[API-SHIM] 🤖 Upstream unavailable. Routing to Local Inference Engine with RAG...');
-    const originalJson = res.json.bind(res);
-    res.json = (data) => {
-      if (data && data.choices && data.choices[0] && data.choices[0].message) {
-        harvestTelemetry(promptText, data.choices[0].message.content);
-      }
-      return originalJson(data);
-    };
-    return localInference.executeChatCompletion(req, res);
+    if (saveApiCostEnabled) {
+      console.log('[API-SHIM] 🤖 Upstream unavailable. Routing to Local Inference Engine with RAG...');
+      const originalJson = res.json.bind(res);
+      res.json = (data) => {
+        if (data && data.choices && data.choices[0] && data.choices[0].message) {
+          harvestTelemetry(promptText, data.choices[0].message.content);
+        }
+        return originalJson(data);
+      };
+      return localInference.executeChatCompletion(req, res);
+    } else {
+      console.warn('[API-SHIM] ❌ Upstream StratosAgent unavailable, and local fallback is not enabled. Propagating gateway error...');
+      return res.status(502).json({
+        error: {
+          message: "Bad Gateway: Upstream StratosAgent/model service is unreachable and local fallback is not enabled.",
+          type: "gateway_error",
+          code: "502"
+        }
+      });
+    }
   }
 
   console.log(`[API-SHIM] 🚀 Upstream StratosAgent responded successfully (${response.status}). Piping response...`);
@@ -313,6 +343,25 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.post('/v1/messages', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
+  const saveApiCostEnabled = process.env.SAVE_API_COST_ENABLED === 'true' || process.env.LOCAL_FALLBACK_ENABLED === 'true';
+  const isCloudModel = req.body.model && (
+    req.body.model.startsWith('claude-') ||
+    req.body.model.startsWith('gpt-') ||
+    req.body.model.startsWith('gemini-')
+  );
+
+  if (saveApiCostEnabled && isCloudModel) {
+    console.log(`[API-SHIM] 💰 Save API Cost active. Intercepting cloud model [${req.body.model}] and routing to local Anthropic fallback...`);
+    const originalJson = res.json.bind(res);
+    res.json = (data) => {
+      if (data && data.content && data.content[0]) {
+        harvestTelemetry(promptText, data.content[0].text);
+      }
+      return originalJson(data);
+    };
+    return handleAnthropicFallback(req, res);
+  }
+
   let shouldFallback = false;
   let response;
   const controller = new AbortController();
@@ -352,14 +401,24 @@ app.post('/v1/messages', async (req, res) => {
   }
 
   if (shouldFallback) {
-    const originalJson = res.json.bind(res);
-    res.json = (data) => {
-      if (data && data.content && data.content[0]) {
-        harvestTelemetry(promptText, data.content[0].text);
-      }
-      return originalJson(data);
-    };
-    return handleAnthropicFallback(req, res);
+    if (saveApiCostEnabled) {
+      const originalJson = res.json.bind(res);
+      res.json = (data) => {
+        if (data && data.content && data.content[0]) {
+          harvestTelemetry(promptText, data.content[0].text);
+        }
+        return originalJson(data);
+      };
+      return handleAnthropicFallback(req, res);
+    } else {
+      console.warn('[API-SHIM] ❌ Upstream StratosAgent unavailable, and local fallback is not enabled. Propagating gateway error...');
+      return res.status(502).json({
+        error: {
+          type: "error",
+          message: "Bad Gateway: Upstream StratosAgent/model service is unreachable and local fallback is not enabled."
+        }
+      });
+    }
   }
 
   console.log(`[API-SHIM] 🚀 Upstream StratosAgent responded successfully (${response.status}). Piping response...`);

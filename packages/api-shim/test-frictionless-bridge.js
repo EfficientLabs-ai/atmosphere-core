@@ -19,6 +19,7 @@ async function runFrictionlessBridgeTest() {
   // Configure environment overrides before evaluating server.js
   process.env.PORT = '4099';
   process.env.STRATOS_DB_PATH = testDbPath;
+  process.env.SAVE_API_COST_ENABLED = 'true';
 
   // Dynamically load the server module so it binds to port 4099 on first evaluation
   const { startServer } = await import('./server.js');

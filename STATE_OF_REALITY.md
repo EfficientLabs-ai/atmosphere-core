@@ -8,7 +8,7 @@
 >
 > Legend: ✅ **WORKING** (real, verified) · 🟡 **PARTIAL** (real code, degraded/not wired) · ⛔ **STUB/MOCK** (simulated; presented as done but not real)
 >
-> **Progress log:** 2026-05-31 — #1 RAG-hallucination **FIXED**; #2 real vector DB + embeddings **DONE** (nomic-embed-text 768-dim, all 507 rows migrated, relevance-gated); #3 **real PQC DONE** (`@noble/post-quantum` ML-DSA-65 + ML-KEM-768, FIPS 203/204 — no more mock). Build order now at **#4 (one real P2P link)**.
+> **Progress log:** 2026-05-31 — #1 RAG-hallucination **FIXED**; #2 real vector DB + embeddings **DONE** (nomic-embed-text 768-dim, all 507 rows migrated, relevance-gated); #3 **real PQC DONE** (`@noble/post-quantum` ML-DSA-65 + ML-KEM-768, FIPS 203/204 — no more mock); #4 P2P **transport proven REAL** (hyperdht Noise connect + data) and a real bootstrap bug fixed — full cross-machine mesh still needs a 2nd device + the firewalled DHT UDP port opened.
 
 ---
 
@@ -57,7 +57,7 @@ infrastructure the phase reports claimed. The list below is your real backlog.
 | ~~Post-quantum crypto (ML-DSA-65 / ML-KEM-768)~~ | ✅ **NOW REAL 2026-05-31** — `@noble/post-quantum` (audited pure-JS FIPS 203/204) replaces the mock in `quantum-crypto.js` + `vault-host.js`. Real hybrid X25519+ML-KEM-768 KEM and Ed25519+ML-DSA-65 signatures (1952-byte pubkey, 3309-byte sig). chaos-pqc detects real tampers; verified key round-trips. (No Node upgrade needed; native ML-KEM only exists in Node ≥24.7.) |
 | ~~LanceDB vector store~~ | ✅ **CORRECTED/WORKING** — the RAG path (`vector-bank.js`) uses **real LanceDB** with a real on-disk store. The `[ReasoningBank (LanceDB Sim)]` log is a *separate, unused* component (`reasoning-bank.js`, `better-sqlite3` ABI-broken) — not the retrieval path. |
 | ~~Embeddings~~ (`generateEmbedding`) | ✅ **NOW REAL 2026-05-31** — swapped the `sin(charCode)` fake for **`nomic-embed-text`** (768-dim, unit-normalized) via local Ollama. Proven semantic (related 0.81 vs unrelated −0.07); all 507 rows re-embedded; concept queries return the correct source files. |
-| **P2P mesh** (Hyperswarm / Autobase / Corestore) | **SIM.** Tests use monkey-patched "virtual peer nodes" in one process. No verified real cross-device P2P. |
+| ~~P2P mesh~~ (Hyperswarm) | 🟡 **TRANSPORT REAL, MESH UNVERIFIED 2026-05-31.** `p2p-network.js` is real Hyperswarm (not the "virtual peer" sim in `test-chaos-mesh.js`). Proven: real hyperdht **Noise connect + bidirectional data** (`test-real-p2p.mjs`), and P2PNetwork starts + joins topics. Fixed a real bug (Maximus bootstrap was nested under `dht:{}` → crash). **Still unverified:** cross-machine mesh discovery — the VPS is `firewalled:true` (zero public UDP ports), so it can't be a reachable public peer; needs a 2nd device + the DHT UDP port opened (or a private Tailscale bootstrap). |
 | **chaos-mesh / chaos-cognitive** | **SIM.** Virtual peers + mock offload to fake nodes (`127.0.0.1:5001-5003`). Not real network/failure testing. |
 | **"Night Shift" GSI self-evolution + WASM skill compiler** | **STUB.** Compiles trivial graphs to wasm with mock signatures; no real skill synthesis. |
 | **Multimodal** (Whisper STT, TTS, Active Vision) | **MOCK.** GDI mock display buffer, mock transcription. Voice confirmed "1990s robot," scrapped. |
@@ -76,7 +76,7 @@ infrastructure the phase reports claimed. The list below is your real backlog.
 1. ~~**Fix the RAG-injection hallucination**~~ ✅ **DONE 2026-05-31.**
 2. ~~**Real vector DB + real embeddings**~~ ✅ **DONE 2026-05-31** (nomic-embed-text, 768-dim, real LanceDB confirmed). LanceDB was already real; only the embedder was fake.
 3. ~~**Decide PQC honestly**~~ ✅ **DONE 2026-05-31** — made it genuinely real via `@noble/post-quantum` (ML-DSA-65 + ML-KEM-768, FIPS 203/204). No Node upgrade / ABI risk.
-4. **One real P2P link** between two of your physical machines before any "mesh" claim.
+4. ~~**One real P2P link**~~ 🟡 **TRANSPORT DONE 2026-05-31** (real hyperdht Noise connect proven; real bootstrap bug fixed). **Remaining:** verify cross-machine on a 2nd device + open the firewalled DHT UDP port (or use a Tailscale/private bootstrap) before any public-mesh claim.
 5. **Defer** (need product-truth first + legal counsel): token, Ghost-Node fleet, on-chain payments, ChatGPT-scraping arbitrage, AGI/superintelligence framing.
 
 *Build claims should be backed by a test that fails if the feature breaks. Today, most "passing" tests pass because the thing they test is mocked.*

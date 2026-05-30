@@ -38,11 +38,11 @@ export class P2PNetwork {
     await this.vaultHost.init();
 
     // Configure Hyperswarm options. Maximus nodes route via isolated/private bootstrap nodes.
+    // NOTE: Hyperswarm takes `bootstrap` as a TOP-LEVEL option (it builds its own DHT from it);
+    // nesting it under `dht: {...}` makes Hyperswarm treat the object as a DHT instance and crash.
     const swarmOpts = {};
     if (this.isMaximus && this.bootstrap) {
-      swarmOpts.dht = {
-        bootstrap: this.bootstrap
-      };
+      swarmOpts.bootstrap = this.bootstrap;
     }
 
     this.swarm = new Hyperswarm(swarmOpts);

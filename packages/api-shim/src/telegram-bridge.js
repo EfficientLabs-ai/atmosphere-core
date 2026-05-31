@@ -3,7 +3,10 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import fetch from 'node-fetch';
 import TelegramBot from 'node-telegram-bot-api';
-import { UnifiedDispatcher } from '../../stratos-agent/index.js';
+// Import the dispatcher from its OWN module, NOT the stratos-agent barrel (index.js) — the barrel
+// re-exports BrowserHarness/GsiScheduler/P2pSkillSync, which would drag playwright + node-cron + the
+// hyperswarm mesh into the standalone agent's load graph. Enforced by test-standalone-graph.mjs.
+import { UnifiedDispatcher } from '../../stratos-agent/src/ingestion/unified-dispatcher.js';
 import { getAgentName, capabilitiesSummary } from '../../stratos-agent/src/core/identity.js';
 import * as chatHistory from './chat-history.js';
 import { scanForSecrets, SECRET_REFUSAL } from './secret-guard.js';

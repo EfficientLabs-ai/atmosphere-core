@@ -131,10 +131,11 @@ export class SelfEvolutionEngine {
     return result;
   }
 
-  /** Start the nightly cron (LEARN). */
+  /** Start the nightly cron (LEARN). startNightShift lazily imports node-cron, so handle the promise. */
   startScheduler(schedule) {
     if (schedule) this.compiler.cronSchedule = schedule;
-    this.compiler.startNightShift(this.keyBundle.privateKey);
+    return Promise.resolve(this.compiler.startNightShift(this.keyBundle.privateKey))
+      .catch((err) => console.error('❌ [SelfEvolution] night-shift scheduler failed to start:', err.message));
   }
   stopScheduler() { this.compiler.stopNightShift(); }
 

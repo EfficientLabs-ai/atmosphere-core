@@ -4,6 +4,10 @@
   "description": "Sovereign P2P compute layer and StratosAgent browser automation framework",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "stratos": "bin/stratos.js",
+    "stratos-ctl": "stratos-ctl.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 0"
   },

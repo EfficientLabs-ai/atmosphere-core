@@ -16,7 +16,7 @@ async function runSovereignPhasesTest() {
   console.log('✨ [System Setup] Initializing keyrings, enclaves, and cryptographic hosts...');
   
   const aliceKeyring = new KeyringManager('consumer');
-  const bobKeyring = new KeyringManager('maximus');
+  const bobKeyring = new KeyringManager('validator');
   await aliceKeyring.init();
   await bobKeyring.init();
 

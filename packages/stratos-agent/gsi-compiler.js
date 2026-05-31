@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import cron from 'node-cron';
+// node-cron is imported LAZILY inside startNightShift() (the only consumer) so it stays OUT of the
+// standalone agent's static load graph — the api-shim runtime drives scheduling on its own. Enforced
+// by api-shim/test-standalone-graph.mjs.
 import { getDatabase, queryCognitiveSkill } from './src/memory/vector-bank.js';
 import { signPayload, verifyPayload } from './src/security/quantum-crypto.js';
 import { TraceAnalyzer } from './src/evolution/trace-analyzer.js';
@@ -107,11 +109,12 @@ export class GsiCompiler {
   /**
    * Initializes the Cron Scheduler to trigger overnight compilation runs.
    */
-  startNightShift(privateKeyBundle) {
+  async startNightShift(privateKeyBundle) {
     if (this.cronJob) return;
+    const { default: cron } = await import('node-cron'); // lazy — keeps node-cron out of the static graph
 
     console.log(`🌙 [GsiCompiler] Night Shift cron scheduler initialized (Schedule: "${this.cronSchedule}").`);
-    
+
     this.cronJob = cron.schedule(this.cronSchedule, async () => {
       console.log('🌙 [GsiCompiler] Night Shift triggered! Initiating autonomous compilation...');
       try {

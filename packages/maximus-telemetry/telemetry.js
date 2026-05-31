@@ -34,7 +34,7 @@ export class MaximusTelemetry {
     return {
       timestamp: Date.now(),
       nodeId: this.keyring.keypair.publicKey.toString('hex'),
-      nodeType: 'maximus',
+      nodeType: 'validator',
       cpu: {
         cores: cpus.length,
         model: cpus[0].model,
@@ -84,14 +84,14 @@ async function bootstrap() {
   const hsmKey = process.env.HSM_KEY || 'maximus-secure-hsm-hardware-key-enclave';
   console.log(`🔑 Initializing Keyring with HSM Enclave Key: ${hsmKey.substring(0, 12)}...`);
   
-  const keyring = new KeyringManager('maximus');
+  const keyring = new KeyringManager('validator');
   await keyring.init(hsmKey);
   
   const bootstrapNodes = process.env.DHT_BOOTSTRAP
     ? process.env.DHT_BOOTSTRAP.split(',').map(s => s.trim())
     : null;
 
-  const networkOpts = { isMaximus: true };
+  const networkOpts = { isPrivateOverlay: true };
   if (bootstrapNodes) {
     console.log(`🌐 Configuring private DHT Bootstrap Servers: ${JSON.stringify(bootstrapNodes)}`);
     networkOpts.bootstrap = bootstrapNodes;

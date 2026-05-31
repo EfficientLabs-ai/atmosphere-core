@@ -31,8 +31,8 @@ ok(k.verify('hello world', crypto.randomBytes(32), k.keypair.publicKey) === fals
 ok(k.verify('hello world', forgedSig, forgedPub) === false, 'forged sig + forged 32-byte pubkey (the exact old bypass) → rejected');
 
 console.log('\n=== wrong-signer is rejected (no cross-key forgery) ===');
-const m = new KeyringManager('maximus'); await m.init('seed-mallory');
-ok(m.keypair.publicKey.length === 32 && m.keypair.isHSMBacked === true, 'maximus node: real 32-byte key, HSM-flagged');
+const m = new KeyringManager('validator'); await m.init('seed-mallory');
+ok(m.keypair.publicKey.length === 32 && m.keypair.isHSMBacked === true, 'validator node: real 32-byte key, HSM-flagged');
 ok(k.verify('hello world', m.sign('hello world'), k.keypair.publicKey) === false, "Mallory's signature does NOT verify under Alice's key");
 ok(m.verify('hello world', m.sign('hello world'), m.keypair.publicKey) === true, "Mallory's own signature verifies under her own key");
 

@@ -11,15 +11,15 @@ export class P2PNetwork {
   /**
    * @param {KeyringManager} keyring - The initialized KeyringManager
    * @param {Object} [options]
-   * @param {boolean} [options.isMaximus] - Flags whether this node operates on a private Maximus overlay
+   * @param {boolean} [options.isPrivateOverlay] - Flags whether this node operates on a private bootstrap overlay
    * @param {Array<string>} [options.bootstrap] - Private DHT bootstrap servers
    */
   constructor(keyring, options = {}) {
     if (!keyring) throw new Error('KeyringManager is required for P2PNetwork');
     this.keyring = keyring;
-    this.isMaximus = options.isMaximus || false;
+    this.isPrivateOverlay = options.isPrivateOverlay || false;
     // Hardcode Sovereign DHT Bootstrap Coordinates for Frankfurt, Singapore, and New York as a fallback overlay
-    this.bootstrap = options.bootstrap || (options.isMaximus ? [
+    this.bootstrap = options.bootstrap || (options.isPrivateOverlay ? [
       '46.101.240.81:24242',   // Frankfurt (Sovereign DHT Bootstrap Node 01)
       '128.199.231.144:24242', // Singapore (Sovereign DHT Bootstrap Node 02)
       '165.227.80.32:24242'    // New York (Sovereign DHT Bootstrap Node 03)
@@ -37,11 +37,11 @@ export class P2PNetwork {
     // Initialize the post-quantum vault host enclave
     await this.vaultHost.init();
 
-    // Configure Hyperswarm options. Maximus nodes route via isolated/private bootstrap nodes.
+    // Configure Hyperswarm options. Private-overlay nodes route via isolated/private bootstrap nodes.
     // NOTE: Hyperswarm takes `bootstrap` as a TOP-LEVEL option (it builds its own DHT from it);
     // nesting it under `dht: {...}` makes Hyperswarm treat the object as a DHT instance and crash.
     const swarmOpts = {};
-    if (this.isMaximus && this.bootstrap) {
+    if (this.isPrivateOverlay && this.bootstrap) {
       swarmOpts.bootstrap = this.bootstrap;
     }
 

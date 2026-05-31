@@ -10,6 +10,7 @@ import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
+import { capabilitiesSummary } from './src/core/identity.js';
 
 const args = process.argv.slice(2);
 const command = args[0] || 'status';
@@ -56,8 +57,12 @@ data sovereignty, analyze workflows, and assist you in daily execution.
 `);
 
   // 1. Name the Agent
-  const agentName = await question('🤖 \x1b[36mName your Stratos Agent\x1b[0m (default: "Stratos"): ') || 'Stratos';
+  const agentName = await question('🤖 \x1b[36mName your agent\x1b[0m (default: "StratosAgent"): ') || 'StratosAgent';
   console.log(`\n✨ Perfect! Your agent is now officially named: \x1b[32m\x1b[1m${agentName}\x1b[0m`);
+  console.log(`\n\x1b[1mHere's what ${agentName} can genuinely do for you:\x1b[0m`);
+  console.log(capabilitiesSummary(false).split('\n').map(c => '  ' + c).join('\n'));
+  console.log(`\n\x1b[33m🔒 Permission model:\x1b[0m ${agentName} starts with ZERO ambient authority — sandboxed by default, with only the file/network/skill access you grant. Everything is opt-in, off by default. You stay in control; it asks before acting outside what you allow.`);
+  console.log(`\x1b[2m(Connect skills, MCP servers, repositories, and models after setup — all gated by these permissions.)\x1b[0m`);
 
   // 2. Explain Separation & Ask for P2P Mesh Network Opt-In
   console.log(`

@@ -10,6 +10,7 @@
  * endpoint later to get genuine cloud routing without touching the bridge.
  */
 import express from 'express';
+import { buildIdentityPrompt } from './src/core/identity.js';
 
 const PORT = parseInt(process.env.STRATOS_UPSTREAM_PORT || '5001', 10);
 const HOST = process.env.STRATOS_UPSTREAM_HOST || '127.0.0.1';
@@ -30,7 +31,7 @@ app.post('/v1/chat/completions', async (req, res) => {
   // Prepend a tier marker so frontier-routed replies are distinguishable from
   // the bridge's direct local route, while still served by the sovereign model.
   const augmented = [
-    { role: 'system', content: 'You are the StratosAgent frontier reasoning tier. Answer with rigorous, step-by-step reasoning.' },
+    { role: 'system', content: buildIdentityPrompt({ tier: 'frontier' }) },
     ...messages
   ];
 

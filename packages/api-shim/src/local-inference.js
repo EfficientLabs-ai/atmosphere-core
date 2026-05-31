@@ -4,6 +4,7 @@ import path from 'node:path';
 import fetch from 'node-fetch';
 import { queryCognitiveSkill, queryInterceptedReasoning, queryAmbientMemory } from '../../../packages/stratos-agent/src/memory/vector-bank.js';
 import { tryServe as evolutionTryServe, observe as evolutionObserve } from './self-evolution-runtime.js';
+import { buildIdentityPrompt } from '../../../packages/stratos-agent/src/core/identity.js';
 
 /**
  * Local Inference Engine: Implements localized open-weights completions with RAG
@@ -120,8 +121,7 @@ ${c.response}
 ---`;
     }
 
-    const systemPrompt = `You are a highly intelligent, quantized open-weights assistant running strictly locally and offline.
-You do NOT depend on external API keys or cloud connections.
+    const systemPrompt = `${buildIdentityPrompt()}
 
 ${visualContext ? `Here is context harvested from your ACTIVE UI DISPLAY (Screen Capture Analysis):
 ${visualContext}

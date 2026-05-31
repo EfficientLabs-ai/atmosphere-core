@@ -4,6 +4,7 @@ import { exec } from 'node:child_process';
 import fetch from 'node-fetch';
 import TelegramBot from 'node-telegram-bot-api';
 import { UnifiedDispatcher } from '../../stratos-agent/index.js';
+import { getAgentName, capabilitiesSummary } from '../../stratos-agent/src/core/identity.js';
 
 /**
  * Telegram Bot Bridge: Interfaces user phone commands
@@ -77,27 +78,35 @@ export class TelegramBridge {
         if (text.startsWith('/')) {
           const command = text.split(' ')[0].toLowerCase();
           try {
-            if (command === '/start') {
-              const startReply = `🪐 <b>Atmos Sovereign Client Core 1.0</b> active.\n\nSovereign DePIN compute mesh, post-quantum ML-KEM security, off-chain Solana billing, and localized completions RAG shield are online. Send a query to chat with your localized workspace intelligence.`;
-              await this.bot.sendMessage(chatId, startReply, { parse_mode: 'HTML' });
+            if (command === '/start' || command === '/whoami') {
+              const name = getAgentName();
+              const caps = capabilitiesSummary(false).split('\n').map(c => '  ' + c).join('\n');
+              const intro = `👋 Hello — I'm <b>${name}</b>, your sovereign, local-first AI agent (part of the Atmosphere by Efficient Labs).\n\nI run on your own hardware — private and offline-capable. Here's what I can genuinely do:\n\n${caps}\n\n🔒 I have <b>zero ambient authority</b>: I'm sandboxed by default and only use the permissions you granted at setup. I'll ask before acting outside them.\n\nJust send me a message to chat. Commands: /whoami · /status · /help`;
+              await this.bot.sendMessage(chatId, intro, { parse_mode: 'HTML' });
               return;
             }
 
             if (command === '/status') {
               const os = await import('node:os');
               const cpus = os.cpus();
-              const loadAvg = os.loadavg ? os.loadavg()[0] : 0.42;
+              const loadAvg = os.loadavg ? os.loadavg()[0] : 0;
               const freeMemGB = (os.freemem() / (1024 ** 3)).toFixed(2);
               const totalMemGB = (os.totalmem() / (1024 ** 3)).toFixed(2);
-              
-              const statusReply = `📡 <b>Atmos Sovereign Status Audit</b>:
-• <b>Gateway Host:</b> <code>127.0.0.1:${this.port}</code>
-• <b>Swarm DHT Overlay:</b> <code>Hyperswarm (Connected)</code>
-• <b>Active Peer Nodes:</b> <code>5 Nodes Online</code>
-• <b>OS CPU Load:</b> <code>${cpus.length} cores (${(loadAvg * 100).toFixed(0)}% load)</code>
-• <b>Free Memory:</b> <code>${freeMemGB} GB / ${totalMemGB} GB</code>
-• <b>Sovereign Encryption:</b> <code>Hybrid X25519 + ML-KEM-768</code>
-• <b>Security Shield Status:</b> <code>Active (Quarantined)</code>`;
+
+              // REAL mesh node count, read from the origin's fleet.json if it exists — never fabricated.
+              let meshLine = '<code>not joined from this bridge (run the mesh origin separately)</code>';
+              for (const base of [process.cwd(), path.resolve(process.cwd(), '.stratos-profile')]) {
+                try {
+                  const f = JSON.parse(fs.readFileSync(path.join(base, 'fleet.json'), 'utf8'));
+                  if (f?.totals?.nodes != null) { meshLine = `<code>${f.totals.nodes} node(s), ${f.totals.cores} cores (self-reported)</code>`; break; }
+                } catch { /* no fleet file */ }
+              }
+              const statusReply = `📡 <b>${getAgentName()} — status</b>:
+• <b>Gateway:</b> <code>127.0.0.1:${this.port}</code> (local)
+• <b>Local model:</b> <code>qwen2.5:7b via Ollama</code>
+• <b>Mesh:</b> ${meshLine}
+• <b>This host:</b> <code>${cpus.length} cores, ${(loadAvg).toFixed(2)} load, ${freeMemGB}/${totalMemGB} GB free</code>
+• <b>Crypto:</b> <code>X25519+ML-KEM-768 / Ed25519+ML-DSA-65 (real)</code>`;
               await this.bot.sendMessage(chatId, statusReply, { parse_mode: 'HTML' });
               return;
             }
@@ -122,24 +131,18 @@ export class TelegramBridge {
             }
 
             if (command === '/balance') {
-              const balanceReply = `💳 <b>Atmos Solana x402 Micropayments</b>:
-• <b>Treasury Wallet:</b> <code>6GH6mS462pJ1ys286shV8dyka29DCwNZKACETBPRj27x</code>
-• <b>Active State Channel:</b> <code>7def92ab73fee8e8</code>
-• <b>Unsettled Off-chain Invoices:</b> <code>14 Invoices</code>
-• <b>Total Balance Due:</b> <code>0.0084 SOL</code>
-• <b>CFTC DePIN Proof-of-Work:</b> <code>Locked & Compliant</code>`;
+              // HONEST: there is no live wallet or on-chain settlement. The x402 logic is
+              // off-chain accounting only. Never fabricate a balance.
+              const balanceReply = `💳 <b>Payments — not live</b>\n\nOn-chain payments and a wallet are <b>not connected</b>. The x402 engine implements off-chain micro-invoice accounting (state channels, PoW, rollup math) that's been stress-tested, but <b>no real funds move</b> and no token has launched. I won't show you a balance I can't back.`;
               await this.bot.sendMessage(chatId, balanceReply, { parse_mode: 'HTML' });
               return;
             }
 
             if (command === '/compile') {
-              const compileReply = `⚙️ <b>Atmos GSI Compiler Bootloader</b>:\n\nSearching Vector store for pathways, distilling AST structures, and compiling post-quantum sealed WebAssembly skills...`;
+              // HONEST: don't print a fabricated compiled-skill result. Describe what the real
+              // night-shift GSI compiler does and that it's opt-in.
+              const compileReply = `⚙️ <b>Skill compiler (night-shift GSI)</b>\n\nWhen enabled, I harvest successful task traces, induce a deterministic spec, compile it to WebAssembly, and PQC-seal it (ML-DSA-65 + Ed25519) so it can run verified in the sandbox or be shared on the mesh.\n\nThis runs on a schedule (opt-in via <code>STRATOS_EVOLUTION</code>); I won't claim a compile that didn't happen. Currently it learns one class of skill (deterministic numeric transforms).`;
               await this.bot.sendMessage(chatId, compileReply, { parse_mode: 'HTML' });
-              
-              setTimeout(async () => {
-                const finishedReply = `✅ <b>Compilation Complete</b>:\n• <b>Compiled skills:</b> <code>dist/skills/skill_auth_177998.wasm</code>\n• <b>PQC Seal status:</b> <code>ML-DSA-65 Certified</code>\n• <b>Verification:</b> <code>100% Cryptographically Sealed</code>`;
-                await this.bot.sendMessage(chatId, finishedReply, { parse_mode: 'HTML' });
-              }, 1200);
               return;
             }
           } catch (cmdErr) {

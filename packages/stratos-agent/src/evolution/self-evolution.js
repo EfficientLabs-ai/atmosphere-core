@@ -5,7 +5,7 @@ import { GsiCompiler, parseCustomSection } from '../../gsi-compiler.js';
 import { SkillExecutor } from './skill-executor.js';
 import { SkillInductionEngine } from './skill-induction.js';
 import { generateHybridKeyPair } from '../security/quantum-crypto.js';
-import { insertCognitiveSkill, queryCognitiveSkill } from '../memory/vector-bank.js';
+import { insertCognitiveSkill, queryCognitiveSkill, getCognitiveSkillById } from '../memory/vector-bank.js';
 
 /**
  * SelfEvolutionEngine — the integration layer that wires the five components built
@@ -87,12 +87,31 @@ export class SelfEvolutionEngine {
       if (!intent) return null;
       const skillId = skillIdForIntent(intent);
       const ast = { id: skillId };
-      if (Array.isArray(o.examples) && o.examples.length) ast.examples = o.examples;
+
+      // Accumulate examples across captures: a transform needs MANY observations before the
+      // night-shift inducer can trust it (≥2 distinct inputs). Merge the new example(s) into
+      // whatever this skill id already learned, deduping by input (latest output wins).
+      let mergedExamples = Array.isArray(o.examples) ? [...o.examples] : [];
+      if (mergedExamples.length) {
+        try {
+          const prior = await getCognitiveSkillById(skillId);
+          const priorAst = prior?.ast_graph ? JSON.parse(prior.ast_graph) : null;
+          if (priorAst && Array.isArray(priorAst.examples)) {
+            const byInput = new Map();
+            for (const ex of [...priorAst.examples, ...mergedExamples]) {
+              const key = JSON.stringify(ex.input ?? ex.in ?? ex.x);
+              byInput.set(key, ex); // later (new) observation overrides an older one
+            }
+            mergedExamples = [...byInput.values()];
+          }
+        } catch { /* corrupt prior row — fall back to the new examples only */ }
+        ast.examples = mergedExamples;
+      }
       if (o.computation) ast.computation = o.computation;
       if (Array.isArray(o.steps) && o.steps.length) ast.steps = o.steps;
       if (!ast.examples && !ast.computation && !ast.steps) return null; // nothing learnable
       await insertCognitiveSkill({ skillId, triggerIntent: intent, astGraph: ast, successRate: 1.0 });
-      if (this.verbose) console.log(`👁️  [SelfEvolution] captured success "${intent}" (${skillId})`);
+      if (this.verbose) console.log(`👁️  [SelfEvolution] captured success "${intent}" (${skillId}, ${ast.examples?.length || 0} ex)`);
       return skillId;
     } catch (e) {
       if (this.verbose) console.warn('[SelfEvolution] capture failed:', e.message);

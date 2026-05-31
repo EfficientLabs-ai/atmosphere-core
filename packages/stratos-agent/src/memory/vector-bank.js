@@ -168,8 +168,26 @@ export async function insertCognitiveSkill({ skillId, triggerIntent, astGraph, s
     success_rate: parseFloat(successRate)
   };
 
+  // Upsert by skill_id: a skill is identified by its id, not by row count. Without this,
+  // repeated captures of the same intent (e.g. accumulating training examples) would pile
+  // up duplicate rows that the night shift would each distill into conflicting skills.
+  try {
+    const safeId = String(skillId).replace(/'/g, "''");
+    await table.delete(`skill_id = '${safeId}'`);
+  } catch { /* table may have no prior row; add is still correct */ }
+
   await table.add([record]);
   return record;
+}
+
+/** Exact-id lookup of a single cognitive skill row (null if absent). Used to accumulate
+ *  observed examples into one growing row rather than appending one-example duplicates. */
+export async function getCognitiveSkillById(skillId) {
+  const db = await getDatabase();
+  const table = await db.openTable('cognitive_skills');
+  const safeId = String(skillId).replace(/'/g, "''");
+  const rows = await table.query().where(`skill_id = '${safeId}'`).limit(1).toArray();
+  return rows && rows.length ? rows[0] : null;
 }
 
 export async function queryCognitiveSkill(queryText, limit = 5) {

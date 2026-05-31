@@ -132,6 +132,13 @@ export function induceComputation(rawExamples, opts = {}) {
   const examples = normalize(rawExamples);
   if (examples.length === 0) return null;
 
+  // A single observation can never determine a transform: (4 -> 12) is equally a constant
+  // 12, a doubling-plus-4, a tripling, etc. Refuse to synthesize anything — even a const —
+  // from fewer than 2 distinct inputs. This is what stops one chat reply from minting a
+  // skill that then serves its lone output for every input of that intent class.
+  const distinctX = new Set(examples.map(e => e.x));
+  if (distinctX.size < 2) return null;
+
   for (const synth of TIER_A) {
     const candidate = synth(examples);
     if (!candidate) continue;

@@ -40,9 +40,14 @@ fs.writeFileSync('config.json', JSON.stringify({nodeLabel:'atmos-ghost',topic:pr
 
 # 4. fetch per-platform runtimes.
 cd "$WORK"
-[ -f node.exe ]          || curl -fsSL "https://nodejs.org/dist/$NODE_VER/win-x64/node.exe" -o node.exe
-[ -f node-linux-x64 ]    || { curl -fsSL "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-linux-x64.tar.xz" -o l.txz && tar -xf l.txz "node-$NODE_VER-linux-x64/bin/node" && mv "node-$NODE_VER-linux-x64/bin/node" node-linux-x64; }
-[ -f node-darwin-arm64 ] || { curl -fsSL "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-darwin-arm64.tar.gz" -o d.tgz && tar -xf d.tgz "node-$NODE_VER-darwin-arm64/bin/node" && mv "node-$NODE_VER-darwin-arm64/bin/node" node-darwin-arm64; }
+dl_tar() { # url member out  — extract one bin/node member to `out`
+  local d; d="$(mktemp -d)"; curl -fsSL "$1" -o "$d/a"; tar -xf "$d/a" -C "$d" "$2"; mv "$d/$2" "$3"; rm -rf "$d"; }
+[ -f node.exe ]            || curl -fsSL "https://nodejs.org/dist/$NODE_VER/win-x64/node.exe" -o node.exe
+[ -f node-winarm.exe ]    || curl -fsSL "https://nodejs.org/dist/$NODE_VER/win-arm64/node.exe" -o node-winarm.exe
+[ -f node-linux-x64 ]     || dl_tar "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-linux-x64.tar.xz"     "node-$NODE_VER-linux-x64/bin/node"     node-linux-x64
+[ -f node-linux-arm64 ]   || dl_tar "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-linux-arm64.tar.xz"   "node-$NODE_VER-linux-arm64/bin/node"   node-linux-arm64
+[ -f node-darwin-arm64 ]  || dl_tar "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-darwin-arm64.tar.gz"  "node-$NODE_VER-darwin-arm64/bin/node"  node-darwin-arm64
+[ -f node-darwin-x64 ]    || dl_tar "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-darwin-x64.tar.gz"    "node-$NODE_VER-darwin-x64/bin/node"    node-darwin-x64
 
 OUT="$WORK/dist"; rm -rf "$OUT"; mkdir -p "$OUT"
 CODE=(atmos-ghost.mjs wasm-sections.js quantum-crypto.js config.json package.json)
@@ -59,7 +64,10 @@ emit() { # plat prebuild runtime_src runtime_name family target_os
   ( cd "$OUT" && python3 -c "import shutil,sys;shutil.make_archive('atmosphere-ghost-'+sys.argv[1],'zip','.', 'atmosphere-ghost-'+sys.argv[1])" "$plat" )
   echo "  built $plat -> $(du -h "$OUT/atmosphere-ghost-$plat.zip"|cut -f1)"
 }
-emit windows-x64 win32-x64    node.exe          node.exe windows windows
-emit macos-arm64 darwin-arm64 node-darwin-arm64 node     unix    macos
-emit linux-x64   linux-x64    node-linux-x64    node     unix    linux
+emit windows-x64   win32-x64    node.exe          node.exe windows windows
+emit windows-arm64 win32-arm64  node-winarm.exe   node.exe windows windows
+emit macos-arm64   darwin-arm64 node-darwin-arm64 node     unix    macos
+emit macos-x64     darwin-x64   node-darwin-x64   node     unix    macos
+emit linux-x64     linux-x64    node-linux-x64    node     unix    linux
+emit linux-arm64   linux-arm64  node-linux-arm64  node     unix    linux
 echo "Bundles in $OUT"

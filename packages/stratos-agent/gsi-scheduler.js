@@ -24,6 +24,7 @@ export class GsiScheduler {
     this.cronExpression = options.cronExpression || '0 2 * * *';
     this.reasoningBank = options.reasoningBank;
     this.gsiCompiler = options.gsiCompiler;
+    this.privateKeyBundle = options.privateKeyBundle || null;
     this.task = null;
     this.isRunning = false;
   }
@@ -64,43 +65,16 @@ export class GsiScheduler {
    * @returns {Promise<Array<Object>>} List of newly compiled packages
    */
   async executeCompilationCycle() {
-    const pathways = await this.reasoningBank.getAllPathways();
-    console.log(`[GsiScheduler] Found ${pathways.length} success pathways awaiting evaluation.`);
-
-    const compiledResults = [];
-
-    for (const pathway of pathways) {
-      // Fetch traces associated with this pathway
-      const traces = await this.reasoningBank.getTaskTraces(pathway.id);
-      
-      // If we don't have detailed execution traces, default to compiling the pathway steps
-      const inputTraces = traces.length > 0 ? traces : pathway.steps;
-
-      if (!inputTraces || inputTraces.length === 0) {
-        console.log(`[GsiScheduler] Pathway "${pathway.id}" has no active steps/traces. Skipping.`);
-        continue;
-      }
-
-      console.log(`[GsiScheduler] Compiling pathway: "${pathway.id}" (Objective: "${pathway.goal}")`);
-      const { signature, signedBlock } = await this.gsiCompiler.compile(inputTraces);
-
-      // Save trace transaction representing successful compilation
-      await this.reasoningBank.recordTaskTrace(
-        `gsi-compile-${pathway.id}-${Date.now()}`,
-        pathway.id,
-        'gsi_compilation_success',
-        { signature, timestamp: new Date().toISOString() }
-      );
-
-      compiledResults.push({
-        pathwayId: pathway.id,
-        signature,
-        signedBlock
-      });
+    if (!this.privateKeyBundle) {
+      console.warn('[GsiScheduler] No privateKeyBundle configured — cannot sign compiled skills. Skipping cycle.');
+      return { compiled: [], skipped: [], failed: [] };
     }
 
-    console.log(`[GsiScheduler] Compilation cycle complete. Successfully generated ${compiledResults.length} signed Wasm blocks.`);
-    return compiledResults;
+    // Delegate to the real engine: harvest cognitive_skills -> distill/classify ->
+    // content-hash dedupe -> compile to full-wasm-signed modules -> write + registry.
+    const result = await this.gsiCompiler.compileFromDatabase(this.privateKeyBundle);
+    console.log(`[GsiScheduler] Compilation cycle complete: ${result.compiled.length} compiled, ${result.skipped.length} unchanged, ${result.failed.length} failed.`);
+    return result;
   }
 
   /**

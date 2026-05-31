@@ -50,12 +50,12 @@ async function runTest() {
     });
 
     console.log('⚙️  [Step 4] Executing compileFromDatabase()...');
-    const compiledFiles = await compiler.compileFromDatabase(privateKey);
-    
-    if (compiledFiles.length === 0) {
+    const result = await compiler.compileFromDatabase(privateKey);
+
+    if (!result || !Array.isArray(result.compiled) || result.compiled.length === 0) {
       throw new Error('No files were compiled by GsiCompiler.');
     }
-    const targetWasmFile = compiledFiles[0];
+    const targetWasmFile = result.compiled[0].file;
     console.log(`✅ Skill successfully compiled and PQC sealed: ${targetWasmFile}`);
     console.log('------------------------------------------------------------------------');
 

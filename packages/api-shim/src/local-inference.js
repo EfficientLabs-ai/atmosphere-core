@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import fetch from 'node-fetch';
 import { queryCognitiveSkill, queryInterceptedReasoning, queryAmbientMemory } from '../../../packages/stratos-agent/src/memory/vector-bank.js';
+import { tryServe as evolutionTryServe, observe as evolutionObserve } from './self-evolution-runtime.js';
 
 /**
  * Local Inference Engine: Implements localized open-weights completions with RAG
@@ -157,6 +158,25 @@ Answer the user's actual message directly and conversationally. Only use the ref
     const userMessages = messages.filter(m => m.role === 'user');
     const lastUserMsg = userMessages.length > 0 ? userMessages[userMessages.length - 1].content : '';
 
+    // Hook E (EXECUTE — flag-gated, default OFF): if a verified, confidently-matching
+    // wasm skill exists for this transform, serve it instantly instead of the ~100 s LLM.
+    // Inert unless STRATOS_EVOLUTION + STRATOS_EVOLUTION_EXECUTE are set; never throws.
+    let text = '';
+    let servedFromSkill = false;
+    try {
+      const served = await evolutionTryServe(lastUserMsg);
+      if (served && served.text != null) {
+        text = served.text;
+        servedFromSkill = true;
+        if (this.verbose) {
+          console.log(`⚡ [Local Model] served by verified skill ${served.skillId} (dist=${served.distance?.toFixed?.(3)}) — bypassing LLM.`);
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [Local Model] skill-serve attempt skipped:', e.message);
+    }
+
+    if (!servedFromSkill) {
     // 2. Query LanceDB for RAG context, scoped to the channel/context tag when the
     //    omni-gateway provides one (prevents cross-channel context bleed).
     const ragContext = await this.retrieveRagContext(lastUserMsg, 2, isolatedContextTag || null);
@@ -164,16 +184,16 @@ Answer the user's actual message directly and conversationally. Only use the ref
     // 3. Query Active Vision Engine if visual elements are requested
     let visualContext = '';
     const isVisualQuery = lastUserMsg.toLowerCase().match(/(?:screen|display|look|see|view|visual|active window|window)/i);
-    
+
     if (isVisualQuery) {
       try {
         const { ActiveVisionEngine } = await import('../../atmos-desktop/src/sensory/active-vision.js');
         const vision = new ActiveVisionEngine({ verbose: this.verbose });
         const screenshotPath = `./.stratos-profile/screenshots/active_query_${Date.now()}.png`;
-        
+
         await vision.captureScreenFrame(screenshotPath);
         visualContext = await vision.parseActiveVisualContext(screenshotPath);
-        
+
         // Clean up screenshot file to preserve privacy
         if (fs.existsSync(screenshotPath)) {
           fs.unlinkSync(screenshotPath);
@@ -191,7 +211,6 @@ Answer the user's actual message directly and conversationally. Only use the ref
     }
 
     // 5. Generate dynamic response using the actual local Ollama open-weights engine
-    let text = '';
     try {
       const ollamaEndpoint = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
       // Local inference runs on the installed open-weights model. Any cloud/alias
@@ -230,6 +249,15 @@ Answer the user's actual message directly and conversationally. Only use the ref
       }
       text = "⚠️ Stratos Agent: Local inference engine is currently offline. Please ensure your open-weights model (Ollama/llama.cpp) is actively running on the host server.";
     }
+    } // end if (!servedFromSkill)
+
+    // Hook A (OBSERVE — flag-gated, default OFF): if this exchange encodes a typed numeric
+    // I/O example, record it so the night shift can induce + compile a skill from it. Only
+    // captures genuine successes (not the offline-fallback string, not skill-served replies).
+    if (!servedFromSkill && !text.startsWith('⚠️')) {
+      evolutionObserve(lastUserMsg, text).catch(() => {});
+    }
+
     const createdTime = Math.floor(Date.now() / 1000);
     const completionId = `chatcmpl-${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2)}`;
 

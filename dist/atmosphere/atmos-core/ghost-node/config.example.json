@@ -1,6 +1,0 @@
-{
-  "nodeLabel": "atmos-ghost",
-  "topic": "atmosphere-genesis-mesh-v1",
-  "defaultInput": 9,
-  "pinnedPubKey": "<base64 of origin public key \u2014 generate from node-keys.json>"
-}

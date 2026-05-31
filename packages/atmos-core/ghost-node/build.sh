@@ -17,7 +17,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_VER="${NODE_VER:-v22.22.3}"
 WORK="${WORK:-$HOME/atmos-dist}"
 KEYS="${STRATOS_NODE_KEYS:-$HOME/atmosphere-core/.stratos-profile/node-keys.json}"
+# Private fleet topic: ATMOS_TOPIC_FILE (a secret string) > ATMOS_TOPIC > public default.
+TOPIC_FILE="${ATMOS_TOPIC_FILE:-$(dirname "$KEYS")/mesh-topic.txt}"
 TOPIC="${ATMOS_TOPIC:-atmosphere-genesis-mesh-v1}"
+[ -f "$TOPIC_FILE" ] && TOPIC="$(tr -d '[:space:]' < "$TOPIC_FILE")"
 REPO="$(cd "$HERE/../../.." && pwd)"
 
 mkdir -p "$WORK/src"; cd "$WORK/src"

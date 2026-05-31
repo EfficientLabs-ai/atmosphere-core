@@ -1,63 +1,87 @@
 #!/usr/bin/env bash
 # Atmosphere Ghost Node — UNIX Installer (macOS / Linux)
 # ------------------------------------------------------
-# Joins the sovereign Atmosphere mesh over the public Hyperswarm DHT via NAT hole-punching:
-# NO inbound port opened, NO public internet surface. Runs a compute skill ONLY if its
-# post-quantum seal (ML-DSA-65 + Ed25519) verifies against the pinned origin key in config.json.
+# Production install: copies the node to a stable local folder (so the USB can be removed),
+# registers a private "secret command", and (unless --no-autostart) sets it to auto-start on
+# every login so the machine permanently rejoins the mesh — systemd --user on Linux, launchd
+# LaunchAgent on macOS.
 #
-# Each bundle is built for ONE OS (separate macOS and Linux downloads) — this script refuses
-# to run on the wrong one. It registers a private "secret command" to connect anytime.
+# The node joins the fleet's PRIVATE topic over the public Hyperswarm DHT via NAT hole-punch
+# (no inbound port) and runs a skill ONLY if its ML-DSA-65 + Ed25519 seal verifies against the
+# pinned origin key in config.json. Each bundle targets ONE OS — this refuses the wrong one.
 #
-# Usage (from this folder):   ./install-unix.sh            # default command name: atmos
-#                             ./install-unix.sh myhandle   # custom private command name
+# Usage (run with bash; unzip drops the execute bit):
+#   bash install-unix.sh                 # command name 'atmos', + auto-start
+#   bash install-unix.sh myname          # custom private command name
+#   bash install-unix.sh myname --no-autostart
 set -euo pipefail
 
-NAME="${1:-atmos}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-TARGET_OS="__TARGET_OS__"   # baked at build time: 'macos' or 'linux'
-NODE_BIN="$HERE/node"
-ENTRY="$HERE/atmos-ghost.mjs"
+NAME="atmos"; AUTOSTART=1
+for a in "$@"; do case "$a" in --no-autostart) AUTOSTART=0;; --*) ;; *) NAME="$a";; esac; done
 
-uname_s="$(uname -s)"
-case "$uname_s" in
-  Darwin) host_os="macos" ;;
-  Linux)  host_os="linux" ;;
-  *)      host_os="other" ;;
-esac
-if [ "$host_os" != "$TARGET_OS" ]; then
-  echo "✗  This is the ${TARGET_OS} installer but you're on '${uname_s}'."
-  echo "   Use the matching download (separate Windows / macOS / Linux installers exist)."
-  exit 1
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+TARGET_OS="__TARGET_OS__"
+case "$(uname -s)" in Darwin) host=macos;; Linux) host=linux;; *) host=other;; esac
+if [ "$host" != "$TARGET_OS" ]; then
+  echo "✗  This is the ${TARGET_OS} installer but you're on '$(uname -s)'. Use the matching download."; exit 1
 fi
-[ -f "$NODE_BIN" ] || { echo "✗  bundled node runtime missing — re-extract the full archive."; exit 1; }
+
+INSTALL_DIR="$HOME/.atmosphere-ghost"
+NODE_BIN="$INSTALL_DIR/node"; ENTRY="$INSTALL_DIR/atmos-ghost.mjs"
+echo "👻 Atmosphere Ghost Node — ${TARGET_OS} (production install)"
+[ -f "$SRC/node" ] || { echo "✗  bundled node runtime missing — re-extract the archive."; exit 1; }
+
+# 1. Copy to a stable local dir (USB removable afterwards).
+mkdir -p "$INSTALL_DIR"
+( cd "$SRC" && tar --exclude=install-unix.sh --exclude=install-windows.ps1 -cf - . ) | ( cd "$INSTALL_DIR" && tar -xf - )
 chmod +x "$NODE_BIN" 2>/dev/null || true
+echo "   installed to : $INSTALL_DIR"
 
-echo "👻 Atmosphere Ghost Node — ${TARGET_OS}"
-echo "   install dir : $HERE"
-echo "   runtime     : bundled node (no system Node required)"
-
-# Pick the login shell rc file.
-if [ "$TARGET_OS" = "macos" ]; then RC="$HOME/.zshrc"; else RC="$HOME/.bashrc"; fi
+# 2. Register the private secret command.
+if [ "$TARGET_OS" = macos ]; then RC="$HOME/.zshrc"; else RC="$HOME/.bashrc"; fi
 touch "$RC"
+M="# >>> atmosphere-ghost (${NAME}) >>>"; E="# <<< atmosphere-ghost (${NAME}) <<<"
+if grep -qF "$M" "$RC"; then t="$(mktemp)"; awk -v m="$M" -v e="$E" '$0==m{s=1} !s{print} $0==e{s=0}' "$RC" > "$t" && mv "$t" "$RC"; fi
+printf '%s\n%s() { "%s" "%s" "$@"; }\n%s\n' "$M" "$NAME" "$NODE_BIN" "$ENTRY" "$E" >> "$RC"
+echo "   secret command: $NAME"
 
-MARKER="# >>> atmosphere-ghost (${NAME}) >>>"
-ENDMARK="# <<< atmosphere-ghost (${NAME}) <<<"
-# Remove any prior block for this name, then append a fresh one.
-if grep -qF "$MARKER" "$RC"; then
-  tmp="$(mktemp)"; awk -v m="$MARKER" -v e="$ENDMARK" '
-    $0==m{skip=1} !skip{print} $0==e{skip=0}' "$RC" > "$tmp" && mv "$tmp" "$RC"
-fi
-{
-  echo "$MARKER"
-  echo "${NAME}() { \"$NODE_BIN\" \"$ENTRY\" \"\$@\"; }"
-  echo "$ENDMARK"
-} >> "$RC"
+# 3. Auto-start on login (daemon mode — stays connected).
+if [ "$AUTOSTART" = 1 ]; then
+  if [ "$TARGET_OS" = linux ]; then
+    UD="$HOME/.config/systemd/user"; mkdir -p "$UD"
+    cat > "$UD/atmosphere-ghost.service" <<EOF
+[Unit]
+Description=Atmosphere Ghost Node
+After=network-online.target
+[Service]
+ExecStart=$NODE_BIN $ENTRY
+Restart=always
+RestartSec=15
+[Install]
+WantedBy=default.target
+EOF
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl --user daemon-reload 2>/dev/null || true
+      systemctl --user enable --now atmosphere-ghost.service 2>/dev/null \
+        && echo "   auto-start    : enabled (systemd --user; 'loginctl enable-linger \$USER' to run while logged out)" \
+        || echo "   auto-start    : unit written; enable with 'systemctl --user enable --now atmosphere-ghost'"
+    else echo "   auto-start    : unit written (systemd not available in this shell)"; fi
+  else
+    PL="$HOME/Library/LaunchAgents/com.atmosphere.ghost.plist"; mkdir -p "$(dirname "$PL")"
+    cat > "$PL" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.atmosphere.ghost</string>
+  <key>ProgramArguments</key><array><string>$NODE_BIN</string><string>$ENTRY</string></array>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+</dict></plist>
+EOF
+    launchctl unload "$PL" 2>/dev/null || true
+    launchctl load "$PL" 2>/dev/null && echo "   auto-start    : enabled (launchd LaunchAgent)" || echo "   auto-start    : plist written ($PL)"
+  fi
+else echo "   auto-start    : skipped (--no-autostart)"; fi
 
 echo ""
-echo "✅ Installed. Your private command is:  ${NAME}"
-echo "   Open a NEW terminal (or: source $RC), then run:"
-echo "       ${NAME}            # join the mesh and stand by for verified skills"
-echo "       ${NAME} --once     # run one verified skill and exit (proof mode)"
-echo ""
-echo "   (Running once right now to verify:)"
-"$NODE_BIN" "$ENTRY" --once || true
+echo "✅ Done. This machine is a permanent Atmosphere mesh node."
+echo "   Verify once now (new terminal):  $NAME --once"

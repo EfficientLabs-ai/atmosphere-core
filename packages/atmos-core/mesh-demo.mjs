@@ -40,7 +40,13 @@ const args = {};
 for (let i = 0; i < rest.length; i++) {
   if (rest[i].startsWith('--')) { args[rest[i].slice(2)] = rest[i + 1]?.startsWith('--') || rest[i + 1] === undefined ? true : rest[++i]; }
 }
-const TOPIC_NAME = args.topic || DEFAULT_TOPIC;
+// Topic precedence: --topic-file (a secret rendezvous string kept off the command line) >
+// --topic > the public default. A private high-entropy topic means strangers can't even
+// rendezvous with the fleet — defense-in-depth on top of PQC pinning.
+let TOPIC_NAME = args.topic || DEFAULT_TOPIC;
+if (args['topic-file'] && args['topic-file'] !== true) {
+  try { TOPIC_NAME = fs.readFileSync(args['topic-file'], 'utf8').trim(); } catch { /* fall back */ }
+}
 const topicKey = crypto.createHash('sha256').update(TOPIC_NAME).digest(); // 32-byte DHT namespace
 
 // ---- key bundle (de)serialization (base64 per field) -------------------------------
@@ -155,6 +161,12 @@ async function runBroadcast() {
     }
     console.log(`  TOTAL: ${nodes.length} nodes · ${cores} cores · ${ram} GB RAM · ~${Math.round(mops)} aggregate Mops/s (self-reported, cores×single-thread)`);
     console.log('===============================================================\n');
+    if (args['fleet-out'] && args['fleet-out'] !== true) {
+      try {
+        const snap = { updatedAtMs: Number(process.hrtime.bigint() / 1000000n), totals: { nodes: nodes.length, cores, ramGB: ram, aggMops: Math.round(mops) }, nodes, note: 'self-reported capacity; not a proof-of-capacity' };
+        fs.writeFileSync(args['fleet-out'], JSON.stringify(snap, null, 2));
+      } catch (e) { console.warn('[fleet-out] write failed:', e.message); }
+    }
   }
   swarm.on('connection', (socket, info) => {
     const peerKey = b4a.toString(info.publicKey, 'hex');

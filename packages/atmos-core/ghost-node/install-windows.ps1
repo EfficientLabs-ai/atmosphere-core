@@ -1,58 +1,60 @@
 <#
   Atmosphere Ghost Node — WINDOWS Installer (PowerShell)
   ------------------------------------------------------
-  Joins the sovereign Atmosphere mesh over the public Hyperswarm DHT via NAT hole-punching:
-  NO inbound port is opened, NO public internet surface is exposed. The node runs a compute
-  skill ONLY if its post-quantum seal (ML-DSA-65 + Ed25519) verifies against the pinned
-  origin key baked into config.json.
+  Production install: copies the node to a stable local folder (so you can remove the USB),
+  registers a private "secret command", and OPTIONALLY auto-starts it on every logon so the
+  machine permanently rejoins the Atmosphere mesh.
 
-  This installer is Windows-only by design (separate macOS / Linux installers exist). It
-  registers a private "secret command" you can run anytime to connect.
+  The node joins the fleet's PRIVATE topic over the public Hyperswarm DHT via NAT hole-punch
+  (no inbound port) and runs a skill ONLY if its ML-DSA-65 + Ed25519 seal verifies against the
+  pinned origin key in config.json. Windows-only by design (separate macOS / Linux installers).
 
-  Usage (from this folder):
-     powershell -ExecutionPolicy Bypass -File .\install-windows.ps1            # default command name: atmos
-     powershell -ExecutionPolicy Bypass -File .\install-windows.ps1 -Name myhandle
+  Usage (from the unzipped folder, e.g. on a USB):
+     powershell -ExecutionPolicy Bypass -File .\install-windows.ps1                 # name 'atmos', + auto-start
+     powershell -ExecutionPolicy Bypass -File .\install-windows.ps1 -Name myname -NoAutoStart
 #>
-param([string]$Name = "atmos")
+param([string]$Name = "atmos", [switch]$NoAutoStart)
 
 $ErrorActionPreference = "Stop"
 if (-not $IsWindows -and $env:OS -notmatch "Windows") {
-  Write-Host "X  This is the WINDOWS installer. Use install-macos.sh / install-linux.sh on other systems." -ForegroundColor Red
-  exit 1
+  Write-Host "X  This is the WINDOWS installer. Use install-unix.sh on macOS / Linux." -ForegroundColor Red; exit 1
 }
 
-$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$NodeExe = Join-Path $Here "node.exe"
-$Entry   = Join-Path $Here "atmos-ghost.mjs"
-if (-not (Test-Path $NodeExe)) { Write-Host "X  node.exe missing from bundle — re-extract the full zip." -ForegroundColor Red; exit 1 }
+$Src     = Split-Path -Parent $MyInvocation.MyCommand.Path
+$InstallDir = Join-Path $env:LOCALAPPDATA "AtmosphereGhost"
+$NodeExe = Join-Path $InstallDir "node.exe"
+$Entry   = Join-Path $InstallDir "atmos-ghost.mjs"
 
-Write-Host "👻 Atmosphere Ghost Node — Windows" -ForegroundColor Cyan
-Write-Host "   install dir : $Here"
-Write-Host "   runtime     : bundled node.exe (no system Node required)"
+Write-Host "👻 Atmosphere Ghost Node — Windows (production install)" -ForegroundColor Cyan
+if (-not (Test-Path (Join-Path $Src "node.exe"))) { Write-Host "X  node.exe missing — re-extract the full zip." -ForegroundColor Red; exit 1 }
 
-# Register the private 'secret command' as a function in the PowerShell profile.
-$invocation = "& `"$NodeExe`" `"$Entry`" @args"
+# 1. Copy the node to a stable local dir so the USB can be removed.
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+Copy-Item -Path (Join-Path $Src "*") -Destination $InstallDir -Recurse -Force -Exclude @("install-windows.ps1","install-unix.sh")
+Write-Host "   installed to : $InstallDir"
+
+# 2. Register the private 'secret command' in the PowerShell profile.
 $marker = "# >>> atmosphere-ghost ($Name) >>>"
-$block  = @"
-$marker
-function $Name { $invocation }
-# <<< atmosphere-ghost ($Name) <<<
-"@
-
+$block  = "$marker`nfunction $Name { & `"$NodeExe`" `"$Entry`" @args }`n# <<< atmosphere-ghost ($Name) <<<"
 if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
-$current = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
-if ($current -match [regex]::Escape($marker)) {
-  $current = [regex]::Replace($current, "(?s)$([regex]::Escape($marker)).*?# <<< atmosphere-ghost \($Name\) <<<", $block.TrimEnd())
-  Set-Content -Path $PROFILE -Value $current
-} else {
-  Add-Content -Path $PROFILE -Value "`n$block"
-}
+$cur = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
+if ($cur -match [regex]::Escape($marker)) {
+  Set-Content -Path $PROFILE -Value ([regex]::Replace($cur, "(?s)$([regex]::Escape($marker)).*?# <<< atmosphere-ghost \($Name\) <<<", $block))
+} else { Add-Content -Path $PROFILE -Value "`n$block" }
+Write-Host "   secret command: $Name" -ForegroundColor Green
 
-Write-Host ""
-Write-Host "✅ Installed. Your private command is:  $Name" -ForegroundColor Green
-Write-Host "   Open a NEW PowerShell window, then run:" -ForegroundColor Green
-Write-Host "       $Name              # join the mesh and stand by for verified skills"
-Write-Host "       $Name --once       # run one verified skill and exit (proof mode)"
-Write-Host ""
-Write-Host "   (Running right now from this window:)" -ForegroundColor DarkGray
-& $NodeExe $Entry --once
+# 3. Auto-start on every logon (daemon mode — stays connected), via a hidden Scheduled Task.
+if (-not $NoAutoStart) {
+  $taskName = "AtmosphereGhost"
+  $action  = New-ScheduledTaskAction -Execute $NodeExe -Argument "`"$Entry`"" -WorkingDirectory $InstallDir
+  $trigger = New-ScheduledTaskTrigger -AtLogOn
+  $set     = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -Hidden
+  try {
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $set -Force -RunLevel Limited | Out-Null
+    Start-ScheduledTask -TaskName $taskName
+    Write-Host "   auto-start    : enabled (Scheduled Task '$taskName', running now + every logon)" -ForegroundColor Green
+  } catch { Write-Host "   auto-start    : could not register task ($($_.Exception.Message)) — secret command still works." -ForegroundColor Yellow }
+} else { Write-Host "   auto-start    : skipped (-NoAutoStart)" -ForegroundColor DarkGray }
+
+Write-Host "`n✅ Done. This machine is a permanent Atmosphere mesh node." -ForegroundColor Green
+Write-Host "   Verify once now:  $Name --once"

@@ -48,7 +48,8 @@ const PRODUCTS = {
     },
     optionalDeps: {},
     banned: ['hyperswarm', 'corestore', 'autobase', 'hypercore', 'sodium-universal', 'playwright-core', 'playwright', 'atmos-core', 'wabt', 'node-cron'],
-    vendor: [],
+    vendor: [{ from: 'scripts/install.sh', to: 'install.sh' }], // curl-able installer at the repo root
+    extraFiles: ['install.sh'],
     // PROPRIETARY MOAT — kept private, NOT shipped in the public client (A+B split). The learning /
     // federated-skill-evolution engine + data flywheel + the full-SDK barrel. The api-shim seam loads
     // the engine lazily, so the client runs fine without it.
@@ -150,7 +151,7 @@ function generatePackageJson(p, version) {
   return {
     name: p.name, version, description: p.description, type: 'module',
     bin: p.bin, exports: p.exports,
-    files: [...new Set(p.sources.map((s) => s + '/')), 'README.md', 'LICENSE', 'provenance.json'],
+    files: [...new Set(p.sources.map((s) => s + '/')), ...(p.extraFiles || []), 'README.md', 'LICENSE', 'provenance.json'],
     engines: { node: '>=18' },
     dependencies: { ...p.deps },
     optionalDependencies: { ...p.optionalDeps },

@@ -183,6 +183,8 @@ export function assembleProduct({ product = 'stratos', outDir = null, version = 
 
   fs.writeFileSync(path.join(outDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
   fs.writeFileSync(path.join(outDir, 'README.md'), generateReadme(p, version));
+  // Guard the product repo: a stray `npm pack` .tgz / node_modules must never be committed.
+  fs.writeFileSync(path.join(outDir, '.gitignore'), '*.tgz\nnode_modules/\n.stratos-profile/\ndist/\n');
   const lic = path.join(ROOT, 'LICENSE');
   fs.writeFileSync(path.join(outDir, 'LICENSE'), fs.existsSync(lic) ? fs.readFileSync(lic) : 'Copyright (c) Efficient Labs. All rights reserved.\n');
 

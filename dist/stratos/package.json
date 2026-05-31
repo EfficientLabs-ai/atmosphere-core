@@ -1,0 +1,41 @@
+{
+  "name": "@efficientlabs/stratos",
+  "version": "1.0.0",
+  "description": "StratosAgent — your sovereign, local-first AI agent. Runs on your hardware (local or BYOK); The Atmosphere mesh is an optional add-on.",
+  "type": "module",
+  "bin": {
+    "stratos": "stratos-agent/bin/stratos.js"
+  },
+  "exports": {
+    ".": "./api-shim/index.js",
+    "./cli": "./stratos-agent/src/cli/stratos-cli.js"
+  },
+  "files": [
+    "api-shim/",
+    "stratos-agent/",
+    "README.md",
+    "LICENSE",
+    "provenance.json"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2",
+    "node-fetch": "^3.3.2",
+    "node-telegram-bot-api": "^0.66.0",
+    "@lancedb/lancedb": "^0.29.0",
+    "@noble/post-quantum": "^0.6.1",
+    "apache-arrow": "^18.1.0",
+    "wabt": "^1.0.39"
+  },
+  "optionalDependencies": {
+    "node-cron": "^4.2.1"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "publishConfig": {
+    "access": "public"
+  }
+}

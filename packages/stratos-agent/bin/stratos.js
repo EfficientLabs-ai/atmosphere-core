@@ -5,10 +5,11 @@
  * (interactive `init`, foreground daemon `start`) here. See src/cli/stratos-cli.js.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 import readline from 'node:readline';
-import { run, applyInit } from '../src/cli/stratos-cli.js';
+import { run, applyInit, generateSystemdUnit } from '../src/cli/stratos-cli.js';
 import * as config from '../src/core/agent-config.js';
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
@@ -46,7 +47,31 @@ async function startDaemon() {
   await import('../../api-shim/index.js'); // monorepo path; the publish pipeline rewrites this for the package
 }
 
+function installService() {
+  const binPath = path.join(HERE, 'stratos.js');
+  const port = process.env.PORT || '4099';
+  if (process.platform === 'linux') {
+    const unit = generateSystemdUnit({ execPath: process.execPath, binPath, port });
+    const dir = path.join(os.homedir(), '.config', 'systemd', 'user');
+    fs.mkdirSync(dir, { recursive: true });
+    const unitPath = path.join(dir, 'stratos.service');
+    fs.writeFileSync(unitPath, unit);
+    console.log(`✅ Wrote ${unitPath} (no root used).`);
+    console.log('   Enable + start it yourself:');
+    console.log('     systemctl --user daemon-reload');
+    console.log('     systemctl --user enable --now stratos');
+    console.log('   (Optional: `loginctl enable-linger $USER` to keep it running while logged out.)');
+  } else if (process.platform === 'darwin') {
+    console.log('macOS: create a LaunchAgent at ~/Library/LaunchAgents/com.efficientlabs.stratos.plist');
+    console.log('  with ProgramArguments = [node, ' + binPath + ', start], then: launchctl load <plist>.');
+    console.log('  (Guidance only — we never load or start it for you.)');
+  } else {
+    console.log(`On ${process.platform}, run \`stratos start\` under your process manager of choice (no service template shipped).`);
+  }
+}
+
 const res = await run(process.argv.slice(2), { config, version: pkgVersion() });
 if (res.action === 'init') { await initWizard(); process.exit(0); }
 else if (res.action === 'start') { await startDaemon(); /* daemon holds the event loop open */ }
+else if (res.action === 'service-install') { installService(); process.exit(0); }
 else { for (const l of res.lines) console.log(l); process.exit(res.code); }

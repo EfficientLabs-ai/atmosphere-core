@@ -11,7 +11,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stratos-cli-'));
 process.chdir(tmp);
 
 const config = await import('./src/core/agent-config.js');
-const { run, applyInit, COMMANDS } = await import('./src/cli/stratos-cli.js');
+const { run, applyInit, COMMANDS, generateSystemdUnit } = await import('./src/cli/stratos-cli.js');
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
 const text = (r) => r.lines.join('\n');
@@ -73,5 +73,14 @@ ok(config.getAgentName() === 'Nova' && config.getConfig().model.name === 'gemma2
 const cfg = config.getConfig();
 ok(cfg.meshOptIn === false, 'base init leaves mesh opt-in OFF (no mesh enrollment)');
 ok(!/wallet|solana/i.test(JSON.stringify(cfg)), 'no wallet/solana field written by base init');
+
+console.log('\n=== service: explicit, no-root, separate from install ===');
+r = await run(['service'], { config });
+ok(r.code === 0 && /no root/i.test(text(r)) && /service install/.test(text(r)), 'service (no sub) → guidance, never auto-enables');
+r = await run(['service', 'install'], { config });
+ok(r.action === 'service-install', 'service install → action delegated to bin (writes a user unit)');
+const unit = generateSystemdUnit({ execPath: '/usr/bin/node', binPath: '/x/stratos.js', port: 4099 });
+ok(/systemd/i.test('[Unit]') === false && unit.includes('[Service]') && unit.includes('ExecStart=/usr/bin/node /x/stratos.js start'), 'systemd unit: ExecStart wired to the bin');
+ok(unit.includes('WantedBy=default.target') && unit.includes('Environment=PORT=4099') && !/root|sudo/i.test(unit), 'systemd unit: user target (default.target), PORT env, no root');
 
 console.log(`\n✅ ALL ${pass} stratos-cli checks passed.`);

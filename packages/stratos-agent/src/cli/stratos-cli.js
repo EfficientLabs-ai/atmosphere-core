@@ -128,6 +128,27 @@ function cmdBind(argv, deps) {
   return { code: 0, lines: [`${C.g}✓ Owner bound to ${bound}.${C.x} Only this id (in a DM) can reconfigure the agent from chat.`] };
 }
 
+/** Pure systemd --user unit generator (no root). Tested directly. */
+export function generateSystemdUnit({ execPath = process.execPath, binPath = 'stratos', port = 4099 } = {}) {
+  return [
+    '[Unit]',
+    'Description=StratosAgent (local sovereign AI agent)',
+    'After=network.target',
+    '',
+    '[Service]',
+    'Type=simple',
+    `Environment=PORT=${port}`,
+    'Environment=LOCAL_FALLBACK_ENABLED=true',
+    `ExecStart=${execPath} ${binPath} start`,
+    'Restart=on-failure',
+    'RestartSec=5',
+    '',
+    '[Install]',
+    'WantedBy=default.target',
+    '',
+  ].join('\n');
+}
+
 /** Pure config application for `init` — tested directly. Local-only; no wallet/mesh. */
 export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   if (agentName && agentName.trim()) config.setAgentName(agentName.trim());
@@ -136,7 +157,20 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'service', 'version', 'help'];
+
+function cmdService(rest) {
+  if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
+  return {
+    code: 0,
+    lines: [
+      `${C.b}stratos service${C.x} — optional background service (no root)`,
+      `  ${C.g}stratos service install${C.x}   write a user service unit + print the enable command`,
+      `  ${C.d}Linux: a systemd --user unit at ~/.config/systemd/user/stratos.service${C.x}`,
+      `  ${C.d}macOS/other: guidance printed; we never enable or start it for you.${C.x}`,
+    ],
+  };
+}
 
 export async function run(argv = [], deps = {}) {
   const d = {
@@ -154,6 +188,7 @@ export async function run(argv = [], deps = {}) {
     case 'doctor': return cmdDoctor(d);
     case 'models': return cmdModels(d);
     case 'bind': return cmdBind(rest, d);
+    case 'service': return cmdService(rest);
     case 'init': return { code: 0, lines: [], action: 'init' };   // interactive — handled by bin
     case 'start': return { code: 0, lines: [], action: 'start' }; // daemon — handled by bin
     default: return { code: 1, lines: [`${C.r}Unknown command: ${cmd}${C.x}`, '', ...helpText()] };

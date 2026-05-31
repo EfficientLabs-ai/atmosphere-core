@@ -54,3 +54,6 @@ packages/stratos-agent/pipelines/*/runs/
 # product assembler outputs (build artifacts)
 dist/stratos/
 dist/atmosphere/
+
+# per-package build outputs (compiled skills, etc.)
+packages/*/dist/

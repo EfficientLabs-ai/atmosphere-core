@@ -28,10 +28,10 @@ console.log('\n=== Phase 1: INERT when flags are OFF ===');
 {
   const rt = await import(RT + '?off');
   ok(rt.isEnabled() === false, 'isEnabled() === false with no flags');
-  ok(rt.getEngine() === null, 'getEngine() === null (no engine built)');
+  ok((await rt.getEngine()) === null, 'getEngine() === null (no engine built)');
   ok((await rt.tryServe('double 4')) === null, 'tryServe() inert → null');
   ok((await rt.observe('double 4', '8')) === null, 'observe() inert → null');
-  ok(rt.startLearnScheduler() === false, 'startLearnScheduler() inert → false');
+  ok((await rt.startLearnScheduler()) === false, 'startLearnScheduler() inert → false');
 }
 
 console.log('\n=== Phase 2: LIVE seam — OBSERVE accumulates, LEARN induces, EXECUTE serves ===');
@@ -46,7 +46,7 @@ process.env.STRATOS_EVOLUTION_EXECUTE = '1';
 
   const rt = await import(RT + '?on');
   ok(rt.isEnabled() === true, 'isEnabled() === true with flags set');
-  const eng = rt.getEngine();
+  const eng = await rt.getEngine();
   ok(eng && typeof eng.runNightShift === 'function', 'engine constructed');
 
   // OBSERVE: feed several "triple <N>" exchanges. The prompt carries the operand; the answer

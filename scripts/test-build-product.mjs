@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
-import { assembleProduct, scanTree, BANNED_DEPS } from './build-product.mjs';
+import { assembleProduct, scanTree, BANNED_DEPS, checkDanglingImports } from './build-product.mjs';
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
 const exists = (p) => fs.existsSync(p);
@@ -87,5 +87,27 @@ const allText = fs.readdirSync(aout, { recursive: true }).filter((f) => /\.(js|m
   .map((f) => { try { return fs.readFileSync(path.join(aout, String(f)), 'utf8'); } catch { return ''; } }).join('\n');
 ok(!/maximus/i.test(allText), 'no "Maximus" codename anywhere in the atmosphere package');
 
+console.log('  -- atmosphere: economic moat private + BSL --');
+ok(!exists(path.join(aout, 'atmos-core/src/billing')), 'billing/ (economic engine) EXCLUDED — stays private');
+ok(!exists(path.join(aout, 'atmos-core/mesh-demo.mjs')), 'mesh-demo.mjs (leaks moat) excluded');
+ok(!fs.readFileSync(path.join(aout, 'atmos-core/index.js'), 'utf8').includes('PaymentEngine'), 'barrel patched: no PaymentEngine re-export');
+ok(/Business Source License 1\.1/.test(fs.readFileSync(path.join(aout, 'LICENSE'), 'utf8')) && apkg.license === 'BUSL-1.1', 'atmosphere: BSL 1.1 license + manifest');
 fs.rmSync(aout, { recursive: true, force: true });
+
+console.log('\n=== A+B SPLIT: stratos ships the client, the learning MOAT stays private ===');
+const sout = fs.mkdtempSync(path.join(os.tmpdir(), 'stratos-moat-'));
+const sr = assembleProduct({ product: 'stratos', outDir: sout, version: '9.9.9' });
+ok(sr.violations === 0, `stratos assembled ${sr.fileCount} files, 0 violations (incl. dangling-import gate)`);
+for (const moat of ['stratos-agent/src/evolution', 'stratos-agent/gsi-compiler.js', 'stratos-agent/gsi-scheduler.js', 'stratos-agent/reasoning-bank.js', 'stratos-agent/src/ingestion/genesis-harvester.js', 'stratos-agent/index.js']) {
+  ok(!exists(path.join(sout, moat)), `MOAT excluded: ${moat}`);
+}
+ok(exists(path.join(sout, 'stratos-agent/bin/stratos.js')) && exists(path.join(sout, 'api-shim/src/self-evolution-runtime.js')), 'client surface KEPT (CLI + the lazy engine seam)');
+const spkg = JSON.parse(fs.readFileSync(path.join(sout, 'package.json'), 'utf8'));
+ok(spkg.license === 'BUSL-1.1' && /Business Source License/.test(fs.readFileSync(path.join(sout, 'LICENSE'), 'utf8')), 'stratos: BSL 1.1 license + manifest');
+ok(!spkg.dependencies.wabt && !spkg.optionalDependencies?.['node-cron'], 'moat-only deps (wabt/node-cron) pruned from the client');
+
+console.log('  -- dangling-import gate works (clean tree → none) --');
+ok(checkDanglingImports(sout).length === 0, 'no dangling static imports in the assembled client');
+fs.rmSync(sout, { recursive: true, force: true });
+
 console.log(`\n✅ ALL ${pass} build-product checks passed.`);

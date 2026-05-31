@@ -5,6 +5,7 @@ import fetch from 'node-fetch';
 import { queryCognitiveSkill, queryInterceptedReasoning, queryAmbientMemory } from '../../../packages/stratos-agent/src/memory/vector-bank.js';
 import { tryServe as evolutionTryServe, observe as evolutionObserve } from './self-evolution-runtime.js';
 import { buildIdentityPrompt } from '../../../packages/stratos-agent/src/core/identity.js';
+import { planWindow, MODEL_NUM_CTX } from './memory-manager.js';
 
 /**
  * Local Inference Engine: Implements localized open-weights completions with RAG
@@ -132,16 +133,12 @@ ${ragContextString}` : ''}
 Answer the user's actual message directly and conversationally. Only use the reference material above if it is genuinely relevant to what they asked; otherwise ignore it completely and just respond normally.
 `;
 
-    // Reconstruct messages array by injecting our RAG system prompt at the top
-    const compiledMessages = [
-      { role: 'system', content: systemPrompt }
-    ];
-
-    // Filter out existing system prompts if any, and append the user messages
-    for (const msg of messages) {
-      if (msg.role !== 'system') {
-        compiledMessages.push(msg);
-      }
+    // Tier 0 memory: plan the context window — keep whole recent exchange blocks within a derated
+    // token budget, ALWAYS preserving the latest user message (inbound system msgs stripped inside).
+    // This bounds long histories instead of dumping them all into a 2048-token default window.
+    const { compiledMessages, stats } = planWindow({ systemPrompt, messages: messages || [] });
+    if (this.verbose && stats.blocksEvicted > 0) {
+      console.log(`🧠 [Memory] kept ${stats.blocksKept}/${stats.blocksTotal} exchange blocks (~${stats.historyTokens} hist tokens, num_ctx=${stats.numCtx}); ${stats.blocksEvicted} older block(s) dropped.`);
     }
 
     return compiledMessages;
@@ -233,7 +230,8 @@ Answer the user's actual message directly and conversationally. Only use the ref
         body: JSON.stringify({
           model: targetModel,
           messages: augmentedMessages,
-          stream: false
+          stream: false,
+          options: { num_ctx: MODEL_NUM_CTX } // use the real window, not Ollama's 2048 default
         })
       });
 

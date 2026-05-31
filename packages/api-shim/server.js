@@ -7,6 +7,8 @@ import { handleOpenAIFallback, handleAnthropicFallback } from './local-fallback.
 import path from 'path';
 import { LocalInferenceEngine } from './src/local-inference.js';
 import { TaskClassifierRouter } from './src/task-router.js';
+import { resolveRoute, selectLocalModel } from './src/model-manager.js';
+import { passthroughCloud } from './src/routers/cloud-byok.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 
@@ -198,6 +200,23 @@ async function harvestTelemetry(prompt, responseText) {
 app.post('/v1/chat/completions', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
+  // ── Universal Model Manager (clean path): resolve on the RAW body BEFORE any local mutation.
+  const route = resolveRoute(req.body.model);
+  if (route.kind === 'byok') {
+    const ip = req.socket?.remoteAddress || '';
+    if (!(ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1')) {
+      return res.status(403).json({ error: { message: 'BYOK routes are localhost-only', type: 'forbidden' } });
+    }
+    console.log(`[API-SHIM] 🔑 BYOK → ${route.provider} (${route.model}); user key, RAW body forwarded (no local context leaked).`);
+    return passthroughCloud(req, res, route, req.body); // raw, un-mutated body
+  }
+  if (route.kind === 'error' && !route.allowAuto) {
+    return res.status(route.status).json({ error: { message: route.reason, type: 'provider_not_configured' } });
+  }
+  if (route.kind === 'error' && route.allowAuto) {
+    console.log(`[API-SHIM] ↩ ${route.reason} — BYOK_AUTO_LOCAL on, falling back to local.`);
+  }
+
   const isLocalRequest = req.body.model && (
     req.body.model.includes('local') || 
     req.body.model.includes('quantized') || 
@@ -226,7 +245,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
       return originalJson(data);
     };
-    req.body.model = classification.targetModel;
+    // Hardware-aware local model (install-gated; reports the ACTUAL concrete model, not an alias).
+    try {
+      const picked = await selectLocalModel({ requested: route.requestedModel || req.body.model });
+      req.body.model = picked.model;
+      console.log(`[API-SHIM] 🧩 local model: ${picked.model} (capacity ${picked.capacityGB}GB ${picked.capacityKind}, ${picked.installed} installed)`);
+    } catch { req.body.model = classification.targetModel; }
     return localInference.executeChatCompletion(req, res);
   }
 

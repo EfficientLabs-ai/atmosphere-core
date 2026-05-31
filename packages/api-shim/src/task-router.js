@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { queryCognitiveSkill, queryAmbientMemory } from '../../../packages/stratos-agent/src/memory/vector-bank.js';
+import { queryCognitiveSkill, queryAmbientMemory } from '../../stratos-agent/src/memory/vector-bank.js';
 
 /**
  * TaskClassifierRouter: Advanced context-aware intelligence classifier

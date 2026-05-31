@@ -29,10 +29,18 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  SelfEvolutionEngine,
-  loadOrCreateNodeKeys
-} from '../../stratos-agent/src/evolution/self-evolution.js';
+
+// The self-evolution / federated skill-learning engine is PROPRIETARY (kept private; not shipped in
+// the public client build). It is imported LAZILY here so (a) it stays out of the public package's
+// static load graph and (b) the public client runs fine without it — evolution is simply unavailable
+// unless the private engine module is present AND the STRATOS_EVOLUTION flag is on.
+let _mod;
+async function loadEngineModule() {
+  if (_mod !== undefined) return _mod;
+  try { _mod = await import('../../stratos-agent/src/evolution/self-evolution.js'); }
+  catch { _mod = null; } // absent in the public/client build — proprietary feature, intentionally
+  return _mod;
+}
 
 const ON = (v) => v === '1' || /^(true|yes|on)$/i.test(String(v || ''));
 
@@ -48,13 +56,16 @@ const DIST_SKILLS_DIR = process.env.STRATOS_SKILLS_DIR || path.join(ROOT, 'packa
 
 let _engine = null;
 
-/** Lazily build (and cache) the engine. Returns null when evolution is disabled. */
-export function getEngine() {
+/** Lazily build (and cache) the engine. Returns null when evolution is disabled OR the proprietary
+ *  engine module is not present in this build. Async because the engine is dynamically imported. */
+export async function getEngine() {
   if (!EVOLUTION_ENABLED) return null;
   if (_engine) return _engine;
+  const mod = await loadEngineModule();
+  if (!mod) { console.warn('ℹ️ [SelfEvolution] engine module not present in this build — evolution unavailable.'); return null; }
   try {
-    const keyBundle = loadOrCreateNodeKeys(NODE_KEYS_FILE);
-    _engine = new SelfEvolutionEngine({
+    const keyBundle = mod.loadOrCreateNodeKeys(NODE_KEYS_FILE);
+    _engine = new mod.SelfEvolutionEngine({
       keyBundle,
       distSkillsDir: DIST_SKILLS_DIR,
       executeEnabled: EXECUTE_ENABLED,
@@ -72,8 +83,8 @@ export function getEngine() {
 export function isEnabled() { return EVOLUTION_ENABLED; }
 
 /** Hook B (LEARN): start the nightly compile scheduler on daemon boot, if enabled. */
-export function startLearnScheduler() {
-  const eng = getEngine();
+export async function startLearnScheduler() {
+  const eng = await getEngine();
   if (!eng) return false;
   try {
     eng.startScheduler(process.env.STRATOS_NIGHTSHIFT_CRON || undefined);
@@ -115,7 +126,7 @@ function parseIntegerAnswer(text) {
  * Never throws.
  */
 export async function tryServe(prompt) {
-  const eng = getEngine();
+  const eng = await getEngine();
   if (!eng || !EXECUTE_ENABLED) return null;
   try {
     const input = extractNumericInput(prompt);
@@ -136,7 +147,7 @@ export async function tryServe(prompt) {
  * free-form prose (nothing typed to learn). Never throws.
  */
 export async function observe(prompt, answerText) {
-  const eng = getEngine();
+  const eng = await getEngine();
   if (!eng || !OBSERVE_ENABLED) return null;
   try {
     const input = extractNumericInput(prompt);

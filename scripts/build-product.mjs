@@ -44,11 +44,16 @@ const PRODUCTS = {
     deps: {
       express: '^4.19.2', cors: '^2.8.5', 'body-parser': '^1.20.2', 'node-fetch': '^3.3.2',
       'node-telegram-bot-api': '^0.66.0', '@lancedb/lancedb': '^0.29.0', '@noble/post-quantum': '^0.6.1',
-      'apache-arrow': '^18.1.0', wabt: '^1.0.39',
+      'apache-arrow': '^18.1.0',
     },
-    optionalDeps: { 'node-cron': '^4.2.1' },
-    banned: ['hyperswarm', 'corestore', 'autobase', 'hypercore', 'sodium-universal', 'playwright-core', 'playwright', 'atmos-core'],
+    optionalDeps: {},
+    banned: ['hyperswarm', 'corestore', 'autobase', 'hypercore', 'sodium-universal', 'playwright-core', 'playwright', 'atmos-core', 'wabt', 'node-cron'],
     vendor: [],
+    // PROPRIETARY MOAT — kept private, NOT shipped in the public client (A+B split). The learning /
+    // federated-skill-evolution engine + data flywheel + the full-SDK barrel. The api-shim seam loads
+    // the engine lazily, so the client runs fine without it.
+    excludePaths: (rel) => /(^|\/)stratos-agent\/(src\/evolution\/|gsi-compiler\.js|gsi-scheduler\.js|reasoning-bank\.js|src\/ingestion\/genesis-harvester\.js|index\.js)$/.test(rel),
+    license: 'BUSL-1.1',
     public: true,
   },
   atmosphere: {
@@ -68,10 +73,23 @@ const PRODUCTS = {
     vendor: [
       { from: 'packages/stratos-agent/src/core/wasm-sections.js', to: 'atmos-core/ghost-node/wasm-sections.js' },
       { from: 'packages/stratos-agent/src/security/quantum-crypto.js', to: 'atmos-core/ghost-node/quantum-crypto.js' },
+      // p2p-network.js + lattice-messaging.js need these shared security primitives (full closure:
+      // did-generator, quantum-crypto, vault-host — all self-contained on node + @noble).
+      { from: 'packages/stratos-agent/src/security/did-generator.js', to: 'stratos-agent/src/security/did-generator.js' },
+      { from: 'packages/stratos-agent/src/security/quantum-crypto.js', to: 'stratos-agent/src/security/quantum-crypto.js' },
+      { from: 'packages/stratos-agent/src/security/vault-host.js', to: 'stratos-agent/src/security/vault-host.js' },
     ],
     // Exclude ghost-node BUILD/OPS tooling (references build-host paths; produces the separate
     // per-platform zip bundles, not needed to run a node via the npm bin).
     skipExtra: (rel) => /(^|\/)ghost-node\/(build\.sh|sign-bundles\.sh|HA\.md|SIGNING\.md|install-unix\.sh|install-windows\.ps1|atmos-ghost\.(cmd|sh)|relay(\/|$))/.test(rel) || rel.endsWith('.ps1'),
+    // PROPRIETARY MOAT — the economic/settlement engine (business-model mechanics) stays private;
+    // mesh-demo.mjs is a standalone demo that references private moat modules + cross-package files.
+    excludePaths: (rel) => /(^|\/)atmos-core\/src\/billing(\/|$)/.test(rel) || /(^|\/)atmos-core\/mesh-demo\.mjs$/.test(rel),
+    // The barrel re-exports + describes the (now-private) economic engine; strip the whole block so
+    // the public entrypoint resolves AND the settlement architecture isn't described in public source.
+    // (The lightweight X402InvoiceEngine export on the next line is kept.)
+    patches: [{ file: 'atmos-core/index.js', removeLine: /PaymentEngine|payment test suites|invoice signer\. Previously|silently exported the lighter/ }],
+    license: 'BUSL-1.1',
     public: true,
   },
 };
@@ -136,9 +154,68 @@ function generatePackageJson(p, version) {
     engines: { node: '>=18' },
     dependencies: { ...p.deps },
     optionalDependencies: { ...p.optionalDeps },
-    license: 'SEE LICENSE IN LICENSE',
+    license: p.license || 'SEE LICENSE IN LICENSE',
     publishConfig: { access: 'public' },
   };
+}
+
+const PRODUCT_SOFTWARE = { '@efficientlabs/stratos': 'StratosAgent', '@efficientlabs/atmosphere': 'The Atmosphere' };
+function generateLicense(p) {
+  const software = PRODUCT_SOFTWARE[p.name] || p.name;
+  return `Business Source License 1.1
+
+Licensor: Efficient Labs
+Software: ${software}
+Change Date: May 29, 2030
+Change License: Apache License, Version 2.0
+Additional Use Grant: You may use the Licensed Work for any non-production purpose. For production purposes, you may use the Licensed Work only as part of Atmosphere Network and StratosAgent deployments.
+
+Terms of the License
+
+1. Grant of License. The Licensor hereby grants you the right to copy and modify the Software, and to use the Software, solely for the purposes permitted under the Additional Use Grant.
+
+2. Change of License. Effective on the Change Date, the Licensor hereby grants you a license to use, copy, modify, and distribute the Software under the terms of the Change License.
+
+3. Termination. This License and your rights under it terminate automatically if you breach any of its terms.
+
+4. Intellectual Property. The Licensor reserves all rights not expressly granted under this License. This Software is the proprietary work of Efficient Labs; the published portion is a subset, and Efficient Labs retains all rights in its private components, methods, and business processes.
+
+5. Disclaimer of Warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+Portions of this Software incorporate forks of libraries originally created by Holepunch
+(Copyright (c) Holepunch), used under their respective licenses. Those components retain their
+original license terms.
+`;
+}
+
+// Static-import resolution gate: every relative import in the assembled tree must resolve to an
+// existing file. Catches a moat exclusion that would break a SHIPPED file. Dynamic import() (lazy /
+// optional, e.g. the proprietary engine seam) is intentionally exempt — those may be absent.
+const STATIC_IMPORT_RE = /(?:^|\s)(?:import|export)\b[^;'"]*?\sfrom\s*['"](\.[^'"]+)['"]|(?:^|[^.\w])import\s*['"](\.[^'"]+)['"]/g;
+export function checkDanglingImports(dir) {
+  const dangling = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const pth = path.join(d, e.name);
+      if (e.isDirectory()) { if (e.name !== 'node_modules') walk(pth); continue; }
+      if (!/\.(m?js|cjs)$/.test(e.name)) continue;
+      const src = fs.readFileSync(pth, 'utf8');
+      let m;
+      const re = new RegExp(STATIC_IMPORT_RE.source, 'g');
+      while ((m = re.exec(src)) !== null) {
+        const spec = m[1] || m[2];
+        if (!spec) continue;
+        let target = path.resolve(path.dirname(pth), spec);
+        if (fs.existsSync(target) && fs.statSync(target).isDirectory()) target = path.join(target, 'index.js');
+        if (!fs.existsSync(target) && fs.existsSync(target + '.js')) target += '.js';
+        if (!fs.existsSync(target)) dangling.push(`${path.relative(dir, pth)} → ${spec}`);
+      }
+    }
+  };
+  walk(dir);
+  return dangling;
 }
 
 function generateReadme(p, version) {
@@ -172,7 +249,9 @@ export function assembleProduct({ product = 'stratos', outDir = null, version = 
   if (fs.existsSync(outDir)) fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
   const copied = [];
-  for (const s of p.sources) copyTree(path.join(ROOT, 'packages', s), path.join(outDir, s), outDir, copied, p.skipExtra);
+  // Combine ops-skip + proprietary moat-exclude into one predicate.
+  const skip = (rel) => (p.skipExtra && p.skipExtra(rel)) || (p.excludePaths && p.excludePaths(rel));
+  for (const s of p.sources) copyTree(path.join(ROOT, 'packages', s), path.join(outDir, s), outDir, copied, skip);
   // Vendor extra files the bin needs.
   for (const v of (p.vendor || [])) {
     const dst = path.join(outDir, v.to);
@@ -180,17 +259,24 @@ export function assembleProduct({ product = 'stratos', outDir = null, version = 
     fs.copyFileSync(path.join(ROOT, v.from), dst);
     copied.push(v.to);
   }
+  // Apply patches (e.g. drop a re-export of a now-private module from a kept barrel).
+  for (const pt of (p.patches || [])) {
+    const fp = path.join(outDir, pt.file);
+    if (fs.existsSync(fp) && pt.removeLine) {
+      fs.writeFileSync(fp, fs.readFileSync(fp, 'utf8').split('\n').filter((l) => !pt.removeLine.test(l)).join('\n'));
+    }
+  }
 
   fs.writeFileSync(path.join(outDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
   fs.writeFileSync(path.join(outDir, 'README.md'), generateReadme(p, version));
   // Guard the product repo: a stray `npm pack` .tgz / node_modules must never be committed.
   fs.writeFileSync(path.join(outDir, '.gitignore'), '*.tgz\nnode_modules/\n.stratos-profile/\ndist/\n');
-  const lic = path.join(ROOT, 'LICENSE');
-  fs.writeFileSync(path.join(outDir, 'LICENSE'), fs.existsSync(lic) ? fs.readFileSync(lic) : 'Copyright (c) Efficient Labs. All rights reserved.\n');
+  fs.writeFileSync(path.join(outDir, 'LICENSE'), generateLicense(p));
 
-  // HARD GATES (abort before provenance): secrets/forbidden files, then anonymization for public pkgs.
+  // HARD GATES (abort before provenance): secrets, anonymization (public), dangling imports.
   const violations = scanTree(outDir);
   if (p.public) violations.push(...checkAnonymization(outDir).map((v) => `anonymization: ${v}`));
+  violations.push(...checkDanglingImports(outDir).map((v) => `dangling import (moat-exclude broke a shipped file): ${v}`));
   if (violations.length) {
     fs.rmSync(outDir, { recursive: true, force: true });
     throw new Error(`assembly REJECTED — ${violations.length} violation(s):\n  - ${violations.join('\n  - ')}`);

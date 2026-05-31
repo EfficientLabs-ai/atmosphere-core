@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import fetch from 'node-fetch';
-import { queryCognitiveSkill, queryInterceptedReasoning, queryAmbientMemory } from '../../../packages/stratos-agent/src/memory/vector-bank.js';
+import { queryCognitiveSkill, queryInterceptedReasoning, queryAmbientMemory } from '../../stratos-agent/src/memory/vector-bank.js';
 import { tryServe as evolutionTryServe, observe as evolutionObserve } from './self-evolution-runtime.js';
-import { buildIdentityPrompt } from '../../../packages/stratos-agent/src/core/identity.js';
+import { buildIdentityPrompt } from '../../stratos-agent/src/core/identity.js';
 import { planWindow, MODEL_NUM_CTX } from './memory-manager.js';
 
 /**

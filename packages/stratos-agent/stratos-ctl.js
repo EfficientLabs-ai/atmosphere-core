@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { capabilitiesSummary } from './src/core/identity.js';
+import { setAgentName, updateConfig, markConfigured, bindOwner, getOwner } from './src/core/agent-config.js';
 
 const args = process.argv.slice(2);
 const command = args[0] || 'status';
@@ -28,6 +29,7 @@ function showHelp() {
   console.log(BANNER);
   console.log('Available Commands:');
   console.log('  \x1b[32minit\x1b[0m     Launch the interactive onboarding wizard and customize agent identity');
+  console.log('  \x1b[32mbind\x1b[0m     Bind your Telegram chat id as the owner (enables chat-based config). Usage: bind <chat-id>');
   console.log('  \x1b[32mstatus\x1b[0m   Check node active configurations, DHT peers, and Solana balances');
   console.log('  \x1b[32msync\x1b[0m     Synchronize ledger index across local and VPS instances');
   console.log('  \x1b[32mcompile\x1b[0m  Trigger manual GSI overnight compilation and WASM sealing');
@@ -121,6 +123,18 @@ USER_SOLANA_WALLET="${solanaWallet}"
   
   fs.writeFileSync(envLocalPath, configString.trim() + '\n');
   console.log(`\n💾 \x1b[32mConfigurations securely saved to:\x1b[0m ${path.basename(envLocalPath)}`);
+
+  // Mirror into the authoritative agent-config.json — the single source of truth the running
+  // agent actually reads (env is for SECRETS + a one-time import only).
+  try {
+    setAgentName(agentName);
+    updateConfig((c) => { c.meshOptIn = optIn; });
+    markConfigured();
+    console.log(`\x1b[2m   ↳ agent-config.json updated (this is what the live agent reads).\x1b[0m`);
+    console.log(`\x1b[2m   ↳ To configure from chat, bind your owner id: \x1b[36mstratos-ctl bind <telegram-chat-id>\x1b[0m`);
+  } catch (e) {
+    console.warn(`\x1b[33m   ↳ agent-config update skipped: ${e.message}\x1b[0m`);
+  }
 
   console.log(`
 ========================================================================
@@ -255,10 +269,33 @@ async function runLogs() {
   });
 }
 
+async function runBind() {
+  console.log(BANNER);
+  const chatId = (args[1] || '').trim();
+  if (!chatId) {
+    const current = getOwner();
+    console.log('🔐 \x1b[33mOwner binding\x1b[0m — gates chat-based reconfiguration to one Telegram id (in a DM).');
+    console.log(`   Current owner: ${current ? `\x1b[32m${current}\x1b[0m` : '\x1b[31mnone bound\x1b[0m'}`);
+    console.log('   Usage: \x1b[36mstratos-ctl bind <telegram-chat-id>\x1b[0m');
+    console.log('   Tip: message the bot then check the daemon logs for your chat id, or set STRATOS_OWNER_CHAT_ID.');
+    return;
+  }
+  if (!/^-?\d{3,}$/.test(chatId)) {
+    console.log(`❌ \x1b[31mThat doesn't look like a Telegram chat id (expected digits): ${chatId}\x1b[0m`);
+    return;
+  }
+  const bound = bindOwner(chatId);
+  console.log(`✅ \x1b[32mOwner bound to chat id ${bound}.\x1b[0m Only this id, in a direct message, can reconfigure the agent from chat.`);
+  console.log('   Privileged grants (files/network/shell) and cloud-provider switches remain CLI-only by design.');
+}
+
 // Route commands
 switch (command) {
   case 'init':
     runOnboarding();
+    break;
+  case 'bind':
+    runBind();
     break;
   case 'status':
     runStatus();

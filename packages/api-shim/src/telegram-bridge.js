@@ -5,6 +5,7 @@ import fetch from 'node-fetch';
 import TelegramBot from 'node-telegram-bot-api';
 import { UnifiedDispatcher } from '../../stratos-agent/index.js';
 import { getAgentName, capabilitiesSummary } from '../../stratos-agent/src/core/identity.js';
+import * as chatHistory from './chat-history.js';
 
 /**
  * Telegram Bot Bridge: Interfaces user phone commands
@@ -86,6 +87,12 @@ export class TelegramBridge {
               return;
             }
 
+            if (command === '/forget') {
+              chatHistory.clear(chatId);
+              await this.bot.sendMessage(chatId, `🧹 Conversation memory for this chat has been wiped. I won't recall anything from before this point.`, { parse_mode: 'HTML' });
+              return;
+            }
+
             if (command === '/status') {
               const os = await import('node:os');
               const cpus = os.cpus();
@@ -153,15 +160,15 @@ export class TelegramBridge {
         }
 
         try {
-          // Route inputs to local completions router
+          // Per-chat memory: record the user turn, send the running conversation (Tier 0 windows it).
+          chatHistory.appendUser(chatId, text);
           const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: 'qwen-2.5-vlm-telegram-local',
-              messages: [
-                { role: 'user', content: text }
-              ],
+              messages: chatHistory.getMessages(chatId),
+              conversationId: chatHistory.conversationId(chatId),
               stream: false
             })
           });
@@ -173,6 +180,7 @@ export class TelegramBridge {
           const data = await response.json();
           const aiResponseText = data.choices[0].message.content;
 
+          chatHistory.appendAssistant(chatId, aiResponseText); // remember the reply too
           await this.sendFormattedMessage(chatId, aiResponseText);
 
         } catch (err) {
@@ -241,15 +249,15 @@ export class TelegramBridge {
         console.log(`🎙️ [Telegram Voice] Transcribed text: "${transcribedText}"`);
       }
 
-      // 4. Feed transcribed text directly into completions
+      // 4. Feed transcribed text into completions WITH the running conversation (same memory as text).
+      chatHistory.appendUser(chatId, transcribedText);
       const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'qwen-2.5-vlm-telegram-local',
-          messages: [
-            { role: 'user', content: transcribedText }
-          ],
+          messages: chatHistory.getMessages(chatId),
+          conversationId: chatHistory.conversationId(chatId),
           stream: false
         })
       });
@@ -260,6 +268,7 @@ export class TelegramBridge {
 
       const data = await response.json();
       const aiResponseText = data.choices[0].message.content;
+      chatHistory.appendAssistant(chatId, aiResponseText);
 
       // 5. Clean thoughts and formatting elements for TTS voice synthesizing
       const cleanVoiceText = this.dispatcher.cleanTextForVoice(aiResponseText);

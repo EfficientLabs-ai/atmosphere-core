@@ -50,3 +50,7 @@ docs/archive/brain/*
 
 # Pipeline run outputs are ephemeral artifacts, not source
 packages/stratos-agent/pipelines/*/runs/
+
+# product assembler outputs (build artifacts)
+dist/stratos/
+dist/atmosphere/

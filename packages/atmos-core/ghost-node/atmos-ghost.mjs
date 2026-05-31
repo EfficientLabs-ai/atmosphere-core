@@ -83,6 +83,7 @@ function getCapabilityOnce() {
   const cpus = os.cpus() || [];
   _cap = {
     type: 'CAPABILITY',
+    version: GHOST_VERSION,
     nodeLabel: String(cfg.nodeLabel || 'ghost').slice(0, 64),
     platform: process.platform,
     arch: process.arch,
@@ -107,8 +108,23 @@ function verifySignedSkill(wasm) {
   return verifyPayload(signedRegion, signatureBundle, pinnedPub);
 }
 
+const GHOST_VERSION = '1.1.0'; // bumped when the bundle changes; origin can flag stale nodes.
+
+// Proof-of-capacity: the origin sends a random nonce + iteration count; we run a sha256 hash
+// CHAIN that many times (inherently sequential — can't be shortcut) and return the digest +
+// wall-time. The origin recomputes the digest to confirm we actually did the work, and the
+// time gives a PROVEN lower bound on real throughput. A node can't claim MORE compute than it
+// has (it would have to hash faster than physically possible); it can only under-report.
+function proveCapacity(nonceHex, iters) {
+  const t0 = process.hrtime.bigint();
+  let h = crypto.createHash('sha256').update(nonceHex).digest();
+  for (let i = 0; i < iters; i++) h = crypto.createHash('sha256').update(h).digest();
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  return { digest: h.toString('hex'), ms: Math.round(ms * 100) / 100, hashesPerSec: Math.round(iters / (ms / 1000)) };
+}
+
 console.log('👻 Atmosphere Ghost Node starting…');
-console.log(`   node id  : ${cfg.nodeLabel || 'ghost'}`);
+console.log(`   node id  : ${cfg.nodeLabel || 'ghost'}  (v${GHOST_VERSION})`);
 console.log(`   topic    : ${TOPIC_NAME}`);
 console.log('   transport: public Hyperswarm DHT, NAT hole-punch, no open ports');
 
@@ -122,7 +138,24 @@ swarm.on('connection', (socket, info) => {
   console.log(`🤝 connected to origin peer ${peer}… — awaiting signed skill`);
   socket.on('error', () => {});
   let reported = false; // disclose capacity at most once per connection, only AFTER auth.
-  socket.on('data', frameReader(socket, (wasm) => {
+  socket.on('data', frameReader(socket, (frame) => {
+    // Frames from the origin are either a wasm skill (starts with the \0asm magic byte 0x00)
+    // or a JSON control message (proof-of-capacity challenge / update notice).
+    if (frame.length && frame[0] !== 0x00) {
+      try {
+        const msg = JSON.parse(frame.toString('utf8'));
+        if (msg.type === 'CHALLENGE' && typeof msg.nonce === 'string') {
+          const iters = Math.min(Math.max(msg.iters | 0, 1), 20_000_000);
+          const proof = proveCapacity(msg.nonce, iters);
+          console.log(`🧮 proof-of-capacity: ${proof.hashesPerSec.toLocaleString()} H/s over ${iters.toLocaleString()} rounds (${proof.ms} ms).`);
+          sendFrame(socket, Buffer.from(JSON.stringify({ type: 'PROOF', nonce: msg.nonce, iters, ...proof })));
+        } else if (msg.type === 'UPDATE_AVAILABLE') {
+          console.log(`⬆️  update available: origin runs v${msg.latest}, this node is v${GHOST_VERSION}. Re-run the latest bundle when convenient.`);
+        }
+      } catch { /* ignore non-JSON control frames */ }
+      return;
+    }
+    const wasm = frame;
     if (!verifySignedSkill(wasm)) {
       console.log('⛔ REJECTED: PQC seal invalid / wrong origin — NOT executing.');
       if (ONCE) stop(1);

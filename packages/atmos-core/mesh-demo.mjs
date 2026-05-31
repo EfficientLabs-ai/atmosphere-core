@@ -126,6 +126,15 @@ async function runBroadcast() {
   const fleet = new Map();
   const FLEET_MAX = 4096, CAP_MIN_INTERVAL_MS = 10_000, MAX_CAP_BYTES = 1 << 16; // 64 KiB
   const lastCapAt = new Map();
+  const challenges = new Map(); // peerKey -> { nonce, iters, sentAtNs }
+  const PROOF_ITERS = 1_000_000;
+  const LATEST_VERSION = '1.1.0';
+  // Recompute the sha256 hash-chain to confirm a node actually did the sequential work.
+  function chainDigest(nonceHex, iters) {
+    let h = crypto.createHash('sha256').update(nonceHex).digest();
+    for (let i = 0; i < iters; i++) h = crypto.createHash('sha256').update(h).digest();
+    return h.toString('hex');
+  }
   const os = await import('node:os');
   const self = {
     nodeLabel: 'origin-vps', platform: process.platform, arch: process.arch,
@@ -140,12 +149,14 @@ async function runBroadcast() {
     const num = (v, lo, hi) => (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : 0);
     const mops = num(m.bench?.singleThreadMopsPerSec, 0, 1e7);
     return {
+      version: str(m.version, 16) || '?',
       nodeLabel: str(m.nodeLabel, 64) || 'node',
       platform: str(m.platform, 32), arch: str(m.arch, 16),
       cpuModel: str(m.cpuModel, 128) || 'unknown',
       cores: Math.round(num(m.cores, 0, 4096)),
       ramGB: Math.round(num(m.ramGB, 0, 1e6) * 10) / 10,
-      bench: { singleThreadMopsPerSec: mops }
+      bench: { singleThreadMopsPerSec: mops },
+      proven: null // set once the node passes the proof-of-capacity challenge
     };
   }
   function printFleet() {
@@ -153,17 +164,20 @@ async function runBroadcast() {
     const cores = nodes.reduce((a, n) => a + (n.cores || 0), 0);
     const ram = Math.round(nodes.reduce((a, n) => a + (n.ramGB || 0), 0) * 10) / 10;
     const mops = nodes.reduce((a, n) => a + (n.bench?.singleThreadMopsPerSec || 0) * (n.cores || 1), 0);
-    // SELF-REPORTED, not cryptographically proven: a node's claimed specs are trusted only as
-    // far as the node is. A public mesh needs a proof-of-capacity challenge before this is "measured".
-    console.log('\n===== ATMOSPHERE MESH — SELF-REPORTED COLLECTIVE CAPACITY =====');
+    const provenNodes = nodes.filter(n => n.proven);
+    const provenHps = provenNodes.reduce((a, n) => a + (n.proven.hashesPerSec || 0), 0);
+    console.log('\n===== ATMOSPHERE MESH — COLLECTIVE CAPACITY =====');
     for (const n of nodes) {
-      console.log(`  • ${(n.nodeLabel || 'node').padEnd(12)} ${String(n.cores || '?')+'c'} ${String(n.ramGB||'?')+'GB'}  ${n.bench?.singleThreadMopsPerSec ? n.bench.singleThreadMopsPerSec+' Mops/s' : '(origin, not benched)'}  ${n.cpuModel || ''}`);
+      const benched = n.bench?.singleThreadMopsPerSec ? n.bench.singleThreadMopsPerSec + ' Mops/s' : '(origin)';
+      const seal = n.proven ? `🔐≥${(n.proven.hashesPerSec/1e6).toFixed(2)}M H/s` : (n === self ? '' : '⏳unproven');
+      console.log(`  • ${(n.nodeLabel || 'node').padEnd(12)} ${String(n.cores || '?')+'c'} ${String(n.ramGB||'?')+'GB'}  ${benched}  ${seal}  ${n.cpuModel || ''}`);
     }
-    console.log(`  TOTAL: ${nodes.length} nodes · ${cores} cores · ${ram} GB RAM · ~${Math.round(mops)} aggregate Mops/s (self-reported, cores×single-thread)`);
-    console.log('===============================================================\n');
+    console.log(`  SELF-REPORTED: ${nodes.length} nodes · ${cores} cores · ${ram} GB · ~${Math.round(mops)} aggregate Mops/s`);
+    console.log(`  PROVEN (challenge-verified): ${provenNodes.length} node(s) · ≥ ${(provenHps/1e6).toFixed(2)}M H/s combined`);
+    console.log('=================================================\n');
     if (args['fleet-out'] && args['fleet-out'] !== true) {
       try {
-        const snap = { updatedAtMs: Number(process.hrtime.bigint() / 1000000n), totals: { nodes: nodes.length, cores, ramGB: ram, aggMops: Math.round(mops) }, nodes, note: 'self-reported capacity; not a proof-of-capacity' };
+        const snap = { updatedAtMs: Number(process.hrtime.bigint() / 1000000n), totals: { nodes: nodes.length, cores, ramGB: ram, aggMops: Math.round(mops), provenNodes: provenNodes.length, provenHashesPerSec: provenHps }, nodes };
         fs.writeFileSync(args['fleet-out'], JSON.stringify(snap, null, 2));
       } catch (e) { console.warn('[fleet-out] write failed:', e.message); }
     }
@@ -175,24 +189,54 @@ async function runBroadcast() {
     sendFrame(socket, wasm);
     served++;
     socket.on('error', () => {});
-    socket.on('close', () => { fleet.delete(peerKey); lastCapAt.delete(peerKey); });
+    socket.on('close', () => { fleet.delete(peerKey); lastCapAt.delete(peerKey); challenges.delete(peerKey); });
     socket.on('data', frameReader(socket, (frame) => {
-      // Per-peer rate-limit: ignore capability spam.
-      const now = process.hrtime.bigint();
-      const lastNs = lastCapAt.get(peerKey);
-      if (lastNs && Number(now - lastNs) / 1e6 < CAP_MIN_INTERVAL_MS) return;
-      let cap = null;
-      try { cap = sanitizeCapability(JSON.parse(frame.toString('utf8'))); } catch { return; }
-      if (!cap) return;
-      lastCapAt.set(peerKey, now);
-      if (!fleet.has(peerKey) && fleet.size >= FLEET_MAX) {
-        console.warn(`⚠️ [BROADCAST] fleet at capacity (${FLEET_MAX}); ignoring new peer ${peer}.`);
+      let msg = null;
+      try { msg = JSON.parse(frame.toString('utf8')); } catch { return; }
+      if (!msg || typeof msg.type !== 'string') return;
+
+      if (msg.type === 'CAPABILITY') {
+        // Per-peer rate-limit: ignore capability spam.
+        const now = process.hrtime.bigint();
+        const lastNs = lastCapAt.get(peerKey);
+        if (lastNs && Number(now - lastNs) / 1e6 < CAP_MIN_INTERVAL_MS) return;
+        const cap = sanitizeCapability(msg);
+        if (!cap) return;
+        lastCapAt.set(peerKey, now);
+        if (!fleet.has(peerKey) && fleet.size >= FLEET_MAX) {
+          console.warn(`⚠️ [BROADCAST] fleet at capacity (${FLEET_MAX}); ignoring new peer ${peer}.`);
+          return;
+        }
+        const fresh = !fleet.has(peerKey);
+        fleet.set(peerKey, cap); // keyed on pubkey — a peer cannot impersonate another
+        console.log(`📊 [BROADCAST] capacity from ${cap.nodeLabel} v${cap.version} (${peer}…): ${cap.cores}c ${cap.ramGB}GB ${cap.bench.singleThreadMopsPerSec} Mops/s ${fresh ? '(new node)' : '(updated)'}`);
+        if (cap.version !== LATEST_VERSION) {
+          sendFrame(socket, Buffer.from(JSON.stringify({ type: 'UPDATE_AVAILABLE', latest: LATEST_VERSION })));
+        }
+        // Issue a proof-of-capacity challenge. The origin times the round trip itself, so the
+        // node cannot inflate its speed — the proven rate is a conservative lower bound.
+        const nonce = crypto.randomBytes(16).toString('hex');
+        challenges.set(peerKey, { nonce, iters: PROOF_ITERS, sentAtNs: process.hrtime.bigint() });
+        sendFrame(socket, Buffer.from(JSON.stringify({ type: 'CHALLENGE', nonce, iters: PROOF_ITERS })));
+        printFleet();
         return;
       }
-      const fresh = !fleet.has(peerKey);
-      fleet.set(peerKey, cap); // keyed on pubkey — a peer cannot impersonate another
-      console.log(`📊 [BROADCAST] capacity from ${cap.nodeLabel} (${peer}…): ${cap.cores}c ${cap.ramGB}GB ${cap.bench.singleThreadMopsPerSec} Mops/s ${fresh ? '(new node)' : '(updated)'}`);
-      printFleet();
+
+      if (msg.type === 'PROOF') {
+        const ch = challenges.get(peerKey);
+        const node = fleet.get(peerKey);
+        if (!ch || !node || msg.nonce !== ch.nonce) return;
+        challenges.delete(peerKey);
+        const elapsedMs = Number(process.hrtime.bigint() - ch.sentAtNs) / 1e6;
+        const ok = typeof msg.digest === 'string' && msg.digest === chainDigest(ch.nonce, ch.iters);
+        if (!ok) { console.warn(`🚫 [BROADCAST] proof FAILED for ${node.nodeLabel} (${peer}…) — capacity stays UNPROVEN.`); return; }
+        // Conservative lower bound: hashes / (network + compute) round-trip the origin measured.
+        const provenHps = Math.round(ch.iters / (elapsedMs / 1000));
+        node.proven = { hashesPerSec: provenHps, roundTripMs: Math.round(elapsedMs) };
+        console.log(`🔐 [BROADCAST] proof VERIFIED for ${node.nodeLabel} (${peer}…): ≥ ${provenHps.toLocaleString()} H/s (round-trip ${Math.round(elapsedMs)} ms).`);
+        printFleet();
+        return;
+      }
     }, MAX_CAP_BYTES));
   });
   swarm.join(topicKey, { server: true, client: true });

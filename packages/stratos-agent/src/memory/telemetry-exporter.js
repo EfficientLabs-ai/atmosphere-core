@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
 
 /**
- * TelemetryExporter: Compiles, anonymizes, and signs sovereign telemetry data rollups
- * to fuel the decentralized AGI training flywheel.
+ * TelemetryExporter: compiles, anonymizes, and signs execution-trace rollups for the federated
+ * continuous-improvement loop — a privacy-preserving way for opted-in nodes to contribute distilled,
+ * PII/secret-scrubbed traces that could improve shared models. (Not "AGI"/"superintelligence" — it is
+ * anonymized telemetry aggregation; honest scope per STATE_OF_REALITY.md.)
  */
 export class TelemetryExporter {
   /**
@@ -131,7 +133,7 @@ export class TelemetryExporter {
 
     // Compile into standardized JSON payload
     const rollupPayload = {
-      generator: 'EfficientLabs-GlobalSuperintelligence-TelemetryHarvester-1.0',
+      generator: 'EfficientLabs-FederatedImprovement-TelemetryRollup-1.0',
       timestamp: Date.now(),
       traces: telemetryEntries
     };

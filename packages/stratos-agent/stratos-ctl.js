@@ -145,7 +145,7 @@ Your agent, \x1b[1m${agentName}\x1b[0m, is now successfully initialized!
 To trigger your first command and spin up the background services:
 👉 Run: \x1b[36mnode packages/api-shim/index.js\x1b[0m or \x1b[36mstratos-ctl status\x1b[0m
 
-Thank you for choosing sovereign superintelligence.
+Thank you for choosing sovereign, local-first AI.
 ========================================================================
 `);
 

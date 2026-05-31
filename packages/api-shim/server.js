@@ -171,8 +171,8 @@ async function bootstrapVectorDB(bank) {
 }
 
 /**
- * Anonymizes PII/Secrets and stores request telemetry securely inside LanceDB
- * to power Efficient Labs' Global Superintelligence training flywheel.
+ * Anonymizes PII/Secrets and stores request telemetry securely inside LanceDB to feed Efficient Labs'
+ * federated continuous-improvement loop (anonymized trace aggregation — not "superintelligence").
  */
 async function harvestTelemetry(prompt, responseText) {
   try {

@@ -95,26 +95,34 @@ function verifySignedSkill(wasm, publicKeyBundle) {
 }
 
 async function runBroadcast() {
-  // 1. Load this node's signing identity (created by the self-evolution wiring).
-  const { GsiCompiler } = await import('../stratos-agent/gsi-compiler.js');
-  const { loadOrCreateNodeKeys } = await import('../stratos-agent/src/evolution/self-evolution.js');
-  const keyBundle = loadOrCreateNodeKeys(NODE_KEYS);
+  // Identity of THIS relay in the cluster (for leader election). Unique per machine.
+  const RELAY_ID = (args['relay-id'] && args['relay-id'] !== true) ? String(args['relay-id']).slice(0, 32) : 'origin';
+  const SIGNED_SKILL = (args['signed-skill'] && args['signed-skill'] !== true) ? args['signed-skill'] : null;
 
-  // 2. Compile a REAL signed wasm skill: y = a*x + b (default 3x). Full-module PQC seal.
-  const a = Number(args.a ?? 3), b = Number(args.b ?? 0);
-  const compiler = new GsiCompiler({ distSkillsDir: path.join(ROOT, 'packages', 'stratos-agent', 'dist', 'skills'), verbose: false });
-  const manifest = { id: 'mesh_affine', kind: 'computational', triggerIntent: `apply ${a}x+${b}`, computation: { type: 'affine', a, b } };
-  const wasm = await compiler.compile(manifest, keyBundle.privateKey);
-
-  // 3. Publish the pinned public key + the exact device command (out-of-band trust anchor).
-  const pinnedPub = JSON.stringify(encB(keyBundle.publicKey));
-  const pinnedB64 = b4a.toString(b4a.from(pinnedPub), 'base64');
-  console.log('📡 [BROADCAST] Atmosphere origin node — public Hyperswarm DHT (hole-punch, no open ports)');
-  console.log(`   topic     : ${TOPIC_NAME}`);
-  console.log(`   skill     : y = ${a}x + ${b}  (${wasm.length} B, ML-DSA-65 + Ed25519 sealed)`);
-  console.log(`   self-verify: ${verifySignedSkill(wasm, keyBundle.publicKey) ? '✅' : '❌'}`);
-  console.log('\n   ── Run THIS on your device (from the repo root) ──');
-  console.log(`   node packages/atmos-core/mesh-demo.mjs join --topic ${TOPIC_NAME} --input 9 --pubkey ${pinnedB64}\n`);
+  let wasm, keyBundle = null, pinnedB64 = null;
+  if (SIGNED_SKILL) {
+    // KEYLESS RELAY: serve a pre-signed artifact — NO private key lives on this machine.
+    // This is the heart of true multi-machine HA: availability without key duplication.
+    wasm = fs.readFileSync(SIGNED_SKILL);
+    console.log(`📡 [RELAY ${RELAY_ID}] keyless relay — serving pre-signed skill (${wasm.length} B). No signing key on this host.`);
+  } else {
+    // KEY-HOLDER: compile + PQC-seal the membership skill, and (optionally) export the signed
+    // artifact so keyless relays elsewhere can serve it.
+    const { GsiCompiler } = await import('../stratos-agent/gsi-compiler.js');
+    const { loadOrCreateNodeKeys } = await import('../stratos-agent/src/evolution/self-evolution.js');
+    keyBundle = loadOrCreateNodeKeys(NODE_KEYS);
+    const a = Number(args.a ?? 3), b = Number(args.b ?? 0);
+    const compiler = new GsiCompiler({ distSkillsDir: path.join(ROOT, 'packages', 'stratos-agent', 'dist', 'skills'), verbose: false });
+    const manifest = { id: 'mesh_affine', kind: 'computational', triggerIntent: `apply ${a}x+${b}`, computation: { type: 'affine', a, b } };
+    wasm = await compiler.compile(manifest, keyBundle.privateKey);
+    pinnedB64 = b4a.toString(b4a.from(JSON.stringify(encB(keyBundle.publicKey))), 'base64');
+    if (args['export-skill'] && args['export-skill'] !== true) {
+      fs.writeFileSync(args['export-skill'], wasm);
+      console.log(`💾 [ORIGIN ${RELAY_ID}] exported signed skill -> ${args['export-skill']} (distribute to keyless relays for HA).`);
+    }
+    console.log(`📡 [ORIGIN ${RELAY_ID}] key-holder — sealed skill (${wasm.length} B). self-verify: ${verifySignedSkill(wasm, keyBundle.publicKey) ? '✅' : '❌'}`);
+  }
+  console.log(`   topic: ${TOPIC_NAME}  ·  relay-id: ${RELAY_ID}`);
 
   // 4. Join the global DHT, serve the signed skill, and aggregate self-reported capacity,
   //    keyed on the peer's cryptographic pubkey with bounds + rate-limits (see below).
@@ -169,6 +177,27 @@ async function runBroadcast() {
     }
     return { jobId, wallMs, done };
   }
+
+  // ---- #3 relay cluster: leader election for multi-machine HA -------------------------
+  // Every relay serves membership (redundant). Only the LEADER (lowest live relay-id)
+  // dispatches jobs, so there's no duplicate work. Relays heartbeat each other; if the
+  // leader goes silent, the next-lowest takes over. Eventually-consistent: a brief overlap
+  // during failover only ever causes a duplicate idempotent compute job, never bad execution.
+  const HEARTBEAT_MS = 5000, RELAY_TTL_MS = 16000;
+  const aliveRelays = new Map([[RELAY_ID, Infinity]]); // self never expires
+  let currentLeader = RELAY_ID;
+  function recomputeLeader() {
+    const now = Date.now();
+    for (const [id, seen] of aliveRelays) if (seen !== Infinity && now - seen > RELAY_TTL_MS) aliveRelays.delete(id);
+    const leader = [...aliveRelays.keys()].sort()[0];
+    if (leader !== currentLeader) {
+      currentLeader = leader;
+      console.log(`👑 [RELAY ${RELAY_ID}] leader is now '${leader}'${leader === RELAY_ID ? ' — I dispatch jobs' : ' (I am standby)'}. alive: [${[...aliveRelays.keys()].sort().join(', ')}]`);
+    }
+    return leader;
+  }
+  const isLeader = () => recomputeLeader() === RELAY_ID;
+
   const os = await import('node:os');
   const self = {
     nodeLabel: 'origin-vps', platform: process.platform, arch: process.arch,
@@ -221,6 +250,9 @@ async function runBroadcast() {
     const peer = peerKey.slice(0, 16);
     console.log(`🤝 [BROADCAST] peer connected: ${peer}… — sending signed skill block`);
     sendFrame(socket, wasm);
+    // Announce ourselves as a relay so any relay peer can include us in leader election.
+    // Ghosts ignore RELAY_HELLO (unknown type); only relays act on it.
+    sendFrame(socket, Buffer.from(JSON.stringify({ type: 'RELAY_HELLO', relayId: RELAY_ID })));
     served++;
     sockets.set(peerKey, socket);
     socket.on('error', () => {});
@@ -229,6 +261,15 @@ async function runBroadcast() {
       let msg = null;
       try { msg = JSON.parse(frame.toString('utf8')); } catch { return; }
       if (!msg || typeof msg.type !== 'string') return;
+
+      if (msg.type === 'RELAY_HELLO' && typeof msg.relayId === 'string' && msg.relayId !== RELAY_ID) {
+        // A peer relay announced itself — track liveness for leader election (heartbeat).
+        const known = aliveRelays.has(msg.relayId.slice(0, 32));
+        aliveRelays.set(msg.relayId.slice(0, 32), Date.now());
+        if (!known) console.log(`🔗 [RELAY ${RELAY_ID}] discovered peer relay '${msg.relayId.slice(0,32)}'.`);
+        recomputeLeader();
+        return;
+      }
 
       if (msg.type === 'CAPABILITY') {
         // Per-peer rate-limit: ignore capability spam.
@@ -295,14 +336,25 @@ async function runBroadcast() {
   console.log(`🌐 [BROADCAST] announced on the DHT. Waiting for peers… (served so far: ${served}). Ctrl-C to stop.`);
   printFleet();
 
-  // #2 scheduler trigger: periodically fan a compute job across the fleet (demo/heartbeat of
-  // real distributed work). Opt-in via --job-interval <seconds> [--job-max <N inputs>].
+  // #3 relay heartbeat: keep announcing ourselves to every connected peer so the cluster's
+  // liveness view stays fresh, and re-evaluate leadership (promotes a standby if the leader died).
+  setInterval(() => {
+    const hb = Buffer.from(JSON.stringify({ type: 'RELAY_HELLO', relayId: RELAY_ID }));
+    for (const s of sockets.values()) { try { sendFrame(s, hb); } catch {} }
+    recomputeLeader();
+  }, HEARTBEAT_MS);
+
+  // #2 scheduler trigger: only the elected LEADER dispatches, so redundant relays never
+  // double-dispatch. Opt-in via --job-interval <seconds> [--job-max <N inputs>].
   if (args['job-interval'] && args['job-interval'] !== true) {
     const everyMs = Math.max(5, Number(args['job-interval'])) * 1000;
     const jobMax = Math.min(Math.max(Number(args['job-max'] || 60), 1), 50_000);
     let busy = false;
-    setInterval(async () => { if (busy) return; busy = true; try { await dispatchJob(jobMax); } catch (e) { console.warn('[JOB] dispatch error:', e.message); } busy = false; }, everyMs);
-    console.log(`🗂️  [JOB] scheduler armed: every ${everyMs/1000}s fan ${jobMax} inputs across ready nodes.`);
+    setInterval(async () => {
+      if (busy || !isLeader()) return; // standby relays stay idle on dispatch
+      busy = true; try { await dispatchJob(jobMax); } catch (e) { console.warn('[JOB] dispatch error:', e.message); } busy = false;
+    }, everyMs);
+    console.log(`🗂️  [JOB] scheduler armed: every ${everyMs/1000}s the LEADER fans ${jobMax} inputs across ready nodes.`);
   }
 }
 

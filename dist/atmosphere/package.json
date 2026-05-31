@@ -1,0 +1,36 @@
+{
+  "name": "@efficientlabs/atmosphere",
+  "version": "1.0.0",
+  "description": "The Atmosphere — sovereign P2P compute mesh node. Joins the public Hyperswarm DHT via NAT hole-punch (no open ports) and runs ONLY post-quantum-verified skills (ML-DSA-65 + Ed25519).",
+  "type": "module",
+  "bin": {
+    "atmos-ghost": "atmos-core/ghost-node/atmos-ghost.mjs"
+  },
+  "exports": {
+    ".": "./atmos-core/index.js"
+  },
+  "files": [
+    "atmos-core/",
+    "README.md",
+    "LICENSE",
+    "provenance.json"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "autobase": "^6.0.0",
+    "b4a": "^1.6.4",
+    "corestore": "^6.0.0",
+    "hypercore": "^10.0.0",
+    "hyperswarm": "^4.7.0",
+    "sodium-universal": "^4.0.0",
+    "@noble/post-quantum": "^0.6.1"
+  },
+  "optionalDependencies": {},
+  "license": "SEE LICENSE IN LICENSE",
+  "publishConfig": {
+    "access": "public"
+  }
+}

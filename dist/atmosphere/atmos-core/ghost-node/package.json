@@ -1,0 +1,13 @@
+{
+  "name": "atmosphere-ghost-node",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Atmosphere sovereign mesh ghost node — joins the global Hyperswarm DHT (hole-punch, no open ports) and runs only PQC-verified skills.",
+  "bin": { "atmos-ghost": "./atmos-ghost.mjs" },
+  "dependencies": {
+    "hyperswarm": "4.17.0",
+    "b4a": "1.8.1",
+    "@noble/post-quantum": "0.6.1"
+  }
+}

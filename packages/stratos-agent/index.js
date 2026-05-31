@@ -40,3 +40,7 @@ export default {
   SkillInductionEngine,
   SelfEvolutionEngine
 };
+
+// Folder-stage pipeline engine (ICM "folders over agents")
+export { runPipeline, discoverStages, parseStage } from './src/pipeline/engine.js';
+export { defaultModelRunner, defaultScriptRunner } from './src/pipeline/stage-runners.js';

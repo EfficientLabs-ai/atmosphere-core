@@ -47,3 +47,6 @@ Cargo.lock
 # Superseded Antigravity planning docs — kept on disk for provenance, not versioned (one had an email; all discredited per STATE_OF_REALITY)
 docs/archive/brain/*
 !docs/archive/brain/SUPERSEDED.md
+
+# Pipeline run outputs are ephemeral artifacts, not source
+packages/stratos-agent/pipelines/*/runs/

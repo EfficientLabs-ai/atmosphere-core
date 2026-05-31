@@ -9,6 +9,7 @@ import { TraceAnalyzer } from './src/evolution/trace-analyzer.js';
 import { NightShiftCompiler } from './src/evolution/night-shift-compiler.js';
 import { SkillExecutor } from './src/evolution/skill-executor.js';
 import { SkillInductionEngine } from './src/evolution/skill-induction.js';
+import { SelfEvolutionEngine } from './src/evolution/self-evolution.js';
 
 export {
   BrowserHarness,
@@ -21,7 +22,8 @@ export {
   TraceAnalyzer,
   NightShiftCompiler,
   SkillExecutor,
-  SkillInductionEngine
+  SkillInductionEngine,
+  SelfEvolutionEngine
 };
 
 export default {
@@ -35,5 +37,6 @@ export default {
   TraceAnalyzer,
   NightShiftCompiler,
   SkillExecutor,
-  SkillInductionEngine
+  SkillInductionEngine,
+  SelfEvolutionEngine
 };

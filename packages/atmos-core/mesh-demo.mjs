@@ -121,6 +121,7 @@ async function runBroadcast() {
       console.log(`💾 [ORIGIN ${RELAY_ID}] exported signed skill -> ${args['export-skill']} (distribute to keyless relays for HA).`);
     }
     console.log(`📡 [ORIGIN ${RELAY_ID}] key-holder — sealed skill (${wasm.length} B). self-verify: ${verifySignedSkill(wasm, keyBundle.publicKey) ? '✅' : '❌'}`);
+    console.log(`   ad-hoc join test: node packages/atmos-core/mesh-demo.mjs join --topic ${TOPIC_NAME} --input 9 --pubkey ${pinnedB64}`);
   }
   console.log(`   topic: ${TOPIC_NAME}  ·  relay-id: ${RELAY_ID}`);
 
@@ -374,7 +375,9 @@ async function runJoin() {
     const peer = b4a.toString(info.publicKey, 'hex').slice(0, 16);
     console.log(`🤝 [JOIN] connected to origin peer ${peer}… — awaiting signed skill block`);
     socket.on('error', () => {});
-    socket.on('data', frameReader(socket, (wasm) => {
+    socket.on('data', frameReader(socket, (frame) => {
+      if (frame.length && frame[0] !== 0x00) return; // skip JSON control frames (RELAY_HELLO etc.)
+      const wasm = frame;
       const ok = verifySignedSkill(wasm, pinnedPub);
       if (!ok) {
         console.log('⛔ [JOIN] REJECTED: PQC seal did NOT verify against the pinned origin key. Not executing.');

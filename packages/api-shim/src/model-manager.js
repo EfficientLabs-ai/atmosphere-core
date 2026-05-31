@@ -19,10 +19,8 @@ import fetch from 'node-fetch';
 export const PROVIDERS = {
   openai: { matches: (m) => /^(gpt-|o1|o3|o4|chatgpt-)/i.test(m), endpoint: 'https://api.openai.com/v1/chat/completions', envKey: 'OPENAI_API_KEY', supported: true },
   google: { matches: (m) => /^gemini/i.test(m), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', envKey: 'GEMINI_API_KEY', supported: true },
-  // Anthropic is RECOGNIZED but not yet supported (its /v1/messages shape needs a translation
-  // adapter). Recognizing it lets us return an HONEST error for claude-* instead of silently
-  // substituting a local qwen model (which Codex flagged as dishonest).
-  anthropic: { matches: (m) => /^claude/i.test(m), envKey: 'ANTHROPIC_API_KEY', supported: false },
+  // Anthropic uses /v1/messages (different shape); a narrow text-first adapter translates it.
+  anthropic: { matches: (m) => /^claude/i.test(m), endpoint: 'https://api.anthropic.com/v1/messages', envKey: 'ANTHROPIC_API_KEY', supported: true, format: 'anthropic' },
 };
 
 const isForcedLocal = (m, env) =>
@@ -44,7 +42,7 @@ export function resolveRoute(model, env = process.env) {
       }
       const key = env[p.envKey];
       if (key && String(key).trim().length > 8) {
-        return { kind: 'byok', provider, endpoint: p.endpoint, envKey: p.envKey, model: m };
+        return { kind: 'byok', provider, endpoint: p.endpoint, envKey: p.envKey, model: m, format: p.format || 'openai' };
       }
       return { kind: 'error', provider, status: 501, allowAuto, reason: `Model "${m}" routes to ${provider}, but ${p.envKey} is not configured. Set the key (BYOK) or use a local model.` };
     }

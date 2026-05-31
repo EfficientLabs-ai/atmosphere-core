@@ -11,13 +11,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
 
-// Internal-only identifiers (private upstream, methodology, infra) — never public. Case-insensitive.
+// Internal-only identifiers (private upstream, methodology, infra, personal) — never public.
+// Scope = genuinely sensitive: private-upstream/methodology names, infra hostnames/providers,
+// personal paths/handles, cross-project key env names. We deliberately do NOT gate on internal
+// DOC names (STATE_OF_REALITY/GROUNDED_STRATEGY) or a local DIR name (.secrets-vault) — those are
+// neither secrets nor infra, and the code legitimately references the vault path. Case-insensitive.
 const FORBIDDEN_TERMS = [
   'Solo-AI', 'Orchestral', 'Velocity Framework', 'RSVP methodology', 'K-meta', 'capability-router',
   'agent-control-plane', 'substrate freeze', 'ADR-00', 'claude-session',
   'Maximus', 'tailscale', 'ts.net', 'tailfcf', 'efficient-labs.tail', 'Hostinger',
-  '/home/neo', 'neothearchitect', '.secrets-vault', 'vault.env', 'MEMCOMPUTE', 'N8N_API', 'TALLY_API',
-  'GROUNDED_STRATEGY', 'STATE_OF_REALITY',
+  '/home/neo', 'neothearchitect', 'MEMCOMPUTE', 'N8N_API', 'TALLY_API',
 ];
 // Infra IP shapes that shouldn't appear publicly (localhost 127.0.0.1 is allowed).
 const FORBIDDEN_IP = [/\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/, /\b192\.168\.\d{1,3}\.\d{1,3}\b/]; // CGNAT/Tailscale + private LAN

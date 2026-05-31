@@ -36,7 +36,7 @@ function publicKeyFromRaw(raw32) {
 
 /**
  * KeyringManager manages the cryptographic keypairs for the Atmos node.
- * Consumer nodes derive from a local OS keystore seed; Maximus nodes from a hardware-token seed.
+ * Consumer nodes derive from a local OS keystore seed; validator nodes from a hardware-token seed.
  */
 export class KeyringManager {
   constructor(nodeType = 'consumer') {
@@ -53,9 +53,9 @@ export class KeyringManager {
     if (seed) {
       const seedBuffer = typeof seed === 'string' ? b4a.from(seed, 'utf8') : seed;
       const seed32 = crypto.createHash('sha256').update(seedBuffer).digest(); // 32 bytes, deterministic
-      return this._setFromSeed(seed32, this.nodeType === 'maximus' ? { isHSMBacked: true } : {});
+      return this._setFromSeed(seed32, this.nodeType === 'validator' ? { isHSMBacked: true } : {});
     }
-    if (this.nodeType === 'maximus') return this._initHSMKeypair();
+    if (this.nodeType === 'validator') return this._initHSMKeypair();
     return this._initDPAPIKeypair();
   }
 

@@ -92,4 +92,9 @@ try {
 export { KeyringManager } from './keyring.js';
 export { P2PNetwork } from './p2p-network.js';
 export { StorageManager } from './storage.js';
-export { PaymentEngine } from './x402-payment.js';
+// PaymentEngine = the real state-channel settlement engine (PoW micro-invoices + rollups),
+// the one all three payment test suites exercise. X402InvoiceEngine = the lightweight
+// standalone invoice signer. Previously both were named `PaymentEngine`, so the barrel
+// silently exported the lighter one while the system relied on the settlement engine.
+export { PaymentEngine } from './src/billing/payment-engine.js';
+export { X402InvoiceEngine } from './x402-invoice.js';

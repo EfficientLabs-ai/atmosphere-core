@@ -2,10 +2,15 @@ import crypto from 'crypto';
 import b4a from 'b4a';
 
 /**
- * PaymentEngine implements the x402 payment protocol standard for P2P micro-transactions.
- * It coordinates secure stablecoin (USDC) billing across untrusted edge compute nodes.
+ * X402InvoiceEngine — standalone x402 payment-invoice signer for P2P micro-transactions.
+ *
+ * This is the LIGHTWEIGHT invoice layer: it generates and verifies signed x402 invoice
+ * envelopes (USDC micro-payments) using a node's keyring. It is intentionally separate from
+ * the full state-channel SETTLEMENT engine in `src/billing/payment-engine.js` (which handles
+ * state channels, PoW micro-invoices, lamport accounting, and batch rollups). Both used to be
+ * named `PaymentEngine`, which collided in the package barrel; this is the invoice half.
  */
-export class PaymentEngine {
+export class X402InvoiceEngine {
   /**
    * @param {KeyringManager} keyring - Cryptographic signature generator
    */
@@ -47,7 +52,7 @@ export class PaymentEngine {
    */
   verifyInvoice(paymentEnvelope) {
     const { invoice, signature } = paymentEnvelope;
-    
+
     if (invoice.protocol !== 'x402') {
       return false;
     }

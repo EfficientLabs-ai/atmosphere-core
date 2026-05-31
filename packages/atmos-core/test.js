@@ -1,7 +1,7 @@
 import assert from 'assert';
 import path from 'path';
 import fs from 'fs';
-import { KeyringManager, P2PNetwork, StorageManager, PaymentEngine } from './index.js';
+import { KeyringManager, P2PNetwork, StorageManager, X402InvoiceEngine } from './index.js';
 
 async function runTests() {
   console.log('⚡ Starting Atmos Core Integration Suite...\n');
@@ -44,11 +44,11 @@ async function runTests() {
   const recipientKeys = await recipientKeyring.init('recipient-seed-mock-for-testing');
   const recipientPkHex = recipientKeys.publicKey.toString('hex');
 
-  const payments = new PaymentEngine(consumerKeyring);
+  const payments = new X402InvoiceEngine(consumerKeyring);
   const envelope = payments.generateInvoice(recipientPkHex, 0.0005, 'task-uuid-abc-123');
   assert.strictEqual(envelope.invoice.protocol, 'x402', 'Should follow x402 protocol specification');
-  
-  const receiverPayments = new PaymentEngine(recipientKeyring);
+
+  const receiverPayments = new X402InvoiceEngine(recipientKeyring);
   // Re-verify the envelope from the perspective of recipient
   const txHash = receiverPayments.verifyInvoice(envelope);
   assert.ok(txHash, 'Micropayment invoice should verify securely');

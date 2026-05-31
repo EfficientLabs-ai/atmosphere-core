@@ -1,8 +1,8 @@
 # Design: Launch distribution architecture + the `stratos` CLI
 
-**Status:** ✅ Codex Pattern-C reviewed → **BUILD WITH CHANGES**. The **"✅ REVISED per Codex"**
-section at the bottom governs; the body is the original draft. Build proceeds in tested increments;
-Increment 1 (standalone enforcement) is DONE.
+**Status:** ✅ Codex Pattern-C reviewed → **BUILD WITH CHANGES** → **ALL 6 INCREMENTS BUILT + TESTED**.
+The **"✅ REVISED per Codex"** section governs. Remaining = operator-gated *release* steps only
+(create/push the public repos, `npm publish`) — no more code. The body below is the original draft.
 **Goal:** ship the **full launch structure** so StratosAgent and The Atmosphere are separately
 installable, with a clean user-facing CLI — zero-bug, clean-slate launch. Decisions locked with the
 operator (2026-06-01):
@@ -136,14 +136,22 @@ tests is necessary but not sufficient — **also** CI-ban mesh/browser imports i
 unpinned `npx`, `sudo npm -g`, auto-start services, silent second-stage installs, mutating/phone-home
 `doctor` are all footguns; the installer verifies a pinned signed artifact and does nothing privileged.
 
-### Revised build order (each its own tested increment)
-1. ✅ **Standalone enforcement** (import-graph fix + `test-standalone-graph.mjs`). DONE.
-2. Honest `stratos` bin (new) + `doctor` (read-only) + local-only `init`; `stratos-ctl` → thin shim;
-   delete fabricated `status/sync/compile/audit/logs`. + CLI tests.
-3. `@efficientlabs/stratos` manifest (`exports/bin/files/engines/deps/data-dir`) + clean packed-tarball
-   smoke (dev deps omitted) in CI.
-4. Installer: pinned-signed-artifact verifier, user-space, no privilege; `stratos service install` for
-   the daemon. Replace `scripts/install.sh`.
-5. Publish pipeline: allowlist-assemble → secret-scan + hard rejects → provenance manifest; `--push`
-   operator-gated.
-6. `.github` org flagship (profile + docs), anonymization-checked.
+### Revised build order (each its own tested increment) — ALL DONE
+1. ✅ **Standalone enforcement** — import-graph fix + `test-standalone-graph.mjs` (6 checks).
+2. ✅ **Honest `stratos` CLI** (new bin, read-only `doctor`, local-only `init`) + `stratos-ctl` → thin
+   shim with all fabricated `status/sync/compile/audit/logs` deleted. `test-stratos-cli.mjs` (25).
+3. ✅ **`@efficientlabs/stratos` manifest + assembler** (`scripts/build-product.mjs`) — exports/bin/
+   files/engines, pruned deps, allowlist, hard secret/junk reject, provenance. `npm pack` → real
+   106 kB tarball. `test-build-product.mjs` (20).
+4. ✅ **Fail-closed installer** (`scripts/install.sh`, user-space, no sudo/auto-start) + explicit
+   `stratos service install` (systemd --user, no root).
+5. ✅ **Publish/assemble pipeline** = the assembler in #3 (allowlist → secret-scan + hard rejects →
+   provenance manifest). `--out` assembles; `npm publish`/repo push stay operator-gated.
+6. ✅ **`.github` org flagship** (`org-flagship/`: profile + SECURITY + getting-started) +
+   `scripts/check-anonymization.mjs` gate (`test-check-anonymization.mjs`, 6).
+
+### Operator-gated RELEASE steps (no code; you pull the trigger)
+- Create `EfficientLabs-ai/.github` (public) and push `org-flagship/profile/README.md` etc. — run the
+  anonymization gate first.
+- `node scripts/build-product.mjs --out dist/stratos` → review → `npm publish` `@efficientlabs/stratos`.
+- Populate the `StratosAgent` / `TheAtmosphere` repos from the assembler output.

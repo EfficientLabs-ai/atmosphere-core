@@ -9,6 +9,7 @@ import { LocalInferenceEngine } from './src/local-inference.js';
 import { TaskClassifierRouter } from './src/task-router.js';
 import { resolveRoute, selectLocalModel } from './src/model-manager.js';
 import { passthroughCloud } from './src/routers/cloud-byok.js';
+import { passthroughAnthropic } from './src/routers/anthropic-adapter.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 
@@ -208,7 +209,8 @@ app.post('/v1/chat/completions', async (req, res) => {
       return res.status(403).json({ error: { message: 'BYOK routes are localhost-only', type: 'forbidden' } });
     }
     console.log(`[API-SHIM] 🔑 BYOK → ${route.provider} (${route.model}); user key, RAW body forwarded (no local context leaked).`);
-    return passthroughCloud(req, res, route, req.body); // raw, un-mutated body
+    if (route.format === 'anthropic') return passthroughAnthropic(req, res, route, req.body); // /v1/messages adapter
+    return passthroughCloud(req, res, route, req.body); // OpenAI-compatible raw pass-through
   }
   if (route.kind === 'error' && !route.allowAuto) {
     return res.status(route.status).json({ error: { message: route.reason, type: 'provider_not_configured' } });

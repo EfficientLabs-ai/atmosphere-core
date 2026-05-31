@@ -70,4 +70,7 @@ emit macos-arm64   darwin-arm64 node-darwin-arm64 node     unix    macos
 emit macos-x64     darwin-x64   node-darwin-x64   node     unix    macos
 emit linux-x64     linux-x64    node-linux-x64    node     unix    linux
 emit linux-arm64   linux-arm64  node-linux-arm64  node     unix    linux
+
+# #4 code-signing (env-gated; no-op without certs — see SIGNING.md)
+bash "$HERE/sign-bundles.sh" "$OUT" || true
 echo "Bundles in $OUT"

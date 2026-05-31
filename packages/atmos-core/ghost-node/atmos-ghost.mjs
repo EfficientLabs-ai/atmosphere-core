@@ -108,7 +108,7 @@ function verifySignedSkill(wasm) {
   return verifyPayload(signedRegion, signatureBundle, pinnedPub);
 }
 
-const GHOST_VERSION = '1.1.0'; // bumped when the bundle changes; origin can flag stale nodes.
+const GHOST_VERSION = '1.2.0'; // bumped when the bundle changes; origin can flag stale nodes.
 
 // Proof-of-capacity: the origin sends a random nonce + iteration count; we run a sha256 hash
 // CHAIN that many times (inherently sequential — can't be shortcut) and return the digest +
@@ -138,6 +138,7 @@ swarm.on('connection', (socket, info) => {
   console.log(`🤝 connected to origin peer ${peer}… — awaiting signed skill`);
   socket.on('error', () => {});
   let reported = false; // disclose capacity at most once per connection, only AFTER auth.
+  let computeFn = null; // the verified skill's compute(), reused for dispatched job slices.
   socket.on('data', frameReader(socket, (frame) => {
     // Frames from the origin are either a wasm skill (starts with the \0asm magic byte 0x00)
     // or a JSON control message (proof-of-capacity challenge / update notice).
@@ -151,6 +152,15 @@ swarm.on('connection', (socket, info) => {
           sendFrame(socket, Buffer.from(JSON.stringify({ type: 'PROOF', nonce: msg.nonce, iters, ...proof })));
         } else if (msg.type === 'UPDATE_AVAILABLE') {
           console.log(`⬆️  update available: origin runs v${msg.latest}, this node is v${GHOST_VERSION}. Re-run the latest bundle when convenient.`);
+        } else if (msg.type === 'JOB' && Array.isArray(msg.inputs)) {
+          // Distributed compute slice: run the already-verified skill over our assigned inputs.
+          if (!computeFn) { sendFrame(socket, Buffer.from(JSON.stringify({ type: 'RESULT', jobId: msg.jobId, error: 'skill not ready' }))); return; }
+          const t0 = process.hrtime.bigint();
+          const inputs = msg.inputs.slice(0, 100_000).map(n => n | 0);
+          const results = inputs.map(x => computeFn(x));
+          const computeMs = Math.round(Number(process.hrtime.bigint() - t0) / 1e6 * 100) / 100;
+          console.log(`🛠️  job ${String(msg.jobId).slice(0,8)}: computed ${inputs.length} inputs in ${computeMs} ms — returning slice.`);
+          sendFrame(socket, Buffer.from(JSON.stringify({ type: 'RESULT', jobId: msg.jobId, count: inputs.length, results, computeMs })));
         }
       } catch { /* ignore non-JSON control frames */ }
       return;
@@ -174,10 +184,11 @@ swarm.on('connection', (socket, info) => {
       } catch (e) { console.log('capacity report skipped:', e.message); }
     }
     WebAssembly.instantiate(wasm).then(({ instance }) => {
-      const result = instance.exports.compute(INPUT | 0);
+      computeFn = (x) => instance.exports.compute(x | 0); // cache for dispatched job slices
+      const result = computeFn(INPUT);
       executed++;
       console.log(`⚡ executed verified skill: compute(${INPUT}) = ${result}`);
-      console.log('🎉 This device is now a live, verified node on the Atmosphere mesh.');
+      console.log('🎉 This device is now a live, verified node on the Atmosphere mesh — standing by for jobs.');
       if (ONCE) stop(0);
     }).catch((e) => { console.log('❌ execution failed:', e.message); if (ONCE) stop(1); });
   }, MAX_SKILL_BYTES));

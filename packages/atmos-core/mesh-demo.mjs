@@ -124,16 +124,50 @@ async function runBroadcast() {
   // attacker-supplied nodeLabel/hostname — so one peer occupies exactly one slot no matter
   // what it claims. Hard ceiling + per-peer rate-limit bound memory and CPU under abuse.
   const fleet = new Map();
-  const FLEET_MAX = 4096, CAP_MIN_INTERVAL_MS = 10_000, MAX_CAP_BYTES = 1 << 16; // 64 KiB
+  const FLEET_MAX = 4096, CAP_MIN_INTERVAL_MS = 10_000, MAX_CAP_BYTES = 1 << 19; // 512 KiB (holds job RESULT slices)
   const lastCapAt = new Map();
   const challenges = new Map(); // peerKey -> { nonce, iters, sentAtNs }
   const PROOF_ITERS = 1_000_000;
-  const LATEST_VERSION = '1.1.0';
+  const LATEST_VERSION = '1.2.0';
   // Recompute the sha256 hash-chain to confirm a node actually did the sequential work.
   function chainDigest(nonceHex, iters) {
     let h = crypto.createHash('sha256').update(nonceHex).digest();
     for (let i = 0; i < iters; i++) h = crypto.createHash('sha256').update(h).digest();
     return h.toString('hex');
+  }
+
+  // ---- #2 distributed job scheduler: parallel compute fan-out -------------------------
+  const sockets = new Map();   // peerKey -> live socket (worker channel)
+  const pending = new Map();   // `${peerKey}:${jobId}` -> { resolve, slice }
+  let jobSeq = 0;
+  async function dispatchJob(maxInput, JOB_TIMEOUT_MS = 20_000) {
+    const workers = [...sockets.entries()].filter(([k]) => fleet.get(k)?.computeReady);
+    if (!workers.length) { console.log('🗂️  [JOB] no ready worker nodes connected — skipping dispatch.'); return null; }
+    const jobId = `job${++jobSeq}-${crypto.randomBytes(3).toString('hex')}`;
+    const inputs = Array.from({ length: maxInput }, (_, i) => i + 1);
+    const slices = workers.map(() => []);
+    inputs.forEach((x, i) => slices[i % workers.length].push(x)); // round-robin split
+    const startNs = process.hrtime.bigint();
+    const outputs = new Map(); const perNode = [];
+    console.log(`\n🗂️  [JOB ${jobId}] fanning ${maxInput} inputs across ${workers.length} node(s)…`);
+    await Promise.all(workers.map(([key, sock], idx) => new Promise((resolve) => {
+      const slice = slices[idx]; const node = fleet.get(key);
+      const pk = `${key}:${jobId}`;
+      const timer = setTimeout(() => { if (pending.delete(pk)) { perNode.push({ node: node?.nodeLabel || key.slice(0,8), count: 0, timedOut: true }); resolve(); } }, JOB_TIMEOUT_MS);
+      pending.set(pk, { resolve: () => { clearTimeout(timer); resolve(); }, slice, key, node, outputs, perNode });
+      try { sendFrame(sock, Buffer.from(JSON.stringify({ type: 'JOB', jobId, inputs: slice }))); }
+      catch { clearTimeout(timer); pending.delete(pk); resolve(); }
+    })));
+    const wallMs = Math.round(Number(process.hrtime.bigint() - startNs) / 1e6);
+    const done = perNode.filter(p => !p.timedOut).reduce((a, p) => a + p.count, 0);
+    console.log(`✅ [JOB ${jobId}] ${done}/${maxInput} results in ${wallMs} ms (parallel across the fleet):`);
+    for (const p of perNode) console.log(`     ${p.node.padEnd(12)} ${p.timedOut ? 'TIMED OUT' : p.count + ' inputs in ' + p.computeMs + ' ms'}`);
+    const sample = [...outputs.entries()].slice(0, 5).map(([i, o]) => `${i}->${o}`).join(', ');
+    console.log(`     sample: ${sample}${outputs.size > 5 ? ', …' : ''}`);
+    if (args['jobs-out'] && args['jobs-out'] !== true) {
+      try { fs.writeFileSync(args['jobs-out'], JSON.stringify({ jobId, maxInput, wallMs, workers: perNode, completed: done }, null, 2)); } catch {}
+    }
+    return { jobId, wallMs, done };
   }
   const os = await import('node:os');
   const self = {
@@ -188,8 +222,9 @@ async function runBroadcast() {
     console.log(`🤝 [BROADCAST] peer connected: ${peer}… — sending signed skill block`);
     sendFrame(socket, wasm);
     served++;
+    sockets.set(peerKey, socket);
     socket.on('error', () => {});
-    socket.on('close', () => { fleet.delete(peerKey); lastCapAt.delete(peerKey); challenges.delete(peerKey); });
+    socket.on('close', () => { fleet.delete(peerKey); lastCapAt.delete(peerKey); challenges.delete(peerKey); sockets.delete(peerKey); });
     socket.on('data', frameReader(socket, (frame) => {
       let msg = null;
       try { msg = JSON.parse(frame.toString('utf8')); } catch { return; }
@@ -208,6 +243,7 @@ async function runBroadcast() {
           return;
         }
         const fresh = !fleet.has(peerKey);
+        cap.computeReady = true; // node reports capacity only after verifying the skill it can run
         fleet.set(peerKey, cap); // keyed on pubkey — a peer cannot impersonate another
         console.log(`📊 [BROADCAST] capacity from ${cap.nodeLabel} v${cap.version} (${peer}…): ${cap.cores}c ${cap.ramGB}GB ${cap.bench.singleThreadMopsPerSec} Mops/s ${fresh ? '(new node)' : '(updated)'}`);
         if (cap.version !== LATEST_VERSION) {
@@ -237,12 +273,37 @@ async function runBroadcast() {
         printFleet();
         return;
       }
+
+      if (msg.type === 'RESULT') {
+        const pk = `${peerKey}:${msg.jobId}`;
+        const job = pending.get(pk);
+        if (!job) return;
+        pending.delete(pk);
+        if (Array.isArray(msg.results) && msg.results.length === job.slice.length) {
+          job.slice.forEach((input, i) => job.outputs.set(input, msg.results[i]));
+          job.perNode.push({ node: job.node?.nodeLabel || peer, count: msg.results.length, computeMs: msg.computeMs });
+        } else {
+          job.perNode.push({ node: job.node?.nodeLabel || peer, count: 0, timedOut: true });
+        }
+        job.resolve();
+        return;
+      }
     }, MAX_CAP_BYTES));
   });
   swarm.join(topicKey, { server: true, client: true });
   await swarm.flush();
   console.log(`🌐 [BROADCAST] announced on the DHT. Waiting for peers… (served so far: ${served}). Ctrl-C to stop.`);
   printFleet();
+
+  // #2 scheduler trigger: periodically fan a compute job across the fleet (demo/heartbeat of
+  // real distributed work). Opt-in via --job-interval <seconds> [--job-max <N inputs>].
+  if (args['job-interval'] && args['job-interval'] !== true) {
+    const everyMs = Math.max(5, Number(args['job-interval'])) * 1000;
+    const jobMax = Math.min(Math.max(Number(args['job-max'] || 60), 1), 50_000);
+    let busy = false;
+    setInterval(async () => { if (busy) return; busy = true; try { await dispatchJob(jobMax); } catch (e) { console.warn('[JOB] dispatch error:', e.message); } busy = false; }, everyMs);
+    console.log(`🗂️  [JOB] scheduler armed: every ${everyMs/1000}s fan ${jobMax} inputs across ready nodes.`);
+  }
 }
 
 async function runJoin() {

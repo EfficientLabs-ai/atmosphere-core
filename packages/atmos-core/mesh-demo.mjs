@@ -53,12 +53,19 @@ function sendFrame(socket, buf) {
   len.writeUInt32BE(buf.length, 0);
   socket.write(Buffer.concat([len, buf]));
 }
-function frameReader(onFrame) {
+// Length-framed reader with a HARD size cap: an oversized declared length destroys the
+// socket before any buffering (DoS guard on an untrusted Noise stream).
+function frameReader(socket, onFrame, maxLen) {
   let acc = Buffer.alloc(0), need = -1;
   return (chunk) => {
     acc = Buffer.concat([acc, chunk]);
     while (true) {
-      if (need < 0) { if (acc.length < 4) return; need = acc.readUInt32BE(0); acc = acc.subarray(4); }
+      if (need < 0) {
+        if (acc.length < 4) return;
+        need = acc.readUInt32BE(0);
+        if (need > maxLen) { socket.destroy(); return; }
+        acc = acc.subarray(4);
+      }
       if (acc.length < need) return;
       const frame = acc.subarray(0, need); acc = acc.subarray(need); need = -1;
       onFrame(frame);
@@ -103,49 +110,78 @@ async function runBroadcast() {
   console.log('\n   ── Run THIS on your device (from the repo root) ──');
   console.log(`   node packages/atmos-core/mesh-demo.mjs join --topic ${TOPIC_NAME} --input 9 --pubkey ${pinnedB64}\n`);
 
-  // 4. Join the global DHT, serve the signed skill, and AGGREGATE real capacity reports.
-  //    fleet keyed by nodeLabel@hostname (stable) so reconnects/my-own-tests don't double-count.
+  // 4. Join the global DHT, serve the signed skill, and aggregate self-reported capacity,
+  //    keyed on the peer's cryptographic pubkey with bounds + rate-limits (see below).
   const swarm = new Hyperswarm();
   let served = 0;
+  // Fleet is keyed on the Hyperswarm PEER PUBKEY (cryptographic identity), NOT on any
+  // attacker-supplied nodeLabel/hostname — so one peer occupies exactly one slot no matter
+  // what it claims. Hard ceiling + per-peer rate-limit bound memory and CPU under abuse.
   const fleet = new Map();
+  const FLEET_MAX = 4096, CAP_MIN_INTERVAL_MS = 10_000, MAX_CAP_BYTES = 1 << 16; // 64 KiB
+  const lastCapAt = new Map();
   const os = await import('node:os');
   const self = {
-    nodeLabel: 'origin-vps', hostname: os.hostname(),
-    platform: process.platform, arch: process.arch,
+    nodeLabel: 'origin-vps', platform: process.platform, arch: process.arch,
     cpuModel: os.cpus()[0]?.model?.trim() || 'unknown',
     cores: os.cpus().length,
     ramGB: Math.round(os.totalmem() / 1e9 * 10) / 10
   };
+  // Validate + clamp an untrusted capability frame. Returns a clean object or null.
+  function sanitizeCapability(m) {
+    if (!m || m.type !== 'CAPABILITY') return null;
+    const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+    const num = (v, lo, hi) => (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : 0);
+    const mops = num(m.bench?.singleThreadMopsPerSec, 0, 1e7);
+    return {
+      nodeLabel: str(m.nodeLabel, 64) || 'node',
+      platform: str(m.platform, 32), arch: str(m.arch, 16),
+      cpuModel: str(m.cpuModel, 128) || 'unknown',
+      cores: Math.round(num(m.cores, 0, 4096)),
+      ramGB: Math.round(num(m.ramGB, 0, 1e6) * 10) / 10,
+      bench: { singleThreadMopsPerSec: mops }
+    };
+  }
   function printFleet() {
     const nodes = [self, ...fleet.values()];
     const cores = nodes.reduce((a, n) => a + (n.cores || 0), 0);
     const ram = Math.round(nodes.reduce((a, n) => a + (n.ramGB || 0), 0) * 10) / 10;
     const mops = nodes.reduce((a, n) => a + (n.bench?.singleThreadMopsPerSec || 0) * (n.cores || 1), 0);
-    console.log('\n===== ATMOSPHERE MESH — MEASURED COLLECTIVE CAPACITY =====');
+    // SELF-REPORTED, not cryptographically proven: a node's claimed specs are trusted only as
+    // far as the node is. A public mesh needs a proof-of-capacity challenge before this is "measured".
+    console.log('\n===== ATMOSPHERE MESH — SELF-REPORTED COLLECTIVE CAPACITY =====');
     for (const n of nodes) {
-      console.log(`  • ${(n.nodeLabel || 'node').padEnd(12)} ${String(n.cores || '?')+'c'} ${String(n.ramGB||'?')+'GB'}  ${n.bench ? n.bench.singleThreadMopsPerSec+' Mops/s' : '(origin, not benched)'}  ${n.cpuModel || ''}`);
+      console.log(`  • ${(n.nodeLabel || 'node').padEnd(12)} ${String(n.cores || '?')+'c'} ${String(n.ramGB||'?')+'GB'}  ${n.bench?.singleThreadMopsPerSec ? n.bench.singleThreadMopsPerSec+' Mops/s' : '(origin, not benched)'}  ${n.cpuModel || ''}`);
     }
-    console.log(`  TOTAL: ${nodes.length} nodes · ${cores} cores · ${ram} GB RAM · ~${Math.round(mops)} aggregate Mops/s (cores×single-thread)`);
-    console.log('==========================================================\n');
+    console.log(`  TOTAL: ${nodes.length} nodes · ${cores} cores · ${ram} GB RAM · ~${Math.round(mops)} aggregate Mops/s (self-reported, cores×single-thread)`);
+    console.log('===============================================================\n');
   }
   swarm.on('connection', (socket, info) => {
-    const peer = b4a.toString(info.publicKey, 'hex').slice(0, 16);
+    const peerKey = b4a.toString(info.publicKey, 'hex');
+    const peer = peerKey.slice(0, 16);
     console.log(`🤝 [BROADCAST] peer connected: ${peer}… — sending signed skill block`);
     sendFrame(socket, wasm);
     served++;
     socket.on('error', () => {});
-    socket.on('data', frameReader((frame) => {
-      try {
-        const msg = JSON.parse(frame.toString('utf8'));
-        if (msg && msg.type === 'CAPABILITY') {
-          const key = `${msg.nodeLabel}@${msg.hostname}`;
-          const fresh = !fleet.has(key);
-          fleet.set(key, msg);
-          console.log(`📊 [BROADCAST] capacity from ${key}: ${msg.cores}c ${msg.ramGB}GB ${msg.bench?.singleThreadMopsPerSec} Mops/s ${fresh ? '(new node)' : '(updated)'}`);
-          printFleet();
-        }
-      } catch { /* not a capability frame */ }
-    }));
+    socket.on('close', () => { fleet.delete(peerKey); lastCapAt.delete(peerKey); });
+    socket.on('data', frameReader(socket, (frame) => {
+      // Per-peer rate-limit: ignore capability spam.
+      const now = process.hrtime.bigint();
+      const lastNs = lastCapAt.get(peerKey);
+      if (lastNs && Number(now - lastNs) / 1e6 < CAP_MIN_INTERVAL_MS) return;
+      let cap = null;
+      try { cap = sanitizeCapability(JSON.parse(frame.toString('utf8'))); } catch { return; }
+      if (!cap) return;
+      lastCapAt.set(peerKey, now);
+      if (!fleet.has(peerKey) && fleet.size >= FLEET_MAX) {
+        console.warn(`⚠️ [BROADCAST] fleet at capacity (${FLEET_MAX}); ignoring new peer ${peer}.`);
+        return;
+      }
+      const fresh = !fleet.has(peerKey);
+      fleet.set(peerKey, cap); // keyed on pubkey — a peer cannot impersonate another
+      console.log(`📊 [BROADCAST] capacity from ${cap.nodeLabel} (${peer}…): ${cap.cores}c ${cap.ramGB}GB ${cap.bench.singleThreadMopsPerSec} Mops/s ${fresh ? '(new node)' : '(updated)'}`);
+      printFleet();
+    }, MAX_CAP_BYTES));
   });
   swarm.join(topicKey, { server: true, client: true });
   await swarm.flush();
@@ -169,7 +205,7 @@ async function runJoin() {
     const peer = b4a.toString(info.publicKey, 'hex').slice(0, 16);
     console.log(`🤝 [JOIN] connected to origin peer ${peer}… — awaiting signed skill block`);
     socket.on('error', () => {});
-    socket.on('data', frameReader((wasm) => {
+    socket.on('data', frameReader(socket, (wasm) => {
       const ok = verifySignedSkill(wasm, pinnedPub);
       if (!ok) {
         console.log('⛔ [JOIN] REJECTED: PQC seal did NOT verify against the pinned origin key. Not executing.');
@@ -182,7 +218,7 @@ async function runJoin() {
         console.log('🎉 [JOIN] First real cross-machine Atmosphere link CONFIRMED — verified skill ran on this device.');
         finish(0);
       }).catch((e) => { console.log('❌ [JOIN] wasm execution failed:', e.message); finish(1); });
-    }));
+    }, 1 << 20)); // cap inbound skill frame at 1 MiB
   });
   swarm.join(topicKey, { server: true, client: true });
   await swarm.flush();

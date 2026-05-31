@@ -39,12 +39,19 @@ const pinnedPub = decB(typeof cfg.pinnedPubKey === 'string'
   ? JSON.parse(b4a.toString(b4a.from(cfg.pinnedPubKey, 'base64'), 'utf8'))
   : cfg.pinnedPubKey);
 
-function frameReader(onFrame) {
+// Length-framed reader with a HARD size cap: a peer that declares an oversized frame gets
+// its socket destroyed before we ever buffer/allocate it (DoS guard on an untrusted stream).
+function frameReader(socket, onFrame, maxLen) {
   let acc = Buffer.alloc(0), need = -1;
   return (chunk) => {
     acc = Buffer.concat([acc, chunk]);
     while (true) {
-      if (need < 0) { if (acc.length < 4) return; need = acc.readUInt32BE(0); acc = acc.subarray(4); }
+      if (need < 0) {
+        if (acc.length < 4) return;
+        need = acc.readUInt32BE(0);
+        if (need > maxLen) { socket.destroy(); return; }
+        acc = acc.subarray(4);
+      }
       if (acc.length < need) return;
       const frame = acc.subarray(0, need); acc = acc.subarray(need); need = -1;
       onFrame(frame);
@@ -67,21 +74,24 @@ function microbenchmark() {
   // Mops/s on this single-thread loop — a comparable cross-machine score.
   return { singleThreadMopsPerSec: Math.round((5_000_000 / ms) / 1000 * 100) / 100, loopMs: Math.round(ms) };
 }
-function buildCapability() {
+// Built at most ONCE per process and cached — the benchmark is a CPU cost we never want an
+// untrusted peer to be able to trigger repeatedly. Drops hostname/loadavg to reduce
+// fingerprinting; nodeLabel (operator-chosen) is the only identity we disclose.
+let _cap = null;
+function getCapabilityOnce() {
+  if (_cap) return _cap;
   const cpus = os.cpus() || [];
-  const bench = microbenchmark();
-  return {
+  _cap = {
     type: 'CAPABILITY',
-    nodeLabel: cfg.nodeLabel || 'ghost',
-    hostname: os.hostname(),
+    nodeLabel: String(cfg.nodeLabel || 'ghost').slice(0, 64),
     platform: process.platform,
     arch: process.arch,
-    cpuModel: cpus[0]?.model?.trim() || 'unknown',
+    cpuModel: (cpus[0]?.model?.trim() || 'unknown').slice(0, 128),
     cores: cpus.length,
     ramGB: Math.round(os.totalmem() / 1e9 * 10) / 10,
-    loadAvg: os.loadavg()[0],
-    bench
+    bench: microbenchmark()
   };
+  return _cap;
 }
 
 function verifySignedSkill(wasm) {
@@ -106,23 +116,30 @@ const swarm = new Hyperswarm();
 let executed = 0;
 const stop = (code) => swarm.destroy().finally(() => process.exit(code));
 
+const MAX_SKILL_BYTES = 1 << 20; // 1 MiB — skills are ~5 KB; anything larger is hostile.
 swarm.on('connection', (socket, info) => {
   const peer = b4a.toString(info.publicKey, 'hex').slice(0, 16);
   console.log(`🤝 connected to origin peer ${peer}… — awaiting signed skill`);
   socket.on('error', () => {});
-  // Report this device's real capacity to the origin so the mesh can aggregate true capacity.
-  try {
-    const cap = buildCapability();
-    console.log(`📊 reporting capacity: ${cap.cores} cores, ${cap.ramGB} GB, ${cap.bench.singleThreadMopsPerSec} Mops/s (${cap.cpuModel}).`);
-    sendFrame(socket, Buffer.from(JSON.stringify(cap)));
-  } catch (e) { console.log('capacity report skipped:', e.message); }
-  socket.on('data', frameReader((wasm) => {
+  let reported = false; // disclose capacity at most once per connection, only AFTER auth.
+  socket.on('data', frameReader(socket, (wasm) => {
     if (!verifySignedSkill(wasm)) {
       console.log('⛔ REJECTED: PQC seal invalid / wrong origin — NOT executing.');
       if (ONCE) stop(1);
       return;
     }
     console.log(`✅ VERIFIED: ML-DSA-65 + Ed25519 seal valid (${wasm.length} B from the pinned origin).`);
+    // Only NOW — after the peer proved it holds an origin-signed skill — do we spend CPU on
+    // the benchmark and disclose specs. An unauthenticated peer can neither make us benchmark
+    // nor fingerprint us.
+    if (!reported) {
+      reported = true;
+      try {
+        const cap = getCapabilityOnce();
+        console.log(`📊 reporting capacity: ${cap.cores} cores, ${cap.ramGB} GB, ${cap.bench.singleThreadMopsPerSec} Mops/s (${cap.cpuModel}).`);
+        sendFrame(socket, Buffer.from(JSON.stringify(cap)));
+      } catch (e) { console.log('capacity report skipped:', e.message); }
+    }
     WebAssembly.instantiate(wasm).then(({ instance }) => {
       const result = instance.exports.compute(INPUT | 0);
       executed++;
@@ -130,7 +147,7 @@ swarm.on('connection', (socket, info) => {
       console.log('🎉 This device is now a live, verified node on the Atmosphere mesh.');
       if (ONCE) stop(0);
     }).catch((e) => { console.log('❌ execution failed:', e.message); if (ONCE) stop(1); });
-  }));
+  }, MAX_SKILL_BYTES));
 });
 
 swarm.join(topicKey, { server: true, client: true });

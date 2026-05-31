@@ -9,11 +9,20 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { getAgentName as configAgentName } from './agent-config.js';
 
 const DEFAULT_NAME = 'StratosAgent';
 
-/** Resolve the agent's name: env var > .env.local > default. Never throws. */
+/**
+ * Resolve the agent's name. agent-config.json is authoritative (it migrates from .env.local on
+ * first load), so chat/CLI renames take effect everywhere. Env/.env.local remain a never-throw
+ * fallback for the brief window before the config file exists.
+ */
 export function getAgentName() {
+  try {
+    const fromConfig = configAgentName();
+    if (fromConfig && fromConfig.trim() && fromConfig !== DEFAULT_NAME) return fromConfig.trim().slice(0, 48);
+  } catch { /* config unavailable — fall through */ }
   if (process.env.STRATOS_AGENT_NAME && process.env.STRATOS_AGENT_NAME.trim()) {
     return process.env.STRATOS_AGENT_NAME.trim().slice(0, 48);
   }

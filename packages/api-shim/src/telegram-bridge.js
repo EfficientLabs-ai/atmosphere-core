@@ -6,6 +6,8 @@ import TelegramBot from 'node-telegram-bot-api';
 import { UnifiedDispatcher } from '../../stratos-agent/index.js';
 import { getAgentName, capabilitiesSummary } from '../../stratos-agent/src/core/identity.js';
 import * as chatHistory from './chat-history.js';
+import { scanForSecrets, SECRET_REFUSAL } from './secret-guard.js';
+import { handleConfigIntent } from './config-intents.js';
 
 /**
  * Telegram Bot Bridge: Interfaces user phone commands
@@ -40,6 +42,20 @@ export class TelegramBridge {
   }
 
   /**
+   * Best-effort list of locally-installed Ollama models (for honest "is this model ready?" reporting
+   * in config-intents). Short timeout; returns [] on any failure rather than blocking the chat.
+   */
+  async probeInstalledModels() {
+    try {
+      const host = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+      const r = await fetch(`${host}/api/tags`, { timeout: 1500 });
+      if (!r.ok) return [];
+      const j = await r.json();
+      return Array.isArray(j.models) ? j.models.map((m) => m.name).filter(Boolean) : [];
+    } catch { return []; }
+  }
+
+  /**
    * Initializes and starts the Telegram Bot polling daemon.
    */
   start() {
@@ -62,7 +78,15 @@ export class TelegramBridge {
           return;
         }
 
-        // Normalize incoming requests using UnifiedDispatcher
+        // 🔒 SECRET GUARD — runs on the RAW inbound message BEFORE normalization, because the
+        // dispatcher's normalizer verbose-logs the text. A key-shaped message is refused and
+        // forwarded NOWHERE (never normalized, logged, persisted, or sent to the model).
+        if (scanForSecrets(`${msg.text || ''} ${msg.caption || ''}`)) {
+          await this.bot.sendMessage(chatId, SECRET_REFUSAL).catch(() => {});
+          return;
+        }
+
+        // Normalize incoming requests using UnifiedDispatcher (safe now — no secret present)
         const normalized = this.dispatcher.normalizeIncomingRequest('telegram', msg);
         const text = normalized.text;
 
@@ -159,6 +183,20 @@ export class TelegramBridge {
           }
         }
 
+        // Owner-gated setup shortcuts (deterministic). Falls through to normal chat if not a config
+        // intent. Privileged grants / cloud-provider switches / API keys are explained, never applied.
+        try {
+          const isDM = !!(msg.chat && msg.chat.type === 'private');
+          const installedModels = await this.probeInstalledModels();
+          const intent = handleConfigIntent({ text, chatId, isDM, installedModels });
+          if (intent.handled) {
+            await this.sendFormattedMessage(chatId, intent.reply);
+            return;
+          }
+        } catch (cfgErr) {
+          if (this.verbose) console.warn('[Telegram Bridge] config-intent skipped:', cfgErr.message);
+        }
+
         try {
           // Per-chat memory: record the user turn, send the running conversation (Tier 0 windows it).
           chatHistory.appendUser(chatId, text);
@@ -244,6 +282,12 @@ export class TelegramBridge {
       const { AudioIngestionEngine } = await import('../../stratos-agent/src/sensory/audio-ingestion.js');
       const ingestion = new AudioIngestionEngine({ verbose: this.verbose });
       const transcribedText = await ingestion.transcribeSpeech(wavPath);
+
+      // 🔒 SECRET GUARD on the transcript too — refuse before logging/persisting/inferring.
+      if (scanForSecrets(transcribedText)) {
+        await this.bot.sendMessage(chatId, SECRET_REFUSAL).catch(() => {});
+        return;
+      }
 
       if (this.verbose) {
         console.log(`🎙️ [Telegram Voice] Transcribed text: "${transcribedText}"`);

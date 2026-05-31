@@ -15,6 +15,7 @@
 import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseCustomSection, findCustomSectionRange } from './wasm-sections.js';
@@ -50,6 +51,38 @@ function frameReader(onFrame) {
     }
   };
 }
+function sendFrame(socket, buf) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(buf.length, 0);
+  socket.write(Buffer.concat([len, buf]));
+}
+
+// Real capacity report: actual hardware + a live CPU microbenchmark (no spoofed numbers).
+// NOTE: specs are self-reported — trustworthy for your own fleet; a public mesh would add a
+// challenge-based proof-of-capacity. The benchmark is measured here, not declared.
+function microbenchmark() {
+  const t0 = process.hrtime.bigint();
+  let x = 0;
+  for (let i = 0; i < 5_000_000; i++) x = (x + Math.sqrt(i * 2.0 + 1.0)) % 1e9;
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  // Mops/s on this single-thread loop — a comparable cross-machine score.
+  return { singleThreadMopsPerSec: Math.round((5_000_000 / ms) / 1000 * 100) / 100, loopMs: Math.round(ms) };
+}
+function buildCapability() {
+  const cpus = os.cpus() || [];
+  const bench = microbenchmark();
+  return {
+    type: 'CAPABILITY',
+    nodeLabel: cfg.nodeLabel || 'ghost',
+    hostname: os.hostname(),
+    platform: process.platform,
+    arch: process.arch,
+    cpuModel: cpus[0]?.model?.trim() || 'unknown',
+    cores: cpus.length,
+    ramGB: Math.round(os.totalmem() / 1e9 * 10) / 10,
+    loadAvg: os.loadavg()[0],
+    bench
+  };
+}
 
 function verifySignedSkill(wasm) {
   if (!parseCustomSection(wasm, 'stratos.gsi.pathway')) return false;
@@ -77,6 +110,12 @@ swarm.on('connection', (socket, info) => {
   const peer = b4a.toString(info.publicKey, 'hex').slice(0, 16);
   console.log(`🤝 connected to origin peer ${peer}… — awaiting signed skill`);
   socket.on('error', () => {});
+  // Report this device's real capacity to the origin so the mesh can aggregate true capacity.
+  try {
+    const cap = buildCapability();
+    console.log(`📊 reporting capacity: ${cap.cores} cores, ${cap.ramGB} GB, ${cap.bench.singleThreadMopsPerSec} Mops/s (${cap.cpuModel}).`);
+    sendFrame(socket, Buffer.from(JSON.stringify(cap)));
+  } catch (e) { console.log('capacity report skipped:', e.message); }
   socket.on('data', frameReader((wasm) => {
     if (!verifySignedSkill(wasm)) {
       console.log('⛔ REJECTED: PQC seal invalid / wrong origin — NOT executing.');

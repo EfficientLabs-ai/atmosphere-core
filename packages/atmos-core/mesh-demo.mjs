@@ -103,19 +103,54 @@ async function runBroadcast() {
   console.log('\n   ── Run THIS on your device (from the repo root) ──');
   console.log(`   node packages/atmos-core/mesh-demo.mjs join --topic ${TOPIC_NAME} --input 9 --pubkey ${pinnedB64}\n`);
 
-  // 4. Join the global DHT and serve the signed skill to every peer that hole-punches in.
+  // 4. Join the global DHT, serve the signed skill, and AGGREGATE real capacity reports.
+  //    fleet keyed by nodeLabel@hostname (stable) so reconnects/my-own-tests don't double-count.
   const swarm = new Hyperswarm();
   let served = 0;
+  const fleet = new Map();
+  const os = await import('node:os');
+  const self = {
+    nodeLabel: 'origin-vps', hostname: os.hostname(),
+    platform: process.platform, arch: process.arch,
+    cpuModel: os.cpus()[0]?.model?.trim() || 'unknown',
+    cores: os.cpus().length,
+    ramGB: Math.round(os.totalmem() / 1e9 * 10) / 10
+  };
+  function printFleet() {
+    const nodes = [self, ...fleet.values()];
+    const cores = nodes.reduce((a, n) => a + (n.cores || 0), 0);
+    const ram = Math.round(nodes.reduce((a, n) => a + (n.ramGB || 0), 0) * 10) / 10;
+    const mops = nodes.reduce((a, n) => a + (n.bench?.singleThreadMopsPerSec || 0) * (n.cores || 1), 0);
+    console.log('\n===== ATMOSPHERE MESH — MEASURED COLLECTIVE CAPACITY =====');
+    for (const n of nodes) {
+      console.log(`  • ${(n.nodeLabel || 'node').padEnd(12)} ${String(n.cores || '?')+'c'} ${String(n.ramGB||'?')+'GB'}  ${n.bench ? n.bench.singleThreadMopsPerSec+' Mops/s' : '(origin, not benched)'}  ${n.cpuModel || ''}`);
+    }
+    console.log(`  TOTAL: ${nodes.length} nodes · ${cores} cores · ${ram} GB RAM · ~${Math.round(mops)} aggregate Mops/s (cores×single-thread)`);
+    console.log('==========================================================\n');
+  }
   swarm.on('connection', (socket, info) => {
     const peer = b4a.toString(info.publicKey, 'hex').slice(0, 16);
     console.log(`🤝 [BROADCAST] peer connected: ${peer}… — sending signed skill block`);
     sendFrame(socket, wasm);
     served++;
     socket.on('error', () => {});
+    socket.on('data', frameReader((frame) => {
+      try {
+        const msg = JSON.parse(frame.toString('utf8'));
+        if (msg && msg.type === 'CAPABILITY') {
+          const key = `${msg.nodeLabel}@${msg.hostname}`;
+          const fresh = !fleet.has(key);
+          fleet.set(key, msg);
+          console.log(`📊 [BROADCAST] capacity from ${key}: ${msg.cores}c ${msg.ramGB}GB ${msg.bench?.singleThreadMopsPerSec} Mops/s ${fresh ? '(new node)' : '(updated)'}`);
+          printFleet();
+        }
+      } catch { /* not a capability frame */ }
+    }));
   });
   swarm.join(topicKey, { server: true, client: true });
   await swarm.flush();
   console.log(`🌐 [BROADCAST] announced on the DHT. Waiting for peers… (served so far: ${served}). Ctrl-C to stop.`);
+  printFleet();
 }
 
 async function runJoin() {

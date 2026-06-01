@@ -88,7 +88,7 @@ app.use(bodyParser.json());
 // Request tracer helper
 function logRequest(req, target) {
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] 📡 Intercepted [${req.method}] ${req.path} -> Attempting routing to: ${target}`);
+  console.log(`[${timestamp}] 📡 Gateway [${req.method}] ${req.path} -> routing to: ${target}`);
 }
 
 function queryToVector(query, dimensions = 3) {
@@ -163,7 +163,7 @@ async function bootstrapVectorDB(bank) {
       {
         id: 'doc-api-shim-daemon',
         vector: [0.3, 0.4, 0.8],
-        text: 'Persistent API Shim Interceptor Daemon. Binds strictly to 127.0.0.1:4000 to intercept OpenAI and Anthropic API payloads and route them through local LLM or Stratos agent layers.',
+        text: 'Sovereign API Gateway. Binds strictly to 127.0.0.1 and routes the user\'s OWN OpenAI/Anthropic-compatible calls through local open-weight models or the Stratos agent layer — it never automates or scrapes any third-party subscription.',
         metadata: { category: 'integration', security: 'localhost-only' }
       }
     ]);
@@ -749,7 +749,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     uptime: process.uptime(),
-    shim: 'Atmos Interception Bridge Daemon',
+    shim: 'Atmos Sovereign API Gateway',
     binding: '127.0.0.1',
     port: PORT,
     upstream: STRATOS_AGENT_URL
@@ -767,9 +767,9 @@ export function startServer() {
       console.error('[API-SHIM] Failed to initialize during startup:', err);
     }
     console.log(`================================================================`);
-    console.log(`🛡️  Atmos API Interception Shield Daemon successfully started!  🛡️`);
-    console.log(`📡 Listening strictly on http://127.0.0.1:${PORT}`);
-    console.log(`🔗 Upstream StratosAgent Target: ${STRATOS_AGENT_URL}`);
+    console.log(`🛡️  Atmos Sovereign API Gateway online  🛡️`);
+    console.log(`📡 Listening strictly on http://127.0.0.1:${PORT} (routes YOUR calls: local open-weight ⇄ your BYOK cloud)`);
+    console.log(`🔗 Upstream StratosAgent (sovereign frontier tier): ${STRATOS_AGENT_URL}`);
     console.log(`⏳ Timeout configuration: ${STRATOS_TIMEOUT}ms`);
     console.log(`================================================================`);
   });

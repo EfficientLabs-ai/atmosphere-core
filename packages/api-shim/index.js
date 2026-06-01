@@ -15,6 +15,7 @@ import { TelegramBridge } from './src/telegram-bridge.js';
 import { DiscordAdapter } from './src/omni-gateway/discord-adapter.js';
 import { SlackAdapter } from './src/omni-gateway/slack-adapter.js';
 import { MatrixAdapter } from './src/omni-gateway/matrix-adapter.js';
+import { SignalAdapter } from './src/omni-gateway/signal-adapter.js';
 import { startLearnScheduler, isEnabled as evolutionEnabled } from './src/self-evolution-runtime.js';
 
 console.log('⚡ Initializing Atmos API Shim Layer...');
@@ -38,6 +39,10 @@ slack.start().catch((e) => console.warn('⚠️  [Slack] failed to start:', e.me
 const matrix = new MatrixAdapter();
 matrix.start().catch((e) => console.warn('⚠️  [Matrix] failed to start:', e.message));
 
+// Signal channel (signal-cli, outward-connecting) — starts only if SIGNAL_NUMBER is set + signal-cli is registered.
+const signal = new SignalAdapter();
+signal.start().catch((e) => console.warn('⚠️  [Signal] failed to start:', e.message));
+
 // Hook B (LEARN — flag-gated, default OFF): start the nightly self-evolution compiler that
 // harvests successful traces → induces specs → compiles + PQC-signs executing wasm skills.
 // Inert unless STRATOS_EVOLUTION=1 is set; a reload without that flag changes nothing.
@@ -60,6 +65,9 @@ const shutdown = (signal) => {
   }
   if (matrix) {
     matrix.stop();
+  }
+  if (signal) {
+    signal.stop();
   }
 
   server.close(() => {

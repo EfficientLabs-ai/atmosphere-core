@@ -103,4 +103,12 @@ ok(menv.MATRIX_ACCESS_TOKEN === 'syt_REAL_MATRIX_TOKEN', 'the encrypted access t
 ok(menv.MATRIX_HOMESERVER === 'https://matrix.org', 'the non-secret homeserver URL resolves into MATRIX_HOMESERVER');
 ok(menv.MATRIX_OWNER_ID === '@owner:matrix.org', 'the matrix owner (@user:server) resolves into MATRIX_OWNER_ID');
 
+console.log('\n=== Signal (token-less): number + owner resolve to env WITHOUT a vault token ===');
+ok(channelDef('signal').status === 'ready' && !channelDef('signal').credLabel, 'signal is ready + token-less (no credLabel)');
+config.setMessagingChannel('signal', { enabled: true, ownerId: '+15550000001', extra: { number: '+15559999999' } });
+const sigEnv = {};
+const sigWired = resolveChannelTokensToEnv(config, { resolveSecret: () => null }, sigEnv);
+ok(sigWired.includes('signal'), 'a token-less channel still wires (not skipped for lacking a token)');
+ok(sigEnv.SIGNAL_NUMBER === '+15559999999' && sigEnv.SIGNAL_OWNER_ID === '+15550000001', 'SIGNAL_NUMBER + SIGNAL_OWNER_ID resolve to env (no secret involved)');
+
 console.log(`\n✅ ALL ${pass} wizard-brain checks passed.`);

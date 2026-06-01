@@ -103,6 +103,10 @@ export const CHANNELS = [
     extraCred: { label: 'app-level token (xapp-)', kind: 'app-token', envKey: 'SLACK_APP_TOKEN' } },
   { value: 'matrix',   label: 'Matrix',   hint: 'ready · access token + homeserver',          status: 'ready', credLabel: 'access token', ownerLabel: 'user id (@you:server)', envKey: 'MATRIX_ACCESS_TOKEN',
     extraConfig: [{ key: 'baseUrl', label: 'homeserver URL', default: 'https://matrix.org', envKey: 'MATRIX_HOMESERVER' }] },
+  // Signal is the MOST sovereign — no bot token; auth is your registered number (signal-cli). Token-less.
+  { value: 'signal',   label: 'Signal',   hint: 'ready · most sovereign (signal-cli, no token)', status: 'ready', ownerLabel: 'number (+E.164)',
+    prereq: 'needs signal-cli installed + your number registered',
+    extraConfig: [{ key: 'number', label: 'your Signal bot number (+E.164)', default: '', envKey: 'SIGNAL_NUMBER' }] },
 ];
 export const channelDef = (value) => CHANNELS.find((c) => c.value === value) || null;
 
@@ -111,24 +115,21 @@ export function resolveChannelTokensToEnv(config, vault, env = process.env) {
   const msg = config.getMessaging ? config.getMessaging() : {};
   const wired = [];
   for (const [channel, m] of Object.entries(msg || {})) {
-    if (!m || !m.enabled || !m.tokenHandle) continue;
+    if (!m || !m.enabled) continue;
     const def = channelDef(channel);
-    const token = vault.resolveSecret(m.tokenHandle);
-    if (def && token) {
+    if (!def) continue;
+    // credentialed channels (telegram/discord/slack/matrix) need a resolvable token; token-less
+    // channels (Signal — auth is the registered number, no secret) skip the token entirely.
+    if (def.credLabel) {
+      if (!m.tokenHandle) continue;
+      const token = vault.resolveSecret(m.tokenHandle);
+      if (!token) continue;
       env[def.envKey] = token;
-      if (m.ownerId) env[`${channel.toUpperCase()}_OWNER_ID`] = String(m.ownerId); // owner-gates the adapter
-      // a channel that needs a second credential (Slack's app-level token for Socket Mode)
-      if (def.extraCred && m.appTokenHandle) {
-        const extra = vault.resolveSecret(m.appTokenHandle);
-        if (extra) env[def.extraCred.envKey] = extra;
-      }
-      // non-secret per-channel config (e.g. Matrix homeserver URL) → env
-      for (const cfg of def.extraConfig || []) {
-        const val = m.extra?.[cfg.key];
-        if (val) env[cfg.envKey] = String(val);
-      }
-      wired.push(channel);
+      if (def.extraCred && m.appTokenHandle) { const e = vault.resolveSecret(m.appTokenHandle); if (e) env[def.extraCred.envKey] = e; } // Slack app token
     }
+    if (m.ownerId) env[`${channel.toUpperCase()}_OWNER_ID`] = String(m.ownerId);    // owner-gates the adapter
+    for (const cfg of def.extraConfig || []) { const v = m.extra?.[cfg.key]; if (v) env[cfg.envKey] = String(v); } // non-secret config (number, homeserver)
+    wired.push(channel);
   }
   return wired;
 }

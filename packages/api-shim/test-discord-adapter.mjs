@@ -20,6 +20,8 @@ ok(a.shouldHandle(dm({ isDM: false, mentionedBot: false }), BOT).handle === fals
 const mentioned = a.shouldHandle({ authorId: 'owner-1', authorBot: false, isDM: false, mentionedBot: true, content: '<@999> summarize this' }, BOT);
 ok(mentioned.handle === true && mentioned.text === 'summarize this', 'an @mention in a server → handled, mention stripped');
 ok(a.shouldHandle(dm({ content: '   ' }), BOT).handle === false, 'an empty prompt → skipped');
+const sec = a.shouldHandle(dm({ content: 'store this sk-ant-api03-abcdef1234567890abcdef1234567890' }), BOT);
+ok(sec.handle === false && sec.refuse === true && typeof sec.reply === 'string', 'a pasted API key → refused (not forwarded), with a refusal reply');
 
 console.log('\n=== no owner set → FAIL CLOSED (serves nobody) unless explicitly opted into an open bot ===');
 const closed = new DiscordAdapter({ verbose: false });

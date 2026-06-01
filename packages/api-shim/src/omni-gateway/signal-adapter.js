@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fetch from 'node-fetch';
+import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
 
 /**
  * SignalAdapter — a REAL two-way Signal channel for StratosAgent (new). The MOST sovereign chat channel:
@@ -40,6 +41,7 @@ export class SignalAdapter {
     else if (sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
     const text = String(dm.message).trim();
     if (!text) return { handle: false, reason: 'empty' };
+    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, sender, reason: 'secret in message' };
     return { handle: true, text, sender };
   }
 
@@ -98,7 +100,7 @@ export class SignalAdapter {
         if (msg.method !== 'receive' || !msg.params?.envelope) continue;
         try {
           const decision = this.shouldHandle(msg.params.envelope);
-          if (!decision.handle) continue;
+          if (!decision.handle) { if (decision.refuse) this.send(decision.sender, decision.reply); continue; }
           const reply = await this.askAgent(decision.text);
           for (const part of SignalAdapter.chunk(reply)) this.send(decision.sender, part);
         } catch (e) { if (this.verbose) console.error('❌ [Signal] handler error:', e.message); }

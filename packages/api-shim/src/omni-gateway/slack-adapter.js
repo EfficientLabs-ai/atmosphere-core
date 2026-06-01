@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fetch from 'node-fetch';
+import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
 
 /**
  * SlackAdapter — a REAL two-way Slack channel for StratosAgent (was a signature-verifier stub).
@@ -44,6 +45,7 @@ export class SlackAdapter {
     if (!msg.isDM && !msg.mentionedBot) return { handle: false, reason: 'not @mentioned in a channel' };
     const text = String(msg.text || '').replace(/<@[A-Z0-9]+>/g, '').trim(); // strip Slack mention tokens
     if (!text) return { handle: false, reason: 'empty' };
+    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, reason: 'secret in message' };
     return { handle: true, text };
   }
 
@@ -92,7 +94,7 @@ export class SlackAdapter {
           mentionedBot: botUserId ? String(message.text || '').includes(`<@${botUserId}>`) : false,
         };
         const decision = this.shouldHandle(norm, botUserId);
-        if (!decision.handle) return;
+        if (!decision.handle) { if (decision.refuse) await say(decision.reply); return; }
         const reply = await this.askAgent(decision.text);
         for (const part of SlackAdapter.chunk(reply)) await say(part);
       } catch (e) { if (this.verbose) console.error('❌ [Slack] handler error:', e.message); }

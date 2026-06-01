@@ -21,6 +21,8 @@ ok(a.shouldHandle(dm({ isDM: false, mentionedBot: false }), BOT).handle === fals
 const mentioned = a.shouldHandle({ userId: 'U0OWNER1', text: '<@U0BOT123> summarize this', isDM: false, mentionedBot: true }, BOT);
 ok(mentioned.handle === true && mentioned.text === 'summarize this', 'an @mention in a channel → handled, mention stripped');
 ok(a.shouldHandle(dm({ text: '   ' }), BOT).handle === false, 'an empty prompt → skipped');
+const sec = a.shouldHandle(dm({ text: 'save sk-ant-api03-abcdef1234567890abcdef1234567890' }), BOT);
+ok(sec.handle === false && sec.refuse === true && typeof sec.reply === 'string', 'a pasted API key → refused (not forwarded)');
 
 console.log('\n=== no owner set → FAIL CLOSED unless explicitly opted into an open bot ===');
 const closed = new SlackAdapter({ verbose: false });

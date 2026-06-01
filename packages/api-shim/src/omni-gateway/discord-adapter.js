@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fetch from 'node-fetch';
+import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
 
 /**
  * DiscordAdapter — a REAL two-way Discord channel for StratosAgent (was a stub with a mock token).
@@ -42,6 +43,9 @@ export class DiscordAdapter {
     if (!msg.isDM && !msg.mentionedBot) return { handle: false, reason: 'not @mentioned in a server' };
     const text = String(msg.content || '').replace(/<@!?\d+>/g, '').trim(); // strip the mention token
     if (!text) return { handle: false, reason: 'empty' };
+    // Secret-guard (parity with Telegram): never forward a pasted API key/token to the model, logs, or
+    // telemetry — refuse at the channel boundary.
+    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, reason: 'secret in message' };
     return { handle: true, text };
   }
 
@@ -92,7 +96,7 @@ export class DiscordAdapter {
           isDM: !m.guild, mentionedBot: this.client.user ? m.mentions.has(this.client.user.id) : false,
         };
         const decision = this.shouldHandle(norm, this.client.user?.id);
-        if (!decision.handle) return;
+        if (!decision.handle) { if (decision.refuse) await m.reply(decision.reply).catch(() => {}); return; }
         await m.channel.sendTyping().catch(() => {});
         const reply = await this.askAgent(decision.text);
         for (const part of DiscordAdapter.chunk(reply)) {

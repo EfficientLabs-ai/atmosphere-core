@@ -18,6 +18,8 @@ ok(a.shouldHandle(msg({ sender: '@stranger:matrix.org' }), BOT).handle === false
 ok(a.shouldHandle(msg({ msgtype: 'm.image' }), BOT).handle === false, 'a non-text (image) message → skipped');
 ok(a.shouldHandle(msg({ type: 'm.room.member' }), BOT).handle === false, 'a non-message event (membership) → skipped');
 ok(a.shouldHandle(msg({ body: '   ' }), BOT).handle === false, 'an empty body → skipped');
+const sec = a.shouldHandle(msg({ body: 'key sk-ant-api03-abcdef1234567890abcdef1234567890' }), BOT);
+ok(sec.handle === false && sec.refuse === true && typeof sec.reply === 'string', 'a pasted API key → refused (not forwarded)');
 const handled = a.shouldHandle(msg({ body: 'what is the weather' }), BOT);
 ok(handled.handle === true && handled.text === 'what is the weather', 'a real prompt → handled, text extracted');
 

@@ -17,6 +17,8 @@ ok(a.shouldHandle(env({ dataMessage: null })).handle === false, 'a non-text enve
 ok(a.shouldHandle(env({ dataMessage: { message: '   ' } })).handle === false, 'an empty message → skipped');
 const h = a.shouldHandle(env({ dataMessage: { message: 'what time is it' } }));
 ok(h.handle === true && h.text === 'what time is it' && h.sender === '+15550000001', 'real prompt → handled, text + sender extracted');
+const sec = a.shouldHandle(env({ dataMessage: { message: 'key sk-ant-api03-abcdef1234567890abcdef1234567890' } }));
+ok(sec.handle === false && sec.refuse === true && typeof sec.reply === 'string' && sec.sender === '+15550000001', 'a pasted API key → refused (not forwarded), sender kept for the reply');
 
 console.log('\n=== no owner set → FAIL CLOSED unless explicitly opted into an open bot ===');
 const closed = new SignalAdapter({ number: '+15559999999', verbose: false });

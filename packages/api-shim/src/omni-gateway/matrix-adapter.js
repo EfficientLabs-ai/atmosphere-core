@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
 
 /**
  * MatrixAdapter — a REAL two-way Matrix channel for StratosAgent (new — Matrix had no adapter).
@@ -44,6 +45,7 @@ export class MatrixAdapter {
     else if (msg.sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
     const text = String(msg.body || '').trim();
     if (!text) return { handle: false, reason: 'empty' };
+    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, reason: 'secret in message' };
     return { handle: true, text };
   }
 
@@ -99,7 +101,7 @@ export class MatrixAdapter {
         const content = event.getContent ? event.getContent() : {};
         const norm = { type: event.getType?.(), msgtype: content.msgtype, sender: event.getSender?.(), body: content.body, roomId: room?.roomId };
         const decision = this.shouldHandle(norm, botUserId);
-        if (!decision.handle) return;
+        if (!decision.handle) { if (decision.refuse) await this.client.sendTextMessage(norm.roomId, decision.reply); return; }
         const reply = await this.askAgent(decision.text);
         for (const part of MatrixAdapter.chunk(reply)) await this.client.sendTextMessage(norm.roomId, part);
       } catch (e) { if (this.verbose) console.error('❌ [Matrix] handler error:', e.message); }

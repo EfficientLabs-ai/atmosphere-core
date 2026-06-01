@@ -26,11 +26,20 @@ ok(p.decision === 'route' && p.useClass === 'local', 'a simple task → routed l
 p = planComplianceRoute({ messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' }, { ...cfg, routing: { costApproval: 'ask' } });
 ok(p.decision === 'approval-required' && p.options.includes('proceed-spend'), 'an explicit paid-model request in ask mode → approval-required');
 p = planComplianceRoute({ messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' }, { ...cfg, routing: { costApproval: 'ask' }, override: 'proceed-spend' });
-ok(p.decision === 'route' && p.spend === true && p.viaApproval, 'override proceed-spend → routes the paid backend');
+ok(p.decision === 'approval-required', 'override proceed-spend WITHOUT an approval token → stays approval-required (no bypass)');
+p = planComplianceRoute({ messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' }, { ...cfg, routing: { costApproval: 'ask' }, override: 'proceed-spend', approvalOk: true });
+ok(p.decision === 'route' && p.spend === true && p.viaApproval, 'override proceed-spend WITH a valid token → routes the paid backend');
 p = planComplianceRoute({ messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' }, { ...cfg, routing: { costApproval: 'ask' }, override: 'reroute-local' });
-ok(p.decision === 'route' && p.useClass === 'local' && p.spend === false, 'override reroute-local → routes the free local model');
+ok(p.decision === 'route' && p.useClass === 'local' && p.spend === false, 'override reroute-local (free) → routes the local model, no token needed');
 p = planComplianceRoute({ messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' }, { ...cfg, routing: { costApproval: 'always-spend' } });
 ok(p.decision === 'route' && p.spend === true, 'always-spend → no approval, just routes the paid model');
+
+console.log('\n=== Codex CRITICAL fix: unlisted paid families no longer bypass the gate ===');
+const cfgKey = { modelSources: ms, env: { OPENAI_API_KEY: 'sk', ANTHROPIC_API_KEY: 'sk' } };
+for (const m of ['o3-mini', 'gpt-5-turbo', 'claude-opus-4-1', 'gemini-3-pro']) {
+  const d = planComplianceRoute({ messages: [{ role: 'user', content: 'hi' }], model: m }, { ...cfgKey, env: { ...cfgKey.env, GEMINI_API_KEY: 'sk' }, routing: { costApproval: 'ask' } });
+  ok(d.decision === 'approval-required', `'${m}' (paid family, not in any static list) → approval-required (recognized via resolveRoute)`);
+}
 
 console.log('\n=== complianceApprovalGate (express) ===');
 const fakeConfig = (configured, routing, modelSources) => ({ getConfig: () => ({ configured }), getRouting: () => routing, getModelSources: () => modelSources });
@@ -44,8 +53,17 @@ const handled = complianceApprovalGate({ headers: {}, body: { messages: [{ role:
 ok(handled === true && res._code === 402 && res._json.error === 'approval_required', 'configured + ask + paid request → 402 approval-required');
 ok(res._json.estCostUsd != null && /reroute-local|proceed-spend/.test(res._json.options.join()), 'the 402 carries the cost estimate + the options to reply with');
 
+// Codex HIGH: a bare proceed-spend header (no token) CANNOT force spend → still 402
 res = mkRes();
-ok(complianceApprovalGate({ headers: { 'x-stratos-route': 'proceed-spend' }, body: { messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' } }, res, { config: fakeConfig(true, { costApproval: 'ask' }, ms) }) === false, 'a proceed-spend override → gate lets it through to spend');
+ok(complianceApprovalGate({ headers: { 'x-stratos-route': 'proceed-spend' }, body: { messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' } }, res, { config: fakeConfig(true, { costApproval: 'ask' }, ms) }) === true && res._code === 402, 'a BARE proceed-spend header (no token) → still 402 (cannot force spend)');
+const approvalTok = res._json.approvalToken;
+ok(typeof approvalTok === 'string' && approvalTok.length > 16, 'the 402 mints a single-use approval token');
+// replay the token → allowed through ONCE
+res = mkRes();
+ok(complianceApprovalGate({ headers: { 'x-stratos-route': 'proceed-spend', 'x-stratos-approval': approvalTok }, body: { messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' } }, res, { config: fakeConfig(true, { costApproval: 'ask' }, ms) }) === false, 'proceed-spend WITH the minted token → allowed through');
+// single-use: replaying the same token → rejected again
+res = mkRes();
+ok(complianceApprovalGate({ headers: { 'x-stratos-route': 'proceed-spend', 'x-stratos-approval': approvalTok }, body: { messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' } }, res, { config: fakeConfig(true, { costApproval: 'ask' }, ms) }) === true, 'the token is single-use — replay → 402 again');
 
 res = mkRes();
 const reqLocal = { headers: { 'x-stratos-route': 'reroute-local' }, body: { messages: [{ role: 'user', content: 'hi' }], model: 'claude-3-5-sonnet' } };

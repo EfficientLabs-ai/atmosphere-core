@@ -10,7 +10,7 @@ import { TaskClassifierRouter } from './src/task-router.js';
 import { resolveRoute, selectLocalModel } from './src/model-manager.js';
 import { passthroughCloud } from './src/routers/cloud-byok.js';
 import { passthroughAnthropic } from './src/routers/anthropic-adapter.js';
-import { complianceApprovalGate } from './src/compliance-gateway.js';
+import { complianceApprovalGate, wouldSpend } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 
@@ -205,7 +205,8 @@ app.post('/v1/chat/completions', async (req, res) => {
   // Human-on-the-loop cost/ToS gate: for a wizard-configured agent in costApproval:'ask' mode, a request
   // that would incur cloud spend gets a 402 the channel can surface ("reroute to local, or proceed?").
   // Acts ONLY on approval-required; everything else falls through. Fail-OPEN on error (never blocks).
-  try { if (complianceApprovalGate(req, res)) return; } catch { /* fall through to existing routing */ }
+  try { if (complianceApprovalGate(req, res)) return; }
+  catch { if (wouldSpend(req)) { res.status(402).json({ error: 'approval_required', reason: 'cost gate error — blocking a paid call to be safe' }); return; } } // fail CLOSED for spend
 
   // ── Universal Model Manager (clean path): resolve on the RAW body BEFORE any local mutation.
   const route = resolveRoute(req.body.model);

@@ -21,6 +21,11 @@ export const PROVIDERS = {
   google: { matches: (m) => /^gemini/i.test(m), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', envKey: 'GEMINI_API_KEY', supported: true },
   // Anthropic uses /v1/messages (different shape); a narrow text-first adapter translates it.
   anthropic: { matches: (m) => /^claude/i.test(m), endpoint: 'https://api.anthropic.com/v1/messages', envKey: 'ANTHROPIC_API_KEY', supported: true, format: 'anthropic' },
+  // OpenRouter = ONE BYOK key → 100+ models, addressed by a "vendor/model" slug (e.g.
+  // "anthropic/claude-3.5-sonnet", "meta-llama/llama-3-70b"). OpenAI-compatible, so it reuses the raw
+  // pass-through. Matched LAST: native providers win for their own (slash-free) names. Sovereign —
+  // the user's own key, never logged; raw body only (no RAG/identity leaked to OpenRouter).
+  openrouter: { matches: (m) => /\S\/\S/.test(m), endpoint: 'https://openrouter.ai/api/v1/chat/completions', envKey: 'OPENROUTER_API_KEY', supported: true },
 };
 
 const isForcedLocal = (m, env) =>

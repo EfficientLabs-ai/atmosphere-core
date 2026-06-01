@@ -69,9 +69,10 @@ ok(wired.includes('anthropic') && env.ANTHROPIC_API_KEY === 'sk-ant-REAL', 'the 
 config.disableProvider('anthropic');
 ok(!config.getModelSources().providers.anthropic, 'disableProvider removes the entry');
 
-console.log('\n=== messaging channels: HONEST status (telegram + discord ready, slack/matrix soon) ===');
-ok(channelDef('telegram').status === 'ready' && channelDef('discord').status === 'ready', 'telegram + discord are marked ready (real adapters)');
-ok(['slack', 'matrix'].every((c) => channelDef(c).status === 'soon'), 'slack/matrix are marked coming-soon — not faked as working');
+console.log('\n=== messaging channels: HONEST status (telegram/discord/slack ready, matrix soon) ===');
+ok(['telegram', 'discord', 'slack'].every((c) => channelDef(c).status === 'ready'), 'telegram + discord + slack are marked ready (real adapters)');
+ok(channelDef('matrix').status === 'soon', 'matrix is marked coming-soon — not faked as working');
+ok(channelDef('slack').extraCred?.envKey === 'SLACK_APP_TOKEN', 'slack declares its second (app-level) credential for Socket Mode');
 
 console.log('\n=== channel setup stores ONLY a vault handle (+ owner id); token resolves to env at runtime ===');
 config.setMessagingChannel('discord', { enabled: true, tokenHandle: 'cvault:discord:bot-token:' + 'b'.repeat(32), ownerId: '555000111222333444' });
@@ -83,5 +84,14 @@ const tenv = {};
 const wiredChans = resolveChannelTokensToEnv(config, tvault, tenv);
 ok(wiredChans.includes('discord') && tenv.DISCORD_BOT_TOKEN === 'MTk4-REAL-DISCORD-TOKEN', 'the encrypted bot token resolves into DISCORD_BOT_TOKEN for the adapter');
 ok(tenv.DISCORD_OWNER_ID === '555000111222333444', 'the owner id resolves into DISCORD_OWNER_ID (owner-gates the adapter)');
+
+console.log('\n=== Slack two-token (Socket Mode): both bot + app tokens resolve from the vault ===');
+config.setMessagingChannel('slack', { enabled: true, tokenHandle: 'cvault:slack:bot-token:' + 'c'.repeat(32), appTokenHandle: 'cvault:slack:app-token:' + 'd'.repeat(32), ownerId: 'U0OWNER1' });
+const sv = { resolveSecret: (h) => h.includes('slack:bot-token') ? 'xoxb-REAL' : h.includes('slack:app-token') ? 'xapp-REAL' : null };
+const senv = {};
+resolveChannelTokensToEnv(config, sv, senv);
+ok(senv.SLACK_BOT_TOKEN === 'xoxb-REAL' && senv.SLACK_APP_TOKEN === 'xapp-REAL', 'both the bot token AND the app-level token resolve into env');
+ok(senv.SLACK_OWNER_ID === 'U0OWNER1', 'the slack owner id resolves into SLACK_OWNER_ID');
+ok(!JSON.stringify(config.getMessaging().slack).includes('xoxb') && !JSON.stringify(config.getMessaging().slack).includes('xapp'), 'neither slack token is stored in config (only vault handles)');
 
 console.log(`\n✅ ALL ${pass} wizard-brain checks passed.`);

@@ -13,6 +13,7 @@
 import { startServer } from './server.js';
 import { TelegramBridge } from './src/telegram-bridge.js';
 import { DiscordAdapter } from './src/omni-gateway/discord-adapter.js';
+import { SlackAdapter } from './src/omni-gateway/slack-adapter.js';
 import { startLearnScheduler, isEnabled as evolutionEnabled } from './src/self-evolution-runtime.js';
 
 console.log('⚡ Initializing Atmos API Shim Layer...');
@@ -27,6 +28,10 @@ telegramBridge.start();
 // otherwise it's a safe no-op. Owner-gated by DISCORD_OWNER_ID.
 const discord = new DiscordAdapter();
 discord.start().catch((e) => console.warn('⚠️  [Discord] failed to start:', e.message));
+
+// Slack channel (Socket Mode) — starts only if both SLACK_BOT_TOKEN + SLACK_APP_TOKEN are present.
+const slack = new SlackAdapter();
+slack.start().catch((e) => console.warn('⚠️  [Slack] failed to start:', e.message));
 
 // Hook B (LEARN — flag-gated, default OFF): start the nightly self-evolution compiler that
 // harvests successful traces → induces specs → compiles + PQC-signs executing wasm skills.
@@ -44,6 +49,9 @@ const shutdown = (signal) => {
   }
   if (discord) {
     discord.stop();
+  }
+  if (slack) {
+    slack.stop();
   }
 
   server.close(() => {

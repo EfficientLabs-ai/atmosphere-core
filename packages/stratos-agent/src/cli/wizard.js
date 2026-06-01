@@ -97,10 +97,11 @@ export function resolveProviderKeysToEnv(config, vault, env = process.env) {
  * marked 'soon', and NOT presented as functional until their adapters ship.
  */
 export const CHANNELS = [
-  { value: 'telegram', label: 'Telegram', hint: 'ready · bot token + your chat id',  status: 'ready', credLabel: 'bot token', ownerLabel: 'chat id', envKey: 'TELEGRAM_BOT_TOKEN' },
-  { value: 'discord',  label: 'Discord',  hint: 'ready · bot token + your user id',  status: 'ready', credLabel: 'bot token', ownerLabel: 'user id', envKey: 'DISCORD_BOT_TOKEN' },
-  { value: 'slack',    label: 'Slack',    hint: 'coming soon',                       status: 'soon',  credLabel: 'bot token', ownerLabel: 'user id', envKey: 'SLACK_BOT_TOKEN' },
-  { value: 'matrix',   label: 'Matrix',   hint: 'coming soon',                       status: 'soon',  credLabel: 'access token', ownerLabel: 'user id', envKey: 'MATRIX_ACCESS_TOKEN' },
+  { value: 'telegram', label: 'Telegram', hint: 'ready · bot token + your chat id',           status: 'ready', credLabel: 'bot token', ownerLabel: 'chat id', envKey: 'TELEGRAM_BOT_TOKEN' },
+  { value: 'discord',  label: 'Discord',  hint: 'ready · bot token + your user id',           status: 'ready', credLabel: 'bot token', ownerLabel: 'user id', envKey: 'DISCORD_BOT_TOKEN' },
+  { value: 'slack',    label: 'Slack',    hint: 'ready · bot + app tokens (Socket Mode)',     status: 'ready', credLabel: 'bot token (xoxb-)', ownerLabel: 'user id', envKey: 'SLACK_BOT_TOKEN',
+    extraCred: { label: 'app-level token (xapp-)', kind: 'app-token', envKey: 'SLACK_APP_TOKEN' } },
+  { value: 'matrix',   label: 'Matrix',   hint: 'coming soon',                                status: 'soon',  credLabel: 'access token', ownerLabel: 'user id', envKey: 'MATRIX_ACCESS_TOKEN' },
 ];
 export const channelDef = (value) => CHANNELS.find((c) => c.value === value) || null;
 
@@ -115,6 +116,11 @@ export function resolveChannelTokensToEnv(config, vault, env = process.env) {
     if (def && token) {
       env[def.envKey] = token;
       if (m.ownerId) env[`${channel.toUpperCase()}_OWNER_ID`] = String(m.ownerId); // owner-gates the adapter
+      // a channel that needs a second credential (Slack's app-level token for Socket Mode)
+      if (def.extraCred && m.appTokenHandle) {
+        const extra = vault.resolveSecret(m.appTokenHandle);
+        if (extra) env[def.extraCred.envKey] = extra;
+      }
       wired.push(channel);
     }
   }

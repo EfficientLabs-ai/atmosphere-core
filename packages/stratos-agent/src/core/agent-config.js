@@ -158,12 +158,12 @@ export function disableProvider(provider) {
 }
 export function getModelSources() { return { ...DEFAULTS().modelSources, ...getConfig().modelSources }; }
 
-/** Enable a messaging channel with the VAULT HANDLE to its bot token (never the token itself) + owner id. */
-export function setMessagingChannel(channel, { enabled = true, tokenHandle, ownerId } = {}) {
+/** Enable a messaging channel with the VAULT HANDLE(S) to its token(s) (never the token itself) + owner id. */
+export function setMessagingChannel(channel, { enabled = true, tokenHandle, appTokenHandle, ownerId } = {}) {
   if (!PROVIDER_RE.test(String(channel || ''))) throw new Error('invalid channel');
   return updateConfig((c) => {
     c.messaging = { ...c.messaging };
-    c.messaging[channel] = { enabled: !!enabled, tokenHandle: tokenHandle || null, ownerId: ownerId || null };
+    c.messaging[channel] = { enabled: !!enabled, tokenHandle: tokenHandle || null, appTokenHandle: appTokenHandle || null, ownerId: ownerId || null };
   });
 }
 export function getMessaging() { return { ...getConfig().messaging }; }

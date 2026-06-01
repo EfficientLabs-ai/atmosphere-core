@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fetch from 'node-fetch';
+import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
 
 /**
  * DiscordAdapter — a REAL two-way Discord channel for StratosAgent (was a stub with a mock token).
@@ -42,6 +43,9 @@ export class DiscordAdapter {
     if (!msg.isDM && !msg.mentionedBot) return { handle: false, reason: 'not @mentioned in a server' };
     const text = String(msg.content || '').replace(/<@!?\d+>/g, '').trim(); // strip the mention token
     if (!text) return { handle: false, reason: 'empty' };
+    // Secret-guard (parity with Telegram): never forward a pasted API key/token to the model, logs, or
+    // telemetry — refuse at the channel boundary.
+    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, reason: 'secret in message' };
     return { handle: true, text };
   }
 
@@ -70,6 +74,20 @@ export class DiscordAdapter {
     return out.length ? out : [''];
   }
 
+  /**
+   * Run ONE normalized message: gate it, refuse on a secret (SECRET_REFUSAL, stopping BEFORE askAgent),
+   * else route to the agent and reply. Replies go through the injected `send(text)` so this whole branch
+   * is unit-testable without the discord.js SDK. Returns the decision.
+   */
+  async dispatch(norm, botUserId, send, { typing } = {}) {
+    const decision = this.shouldHandle(norm, botUserId);
+    if (!decision.handle) { if (decision.refuse) await send(decision.reply); return decision; }
+    if (typing) await typing();
+    const reply = await this.askAgent(decision.text);
+    for (const part of DiscordAdapter.chunk(reply)) await send(part);
+    return decision;
+  }
+
   /** Connect to Discord and serve. Lazy-imports discord.js so the module loads without the SDK. */
   async start() {
     if (!this.token) {
@@ -91,13 +109,9 @@ export class DiscordAdapter {
           authorId: m.author.id, authorBot: m.author.bot, content: m.content,
           isDM: !m.guild, mentionedBot: this.client.user ? m.mentions.has(this.client.user.id) : false,
         };
-        const decision = this.shouldHandle(norm, this.client.user?.id);
-        if (!decision.handle) return;
-        await m.channel.sendTyping().catch(() => {});
-        const reply = await this.askAgent(decision.text);
-        for (const part of DiscordAdapter.chunk(reply)) {
-          await m.reply(part).catch(() => m.channel.send(part).catch(() => {}));
-        }
+        await this.dispatch(norm, this.client.user?.id,
+          (t) => m.reply(t).catch(() => m.channel.send(t).catch(() => {})),
+          { typing: () => m.channel.sendTyping().catch(() => {}) });
       } catch (e) { if (this.verbose) console.error('❌ [Discord] handler error:', e.message); }
     });
     await this.client.login(this.token);

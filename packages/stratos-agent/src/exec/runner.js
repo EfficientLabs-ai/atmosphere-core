@@ -12,7 +12,8 @@
  *     orchestrator can verify (verifyReceipt) against the controller's pinned key, so the audit trail is
  *     tamper-evident and bound to the exact sanitized spec.
  *
- * `execute(sanitized, spec)` is injected. Production wires it to WasiSandbox:
+ * `execute(sanitized)` is injected — it receives ONLY the sanitized config, NEVER the raw spec.
+ * Production wires it to WasiSandbox:
  *     const execute = (s) => new WasiSandbox({ allowedPaths: s.allowedPaths, allowedEnvKeys: s.allowedEnvKeys,
  *                                              allowedDomains: s.allowedDomains }).execute(wasmBytes, args, s.env);
  * `now` is passed in (the receipt timestamp) — deterministic, no implicit Date.now().
@@ -21,7 +22,7 @@ import { sanitizeJobSpec } from './job-policy.js';
 
 export async function runJob({ spec = {}, policy = {}, controller, jobId, execute, now } = {}) {
   if (!controller?.issueReceipt) throw new Error('runJob needs an exec controller (controller-identity.js)');
-  if (typeof execute !== 'function') throw new Error('runJob needs an execute(sanitized, spec) function');
+  if (typeof execute !== 'function') throw new Error('runJob needs an execute(sanitized) function');
   if (!jobId || now == null) throw new Error('runJob needs jobId and now');
 
   const { ok, violations, sanitized } = sanitizeJobSpec(spec, policy);
@@ -34,7 +35,7 @@ export async function runJob({ spec = {}, policy = {}, controller, jobId, execut
 
   let status, exitCode = null;
   try {
-    const res = await execute(sanitized, spec); // executor sees ONLY the sanitized config
+    const res = await execute(sanitized); // executor sees ONLY the sanitized config — raw spec is NEVER passed
     exitCode = Number.isInteger(res?.exitCode) ? res.exitCode : 0;
     status = exitCode === 0 ? 'success' : 'failure';
   } catch {

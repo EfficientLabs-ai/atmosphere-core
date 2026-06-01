@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
 
 /**
  * MatrixAdapter — a REAL two-way Matrix channel for StratosAgent (new — Matrix had no adapter).
@@ -44,6 +45,7 @@ export class MatrixAdapter {
     else if (msg.sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
     const text = String(msg.body || '').trim();
     if (!text) return { handle: false, reason: 'empty' };
+    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, reason: 'secret in message' };
     return { handle: true, text };
   }
 
@@ -72,6 +74,18 @@ export class MatrixAdapter {
     return out.length ? out : [''];
   }
 
+  /**
+   * Run ONE normalized message: gate it, refuse on a secret (SECRET_REFUSAL, stopping BEFORE askAgent),
+   * else route to the agent and reply via the injected `send(text)`. Unit-testable without matrix-js-sdk.
+   */
+  async dispatch(norm, botUserId, send) {
+    const decision = this.shouldHandle(norm, botUserId);
+    if (!decision.handle) { if (decision.refuse) await send(decision.reply); return decision; }
+    const reply = await this.askAgent(decision.text);
+    for (const part of MatrixAdapter.chunk(reply)) await send(part);
+    return decision;
+  }
+
   /** Connect to the homeserver and serve. Lazy-imports matrix-js-sdk so the module loads without it. */
   async start() {
     if (!this.accessToken || !this.baseUrl) {
@@ -98,10 +112,7 @@ export class MatrixAdapter {
       try {
         const content = event.getContent ? event.getContent() : {};
         const norm = { type: event.getType?.(), msgtype: content.msgtype, sender: event.getSender?.(), body: content.body, roomId: room?.roomId };
-        const decision = this.shouldHandle(norm, botUserId);
-        if (!decision.handle) return;
-        const reply = await this.askAgent(decision.text);
-        for (const part of MatrixAdapter.chunk(reply)) await this.client.sendTextMessage(norm.roomId, part);
+        await this.dispatch(norm, botUserId, (t) => this.client.sendTextMessage(norm.roomId, t));
       } catch (e) { if (this.verbose) console.error('❌ [Matrix] handler error:', e.message); }
     });
     await this.client.startClient({ initialSyncLimit: 1 });

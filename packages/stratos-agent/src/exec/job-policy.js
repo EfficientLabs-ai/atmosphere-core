@@ -17,6 +17,7 @@
  * receipt proves the EXACT sanitized spec that ran.
  */
 import path from 'node:path';
+import fs from 'node:fs';
 
 const SECRET_WORDS = new Set(['key', 'token', 'secret', 'password', 'passwd', 'seed', 'mnemonic', 'private', 'credential', 'credentials', 'keypair', 'apikey', 'auth', 'cert']);
 
@@ -30,7 +31,12 @@ function looksSecret(k) {
 
 export function sanitizeJobSpec(spec = {}, policy = {}) {
   const violations = [];
-  const workspaceRoots = (policy.workspaceRoots || []).map((p) => path.resolve(p));
+  // realpath the roots ONCE (follows symlinks; e.g. /tmp → /private/tmp). A non-existent root can't
+  // anchor a grant, so it is simply dropped — grants under it will then fail the under-root check.
+  const workspaceRoots = [];
+  for (const p of (policy.workspaceRoots || [])) {
+    try { workspaceRoots.push(fs.realpathSync(path.resolve(p))); } catch { /* non-existent root → cannot anchor */ }
+  }
   const allowedEnvKeys = new Set(policy.allowedEnvKeys || []);
   const allowDomains = new Set(policy.allowDomains || []);
   const maxMounts = policy.maxMounts ?? 8;
@@ -44,8 +50,13 @@ export function sanitizeJobSpec(spec = {}, policy = {}) {
     const guest = String(m?.guest ?? '');
     if (!host || !guest) { violations.push('mount requires both host and guest'); continue; }
     if (host.includes('..') || guest.includes('..')) { violations.push(`mount path traversal refused: ${host} -> ${guest}`); continue; }
+    if (!path.isAbsolute(host)) { violations.push(`host mount must be an absolute path: ${host}`); continue; }
     if (!path.isAbsolute(guest)) { violations.push(`guest mount must be an absolute path: ${guest}`); continue; }
-    const rHost = path.resolve(host);
+    // realpathSync FOLLOWS SYMLINKS, so a symlink inside a root pointing at /etc resolves to /etc and is
+    // then rejected by the under-root check. A non-existent path is denied (you can't mount what isn't there).
+    let rHost;
+    try { rHost = fs.realpathSync(host); }
+    catch { violations.push(`host path does not exist or is inaccessible: ${host}`); continue; }
     const underRoot = workspaceRoots.some((root) => rHost === root || rHost.startsWith(root + path.sep));
     if (!underRoot) { violations.push(`host path is outside the workspace roots: ${rHost}`); continue; }
     allowedPaths[guest] = rHost;

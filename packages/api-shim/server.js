@@ -11,6 +11,7 @@ import { resolveRoute, selectLocalModel } from './src/model-manager.js';
 import { passthroughCloud } from './src/routers/cloud-byok.js';
 import { passthroughAnthropic } from './src/routers/anthropic-adapter.js';
 import { languageGate } from './src/language-gateway.js';
+import { complianceApprovalGate, wouldSpend } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 
@@ -202,7 +203,10 @@ async function harvestTelemetry(prompt, responseText) {
 app.post('/v1/chat/completions', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
-  // i18n: make the agent reply in the user's configured language (no-op for English; fail-open).
+  // Cost/ToS gate first — may answer a 402 and return (fail-CLOSED for spend on any gate error).
+  try { if (complianceApprovalGate(req, res)) return; }
+  catch { if (wouldSpend(req)) { res.status(402).json({ error: 'approval_required', reason: 'cost gate error — blocking a paid call to be safe' }); return; } }
+  // then make the agent reply in the user's configured language (no-op for English; fail-open).
   languageGate(req);
 
   // ── Universal Model Manager (clean path): resolve on the RAW body BEFORE any local mutation.

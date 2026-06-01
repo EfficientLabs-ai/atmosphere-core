@@ -87,16 +87,28 @@ const reasoningBank = new ReasoningBank({
 app.use(cors());
 app.use(bodyParser.json());
 
-// Fail-closed helper for when the compliance gate THROWS (couldn't be evaluated). Per Codex review of
-// PR #41: a `wouldSpend`-only catch is just CONDITIONALLY closed — if the gate throws and wouldSpend is
-// falsy, execution falls through to the spend/proxy path. Here we block ANY model that resolves to a
-// paid provider (or that we can't classify), and only let a provably-local model proceed. Returns true
-// if it sent a 402 (the caller must then `return`).
+// A model is "provably local" ONLY if it matches the SAME narrow heuristic the routing uses to actually
+// send a request to local inference (isLocalRequest below + the task-router). Per Codex review of #45:
+// isForcedLocal's broad family set (mistral/gemma/phi/deepseek) is WIDER than what routes local, so a
+// bare `mistral-large`/`gemma2:9b`/`phi3`/`deepseek-r1` looks local to the gate but actually falls
+// through to the proxy. Keeping this in lock-step with the router avoids that gap.
+function isProvablyLocalModel(model, env = process.env) {
+  const m = String(model || '').toLowerCase();
+  return env.STRATOS_FORCE_LOCAL === '1' || /^local:/.test(m)
+    || m.includes('local') || m.includes('quantized') || m.includes('qwen') || m.includes('llama');
+}
+
+// Fail-closed helper for when the compliance gate THROWS (couldn't be evaluated). Per Codex reviews of
+// #41 + #45: a `wouldSpend`-only catch is only CONDITIONALLY closed, and a provider==null check is too
+// permissive (bare local-family names that don't actually route local slip through). We proceed ONLY when
+// the model is NOT a paid provider AND is provably-local by the router's own heuristic; everything else
+// (paid, ambiguous, empty) is blocked. Returns true if it sent a 402 (the caller must then `return`).
 export function failClosedOnGateError(req, res) {
+  const model = req.body?.model;
   let provider;
-  try { provider = providerForModel(req.body?.model); } catch { provider = 'unknown'; } // unclassifiable → block
-  if (!provider) return false; // provably local (no paid provider) → safe to proceed
-  res.status(402).json({ error: 'approval_required', reason: 'cost gate could not be evaluated; blocking a non-local model to be safe. Use a local model or retry.' });
+  try { provider = providerForModel(model); } catch { provider = 'unknown'; } // unclassifiable → block
+  if (provider === null && isProvablyLocalModel(model)) return false; // no paid provider AND routes local
+  res.status(402).json({ error: 'approval_required', reason: 'cost gate could not be evaluated; blocking a non-(provably-local) model to be safe. Use a local model or retry.' });
   return true;
 }
 

@@ -29,20 +29,27 @@ for (const model of ['deepseek/deepseek-chat', 'qwen/qwen-2.5-72b-instruct', 'mi
   ok(blocked === true && res.code === 402, `${model} (OpenRouter slug) → 402 blocked, not misrouted to local`);
 }
 
-console.log('\n=== a provably-local model PROCEEDS (no false block) ===');
-for (const model of ['qwen2.5:7b', 'llama3', 'local', 'phi3']) {
+console.log('\n=== a PROVABLY-local model (matches the router\'s own heuristic) PROCEEDS — no false block ===');
+for (const model of ['qwen2.5:7b', 'llama3', 'local', 'local:gemma2', 'my-quantized-model']) {
   const res = mockRes();
   const blocked = failClosedOnGateError({ body: { model } }, res);
-  ok(blocked === false && res.code === null, `${model} → not blocked (local)`);
+  ok(blocked === false && res.code === null, `${model} → not blocked (routes local)`);
 }
 
-console.log('\n=== a missing/empty model has no paid provider to spend on → proceeds (local-ish) ===');
+console.log('\n=== bare local-FAMILY names the router does NOT route local are BLOCKED (Codex #45 second finding) ===');
+// isForcedLocal treats these as "local family", but the routing heuristic (local|quantized|qwen|llama)
+// does NOT send them to local inference → they would fall through to the proxy. The gate must block them.
+for (const model of ['mistral-large', 'gemma2:9b', 'phi3', 'deepseek-r1']) {
+  const res = mockRes();
+  const blocked = failClosedOnGateError({ body: { model } }, res);
+  ok(blocked === true && res.code === 402, `${model} (family name, not provably-local) → 402 blocked`);
+}
+
+console.log('\n=== a missing/empty model is BLOCKED (fail-closed — not provably local) ===');
 for (const body of [{ model: '' }, {}, { model: null }]) {
-  // empty/missing model → providerForModel returns null → treated as local-ish and allowed
-  // (a request with no model can't reach a paid API), so these PROCEED. We assert that explicitly:
   const res = mockRes();
   const blocked = failClosedOnGateError({ body }, res);
-  ok(blocked === false, `empty/missing model (${JSON.stringify(body)}) → proceeds (no paid provider to spend on)`);
+  ok(blocked === true && res.code === 402, `empty/missing model (${JSON.stringify(body)}) → 402 blocked (fail-closed)`);
 }
 
 console.log(`\n✅ ALL ${pass} gate-failclosed checks passed.`);

@@ -25,9 +25,14 @@ const DEFAULTS = () => ({
   model: { provider: 'local', name: 'qwen2.5:7b' },               // provider switch = CLI-only (data egress)
   permissions: { files: 'disabled', network: 'disabled', skills: 'disabled', shell: 'disabled' }, // CLI-only grants
   channels: { telegram: 'configured', slack: 'disabled', discord: 'disabled' },                    // desired states
+  // routing prefs read by the gateway/router. costApproval: 'ask' (notify + approve each cloud spend),
+  // 'auto-local' (prefer a capable local model; only spend if none can do it), 'always-spend' (proceed).
+  routing: { saveApiSpend: false, costApproval: 'ask' },
   meshOptIn: false,
   configured: false,
 });
+
+const COST_APPROVAL_MODES = ['ask', 'auto-local', 'always-spend'];
 
 function atomicWrite(file, obj) {
   fs.mkdirSync(dir(), { recursive: true });
@@ -108,6 +113,21 @@ export function setLocalModel(name) {
 }
 export function getAgentName() { return getConfig().agentName; }
 
+/** Routing prefs (cost-save + cloud-spend approval mode). Validated; unknown modes rejected. */
+export function setRouting({ saveApiSpend, costApproval } = {}) {
+  return updateConfig((c) => {
+    const r = { ...DEFAULTS().routing, ...c.routing };
+    if (saveApiSpend !== undefined) r.saveApiSpend = !!saveApiSpend;
+    if (costApproval !== undefined) {
+      if (!COST_APPROVAL_MODES.includes(costApproval)) throw new Error(`invalid costApproval (use ${COST_APPROVAL_MODES.join('|')})`);
+      r.costApproval = costApproval;
+    }
+    c.routing = r;
+  });
+}
+export function setMeshOptIn(on) { return updateConfig((c) => { c.meshOptIn = !!on; }); }
+export function getRouting() { return { ...DEFAULTS().routing, ...getConfig().routing }; }
+
 /** Desired→effective: what is actually usable, given installed local models + present cloud keys. */
 export function effectiveCapabilities({ installedModels = [], env = process.env } = {}) {
   const c = getConfig();
@@ -120,6 +140,7 @@ export function effectiveCapabilities({ installedModels = [], env = process.env 
     model: { ...c.model, state: modelReady ? 'ready' : 'requested' },
     permissions: c.permissions,                 // grants are CLI-only; reported as-is
     channels: c.channels,                       // 'configured' ≠ 'ready'; never overstated
+    routing: { ...DEFAULTS().routing, ...c.routing },
     meshOptIn: c.meshOptIn,
   };
 }

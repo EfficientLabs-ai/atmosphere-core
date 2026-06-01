@@ -9,8 +9,22 @@ import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 import readline from 'node:readline';
-import { run, applyInit, generateSystemdUnit, banner } from '../src/cli/stratos-cli.js';
+import { run, generateSystemdUnit, banner } from '../src/cli/stratos-cli.js';
+import { validateModelChoice, applyWizard, privacyPosture } from '../src/cli/wizard.js';
+import { realProbes } from '../src/cli/probes.js';
 import * as config from '../src/core/agent-config.js';
+
+// ---- TUI helpers (presentation only; the wizard's logic is tested in src/cli/wizard.js) ----------
+const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', m: '\x1b[35m', d: '\x1b[2m', bold: '\x1b[1m', x: '\x1b[0m' };
+const strip = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, '');
+function box(lines, pad = 2) {
+  const w = Math.max(...lines.map((l) => strip(l).length)) + pad * 2;
+  const body = lines.map((l) => '│' + ' '.repeat(pad) + l + ' '.repeat(w - pad - strip(l).length) + '│');
+  return [`╭${'─'.repeat(w)}╮`, ...body, `╰${'─'.repeat(w)}╯`].join('\n');
+}
+const stepHdr = (n, total, title) => `\n${C.m}${C.bold}  ◆ Step ${n}/${total}${C.x}${C.bold} · ${title}${C.x}`;
+const okMark = (s) => `${C.g}✓${C.x} ${s}`;
+const noMark = (s, fix) => `${C.y}✗${C.x} ${s}${fix ? `\n       ${C.d}↳ ${fix}${C.x}` : ''}`;
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 function pkgVersion() {
@@ -18,27 +32,76 @@ function pkgVersion() {
   catch { return '0.0.0'; }
 }
 
+async function pickCloud(ask) {
+  const a = (await ask(`  ${C.b}→${C.x} Which cloud? ${C.d}[O]penAI / [A]nthropic / [G]emini (default OpenAI)${C.x}: `)).trim().toLowerCase();
+  return a.startsWith('a') ? 'anthropic' : a.startsWith('g') ? 'gemini' : 'openai';
+}
+
 async function initWizard() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q) => new Promise((res) => rl.question(q, res));
+  let closed = false;
+  rl.once('close', () => { closed = true; });
+  // resolve to '' (→ the step's default) if the input stream ends mid-question, so the wizard never
+  // strands on EOF/Ctrl-D (a real TTY never closes; piped/non-interactive input safely takes defaults).
+  const ask = (q) => new Promise((res) => {
+    if (closed) return res('');
+    const onClose = () => res('');
+    rl.once('close', onClose);
+    rl.question(q, (a) => { rl.removeListener('close', onClose); res(a); });
+  });
   console.log(banner());
-  console.log('🌌 Welcome. Let\'s set up your sovereign agent — local-first, private by default.\n');
-  const name = (await ask('Name your agent (default StratosAgent): ')).trim() || 'StratosAgent';
-  console.log('\nModel: run a LOCAL open-weights model (private, no API key) or a cloud model with YOUR key (BYOK).');
-  const cloud = /^c/i.test(((await ask('  [L]ocal (default) or [C]loud? ')).trim() || 'L'));
+  console.log(box([`${C.bold}Set up your sovereign agent${C.x}`, `${C.d}4 quick steps · local-first · private by default${C.x}`]));
+
+  // Step 1 — name
+  console.log(stepHdr(1, 4, 'Name'));
+  const agentName = (await ask(`  ${C.b}→${C.x} Name your agent ${C.d}(default StratosAgent)${C.x}: `)).trim() || 'StratosAgent';
+
+  // Step 2 — brain (with LIVE validation + honest privacy posture)
+  console.log(stepHdr(2, 4, 'Brain — the model that thinks'));
+  console.log(`    ${C.g}[L]${C.x} Local open-weights  ${C.d}— private, no API key, $0${C.x}`);
+  console.log(`    ${C.y}[C]${C.x} Cloud (BYOK)        ${C.d}— your key, your spend, their terms${C.x}`);
+  const cloud = /^c/i.test(((await ask(`  ${C.b}→${C.x} [L]ocal (default) or [C]loud? `)).trim() || 'L'));
+  const provider = cloud ? await pickCloud(ask) : 'local';
   let localModel;
   if (!cloud) {
-    localModel = (await ask('  Local model (default qwen2.5:7b): ')).trim() || 'qwen2.5:7b';
+    localModel = (await ask(`  ${C.b}→${C.x} Local model ${C.d}(default qwen2.5:7b)${C.x}: `)).trim() || 'qwen2.5:7b';
   } else {
-    console.log('\n  For a cloud model, add YOUR key to the environment (never pasted into chat or stored by us):');
-    console.log('    export OPENAI_API_KEY=…   (or ANTHROPIC_API_KEY / GEMINI_API_KEY)');
-    console.log('  then just request models like gpt-4o / claude-3-5-sonnet / gemini-1.5-pro.');
+    console.log(`    ${C.d}Add YOUR key to the environment (never pasted into chat or stored by us):${C.x}`);
+    console.log(`      ${C.b}export ${provider.toUpperCase()}_API_KEY=…${C.x}`);
   }
+  const v = await validateModelChoice({ provider, model: localModel }, { probes: realProbes });
+  console.log('    ' + (v.ok ? okMark(v.detail) : noMark(v.detail, v.fix)));
+  const pp = privacyPosture(provider);
+  console.log(`    ${pp.private ? C.g + '🔒' : C.y + '☁ '}${C.d}${pp.note}${C.x}`);
+
+  // Step 3 — routing & cost (the cost/ToS-approval mode the router will honor)
+  console.log(stepHdr(3, 4, 'Routing & cost'));
+  const saveApiSpend = !/^n/i.test(((await ask(`  ${C.b}→${C.x} Route simple tasks to your local model to save API spend? ${C.d}[Y/n]${C.x} `)).trim() || 'Y'));
+  console.log(`    ${C.d}When a task WOULD incur cloud API spend, Stratos should:${C.x}`);
+  console.log(`      ${C.g}[1]${C.x} Ask me first ${C.d}(notify + approve each spend — human on the loop)${C.x}`);
+  console.log(`      ${C.b}[2]${C.x} Auto-use a capable local model when one can do it`);
+  console.log(`      ${C.y}[3]${C.x} Always proceed and spend`);
+  const cm = ((await ask(`  ${C.b}→${C.x} Choice ${C.d}(default 1)${C.x}: `)).trim() || '1');
+  const costApproval = cm === '2' ? 'auto-local' : cm === '3' ? 'always-spend' : 'ask';
+
+  // Step 4 — mesh (optional, clearly separate)
+  console.log(stepHdr(4, 4, 'The Atmosphere mesh (optional)'));
+  console.log(`    ${C.d}A P2P compute mesh. Always optional — never required to use your agent.${C.x}`);
+  const meshEnroll = /^y/i.test(((await ask(`  ${C.b}→${C.x} Join the mesh now? ${C.d}[y/N]${C.x} `)).trim() || 'N'));
   rl.close();
-  applyInit({ agentName: name, localModel }, config);
-  console.log(`\n✅ Saved — your agent is "${name}".`);
-  console.log('   Next:  stratos doctor   (check readiness),  then  stratos start');
-  console.log('   Mesh (The Atmosphere) and any wallet are a separate, optional add-on — never required.\n');
+
+  applyWizard({ agentName, provider, localModel, saveApiSpend, costApproval, meshEnroll }, config);
+
+  const modeLabel = { ask: 'ask before cloud spend', 'auto-local': 'prefer local; spend only if needed', 'always-spend': 'always proceed' }[costApproval];
+  console.log('\n' + box([
+    `${C.g}${C.bold}✓ Saved — "${agentName}" is configured${C.x}`,
+    `${C.d}Brain:${C.x}   ${provider}${localModel ? ' · ' + localModel : ''}  ${v.ok ? C.g + '(ready)' : C.y + '(' + v.state + ')'}${C.x}`,
+    `${C.d}Routing:${C.x} save-spend ${saveApiSpend ? C.g + 'on' + C.x : 'off'} · ${modeLabel}`,
+    `${C.d}Mesh:${C.x}    ${meshEnroll ? 'joining' : 'off (optional)'}`,
+  ]));
+  console.log(`\n  Next:  ${C.b}stratos doctor${C.x} ${C.d}(check readiness)${C.x}  →  ${C.b}stratos start${C.x}`);
+  if (!v.ok && v.fix) console.log(`  ${C.y}First, fix the brain:${C.x} ${v.fix}`);
+  console.log(`  ${C.d}Tip: let Stratos self-configure from chat later — ${pp.private ? 'fully private with your local brain.' : 'note your cloud brain will see those prompts.'}${C.x}\n`);
 }
 
 async function startDaemon() {

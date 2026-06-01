@@ -20,7 +20,15 @@
 import crypto from 'node:crypto';
 
 const DEFAULT_TTL_MS = 120_000;
+const MIN_TTL_MS = 1_000;
+const MAX_TTL_MS = 10 * 60_000; // the model can't extend the trust window arbitrarily
 const pending = new Map(); // id -> record
+
+function clampTtl(ttlMs) {
+  const n = Number(ttlMs);
+  if (!Number.isFinite(n)) return DEFAULT_TTL_MS; // reject NaN/Infinity from the model
+  return Math.min(Math.max(n, MIN_TTL_MS), MAX_TTL_MS);
+}
 
 // deterministic, recursive key-sorted serialization (so {a,b} and {b,a} hash identically, but a changed
 // value anywhere in the args tree changes the hash). NOTE: JSON.stringify's array-replacer filters keys
@@ -31,9 +39,10 @@ function stableStringify(v) {
   return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
 }
 
-function fingerprint(connector, account, action, args) {
-  // stable hash of WHAT was approved — re-checked at consume time so post-approval arg edits fail closed
-  return crypto.createHash('sha256').update(stableStringify({ connector, account, action, args })).digest('hex');
+function fingerprint(connector, account, action, args, scopes) {
+  // stable hash of WHAT was approved — incl. scopes — re-checked at consume time so any post-approval
+  // edit (args OR scope-escalation) fails closed.
+  return crypto.createHash('sha256').update(stableStringify({ connector, account, action, args, scopes })).digest('hex');
 }
 
 function summarize(connector, action, args) {
@@ -45,19 +54,32 @@ function summarize(connector, action, args) {
 export function proposeWrite({ connector, account = 'default', action, args = {}, scopes = [], ttlMs = DEFAULT_TTL_MS } = {}) {
   if (!/^[a-z0-9_.-]+$/i.test(String(connector || ''))) throw new Error('invalid connector');
   if (!/^[a-z0-9_.-]+$/i.test(String(action || ''))) throw new Error('invalid action');
+  if (!Array.isArray(scopes)) throw new Error('scopes must be an array');
+  const normScopes = [...new Set(scopes.map(String))].sort(); // canonical: dedup + ordered
+  const ttl = clampTtl(ttlMs);
   const id = crypto.randomBytes(8).toString('hex');
   const nonce = crypto.randomBytes(16).toString('hex'); // owner-only secret; gates approval
-  const fp = fingerprint(connector, account, action, args);
-  pending.set(id, { id, nonce, fp, connector, account, action, scopes, status: 'pending', createdAt: Date.now(), ttlMs });
+  const summary = summarize(connector, action, args);
+  const fp = fingerprint(connector, account, action, args, normScopes);
+  pending.set(id, { id, nonce, fp, connector, account, action, scopes: normScopes, summary, status: 'pending', createdAt: Date.now(), ttlMs: ttl });
   // returned to the model only WITHOUT the nonce; the owner channel gets the nonce separately
-  return { id, connector, account, action, scopes, summary: summarize(connector, action, args), ttlMs, requiresApproval: true };
+  return { id, connector, account, action, scopes: normScopes, summary, ttlMs: ttl, requiresApproval: true };
 }
 
-/** OWNER-FACING (out-of-band): the nonce is delivered to the owner; returns it for the owner channel. */
+/**
+ * OWNER-FACING (out-of-band): the nonce is delivered to the owner alongside the FULL context they need
+ * to decide — the account, a redacted args summary, the scopes being granted, and how long the window
+ * is. The owner must never approve blind ("send what, to whom, for how long?").
+ */
 export function approvalChallenge(id) {
   const r = pending.get(id);
   if (!r || r.status !== 'pending') return null;
-  return { id, nonce: r.nonce, summary: `${r.connector}.${r.action}`, scopes: r.scopes };
+  return {
+    id, nonce: r.nonce,
+    connector: r.connector, account: r.account, action: r.action,
+    summary: r.summary, scopes: r.scopes,
+    ttlMs: r.ttlMs, expiresInMs: Math.max(0, r.ttlMs - (Date.now() - r.createdAt)),
+  };
 }
 
 function expired(r) { return Date.now() - r.createdAt > r.ttlMs; }
@@ -85,13 +107,18 @@ export function deny(id) {
  * BROKER-FACING: call immediately before executing the write. Verifies it was approved, not expired,
  * and that the action STILL matches what was approved (fingerprint). Consumes the approval (single-use).
  */
-export function consumeApproval({ id, connector, account = 'default', action, args = {} } = {}) {
+export function consumeApproval({ id, connector, account = 'default', action, args = {}, requiredScopes = [] } = {}) {
   const r = pending.get(id);
   if (!r) return { ok: false, reason: 'unknown' };
   if (r.status !== 'approved') return { ok: false, reason: `not approved (${r.status})` };
   if (expired(r)) { r.status = 'expired'; return { ok: false, reason: 'expired' }; }
-  if (r.fp !== fingerprint(connector, account, action, args)) {
+  // fingerprint binds args AND the approved scopes (recomputed from the record's canonical scopes)
+  if (r.fp !== fingerprint(connector, account, action, args, r.scopes)) {
     r.status = 'tampered'; return { ok: false, reason: 'action changed after approval' }; // fail closed
+  }
+  // the executor's actual required scopes must be a SUBSET of what the owner approved (no escalation)
+  if (!requiredScopes.map(String).every((s) => r.scopes.includes(s))) {
+    r.status = 'scope-violation'; return { ok: false, reason: 'required scope exceeds approved scopes' };
   }
   pending.delete(id); // single-use: no replay
   return { ok: true };
@@ -99,7 +126,7 @@ export function consumeApproval({ id, connector, account = 'default', action, ar
 
 export function listPending() {
   return [...pending.values()].filter((r) => r.status === 'pending' && !expired(r))
-    .map((r) => ({ id: r.id, connector: r.connector, action: r.action, scopes: r.scopes }));
+    .map((r) => ({ id: r.id, connector: r.connector, account: r.account, action: r.action, summary: r.summary, scopes: r.scopes, expiresInMs: Math.max(0, r.ttlMs - (Date.now() - r.createdAt)) }));
 }
 
 export function _reset() { pending.clear(); } // test hook

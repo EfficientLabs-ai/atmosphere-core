@@ -31,11 +31,11 @@ W.approve(p2.id, W.approvalChallenge(p2.id).nonce);
 const tampered = W.consumeApproval({ id: p2.id, connector: 'gmail', account: 'me', action: 'send', args: { to: 'attacker@evil.com', subject: 'hi' } });
 ok(tampered.ok === false && tampered.reason === 'action changed after approval', 'changing the recipient after approval → rejected');
 
-console.log('\n=== TTL: a stale approval does not execute ===');
+console.log('\n=== TTL: a stale approval does not execute (respecting the clamped 1s floor) ===');
 W._reset();
-const p3 = W.proposeWrite({ ...WRITE, ttlMs: 1 });
+const p3 = W.proposeWrite({ ...WRITE, ttlMs: 1 }); // clamps to MIN 1000ms
 W.approve(p3.id, W.approvalChallenge(p3.id).nonce);
-await new Promise((r) => setTimeout(r, 5));
+await new Promise((r) => setTimeout(r, 1010));
 ok(W.consumeApproval({ id: p3.id, ...WRITE }).ok === false, 'an expired approval is not executable');
 
 console.log('\n=== deny + unknown ===');
@@ -43,5 +43,29 @@ W._reset();
 const p4 = W.proposeWrite(WRITE);
 ok(W.deny(p4.id) === true && W.approve(p4.id, W.approvalChallenge(p4.id)?.nonce || 'x').ok === false, 'a denied proposal cannot later be approved');
 ok(W.consumeApproval({ id: 'deadbeef', ...WRITE }).ok === false, 'unknown id → not executable');
+
+console.log('\n=== scopes are bound: escalating the approved scope fails closed ===');
+W._reset();
+// escalation attempt: executor needs a scope the owner did NOT approve → rejected (and burns the approval)
+const psA = W.proposeWrite({ ...WRITE, scopes: ['gmail.send'] });
+W.approve(psA.id, W.approvalChallenge(psA.id).nonce);
+ok(W.consumeApproval({ id: psA.id, ...WRITE, requiredScopes: ['gmail.admin'] }).ok === false, 'a required scope outside the approved set is rejected (no escalation)');
+// in-scope executor (separate proposal — each write gets its own approval): executes
+const psB = W.proposeWrite({ ...WRITE, scopes: ['gmail.send'] });
+W.approve(psB.id, W.approvalChallenge(psB.id).nonce);
+ok(W.consumeApproval({ id: psB.id, ...WRITE, requiredScopes: ['gmail.send'] }).ok === true, 'a required scope within the approved set executes');
+
+console.log('\n=== owner gets full context to decide (not blind) ===');
+W._reset();
+const pc = W.proposeWrite({ ...WRITE, scopes: ['gmail.send'] });
+const ch = W.approvalChallenge(pc.id);
+ok(ch.account === 'me' && ch.summary.includes('attacker@evil.com') === false && ch.summary.includes('a@b.com'), 'challenge shows account + an args summary (who/what), not just connector.action');
+ok(typeof ch.expiresInMs === 'number' && ch.expiresInMs > 0 && ch.scopes.includes('gmail.send'), 'challenge surfaces the trust window + scopes being granted');
+
+console.log('\n=== model-supplied ttlMs is clamped (no unbounded trust window) ===');
+W._reset();
+ok(W.proposeWrite({ ...WRITE, ttlMs: 999_999_999 }).ttlMs === 600_000, 'an oversized ttlMs is clamped to the 10-min max');
+ok(W.proposeWrite({ ...WRITE, ttlMs: 1 }).ttlMs === 1_000, 'a tiny ttlMs is raised to the 1-s min');
+ok(W.proposeWrite({ ...WRITE, ttlMs: Infinity }).ttlMs === 120_000, 'a non-finite ttlMs falls back to the default');
 
 console.log(`\n✅ ALL ${pass} write-approval checks passed.`);

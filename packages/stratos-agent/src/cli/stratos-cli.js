@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as realConfig from '../core/agent-config.js';
 import * as realConnectors from '../connectors/connector-registry.js';
+import { languageName } from '../core/languages.js';
 import { realProbes } from './probes.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
@@ -135,6 +136,7 @@ async function cmdStatus(deps) {
     code: 0,
     lines: [
       `${C.b}${eff.agentName}${C.x} — status`,
+      `  Language: ${languageName(config.getLanguage()) || 'English'}`,
       `  Models:   ${modelsSummary(eff, models)}`,
       `  Routing:  save-spend ${eff.routing.saveApiSpend ? C.g + 'on' + C.x : 'off'} ${C.d}·${C.x} ${eff.routing.costApproval}`,
       `  Talk:     ${chans.length ? chans.join(' · ') + ` ${C.d}(configured)${C.x}` : C.y + 'no channel' + C.x + C.d + ' (stratos channels)' + C.x}`,

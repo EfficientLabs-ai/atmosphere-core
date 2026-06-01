@@ -5,6 +5,8 @@ import fetch from 'node-fetch';
 import { queryCognitiveSkill, queryInterceptedReasoning, queryAmbientMemory } from '../../stratos-agent/src/memory/vector-bank.js';
 import { tryServe as evolutionTryServe, observe as evolutionObserve } from './self-evolution-runtime.js';
 import { buildIdentityPrompt } from '../../stratos-agent/src/core/identity.js';
+import { languageDirective } from '../../stratos-agent/src/core/languages.js';
+import { getLanguage } from '../../stratos-agent/src/core/agent-config.js';
 import { planWindow, MODEL_NUM_CTX } from './memory-manager.js';
 
 /**
@@ -122,7 +124,12 @@ ${c.response}
 ---`;
     }
 
-    const systemPrompt = `${buildIdentityPrompt()}
+    // i18n: the gateway's language directive is an inbound system message that planWindow strips, so the
+    // LOCAL path would ignore it — thread it straight into the rebuilt system prompt here instead.
+    let langLine = '';
+    try { const d = languageDirective(getLanguage()); if (d) langLine = `\n${d}\n`; } catch { /* default */ }
+
+    const systemPrompt = `${buildIdentityPrompt()}${langLine}
 
 ${visualContext ? `Here is context harvested from your ACTIVE UI DISPLAY (Screen Capture Analysis):
 ${visualContext}

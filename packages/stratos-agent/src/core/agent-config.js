@@ -12,6 +12,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { isLanguage } from './languages.js';
 
 // Resolved lazily off process.cwd() so the module is robust to the daemon's working directory
 // (and testable in an isolated temp dir without import-time path capture).
@@ -22,6 +23,7 @@ const runtimePath = () => path.join(dir(), 'runtime-state.json');
 const DEFAULTS = () => ({
   rev: 0,
   agentName: 'StratosAgent',
+  language: 'en',                                                 // the agent replies in this language
   model: { provider: 'local', name: 'qwen2.5:7b' },               // the default brain (provider switch = CLI-only)
   // the model sources the user enabled in setup. local = Ollama open-weights; providers hold ONLY a vault
   // handle to the API key (the key itself lives encrypted in the vault, never here). The compliance router
@@ -119,6 +121,14 @@ export function setLocalModel(name) {
   return updateConfig((c) => { c.model = { provider: 'local', name: clean }; });
 }
 export function getAgentName() { return getConfig().agentName; }
+
+/** The language the agent replies in. Validated against the catalog. */
+export function setLanguage(code) {
+  const c = String(code || '').trim().toLowerCase();
+  if (!isLanguage(c)) throw new Error(`unsupported language: ${code}`);
+  return updateConfig((cfg) => { cfg.language = c; });
+}
+export function getLanguage() { return getConfig().language || 'en'; }
 
 /** Routing prefs (cost-save + cloud-spend approval mode). Validated; unknown modes rejected. */
 export function setRouting({ saveApiSpend, costApproval } = {}) {

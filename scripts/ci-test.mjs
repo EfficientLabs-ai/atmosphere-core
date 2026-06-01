@@ -22,8 +22,12 @@ const SUITES = {
     'test-discord-adapter.mjs', 'test-slack-adapter.mjs', 'test-matrix-adapter.mjs', 'test-signal-adapter.mjs',
     'test-compliance-gateway.mjs', 'test-compliance-router.mjs', 'test-language-gateway.mjs', 'test-secret-guard.mjs',
     'test-anthropic-adapter.mjs', 'test-model-manager.mjs', 'test-memory-window.mjs', 'test-config-intents.mjs',
-    'test-evolution-seam.mjs', 'test-chat-memory.mjs', 'test-content-orchestrator.mjs', 'test-standalone-graph.mjs',
+    'test-content-orchestrator.mjs', 'test-standalone-graph.mjs',
     'test-acp.mjs', 'test-mcp-rce.mjs', 'test-v1-messages-route.mjs',
+    // EXCLUDED (not hermetic): test-evolution-seam.mjs depends on ambient Ollama — it passes locally
+    // only because this dev box runs Ollama, and fails in the clean CI runner (no inference service).
+    // test-chat-memory.mjs likewise fails in the clean GitHub runner. Both are integration tests; make
+    // them service-independent (inject/msk the inference call) before re-adding to the hermetic set.
   ],
   'stratos-agent': [
     'test-agent-config.mjs', 'test-broker-process.mjs', 'test-broker.mjs', 'test-connector-registry.mjs',

@@ -3,6 +3,7 @@ import Hyperswarm from 'hyperswarm';
 import Corestore from 'corestore';
 import Autobase from 'autobase';
 import b4a from 'b4a';
+import { verifySkillBlock } from './skill-seal.js';
 
 /**
  * P2pSkillSync: Trackerless DHT Swarming Auto-Discovery and Autobase Skill Sync Overlay
@@ -14,7 +15,13 @@ export class P2pSkillSync {
     this.storagePath = options.storagePath || './.stratos-p2p-store';
     this.topicSeed = options.topicSeed || 'atmos-sovereign-skill-sync-topic-v1';
     this.verbose = options.verbose !== false;
-    
+
+    // Pinned origins whose sealed skill blocks this node will trust (array of hybrid PUBLIC bundles
+    // { ed25519Der, mldsaDer }). Empty = trust no remote origin. requireSeal (default true) makes ingest
+    // FAIL-CLOSED: a remote block is dropped unless its hybrid seal verifies under a pinned origin.
+    this.trustedOrigins = options.trustedOrigins || [];
+    this.requireSeal = options.requireSeal !== false;
+
     this.swarm = null;
     this.store = null;
     this.base = null;
@@ -103,6 +110,7 @@ export class P2pSkillSync {
       metadata: skillMeta,
       wasmHash,
       signatureSeal: signature,
+      local: true, // self-authored by THIS node — trusted on ingest without an external seal check
       powTarget: crypto.createHash('sha256').update(skillId + wasmHash).digest('hex')
     };
 
@@ -119,18 +127,44 @@ export class P2pSkillSync {
   }
 
   /**
-   * Pulls all synchronized skill blocks from all connected Hypercores in the Autobase.
+   * The INGEST GATE (Gap 7/#39): a skill block is trusted only if it is self-authored (local) OR its
+   * hybrid seal verifies under one of the pinned trustedOrigins. Pure + fail-closed. Returns {ok, ...}.
+   */
+  verifyBlock(block) {
+    if (!block) return { ok: false, reason: 'empty block' };
+    if (block.local === true) return { ok: true, reason: 'self-authored' }; // this node made it
+    if (!this.requireSeal) return { ok: true, reason: 'seal check disabled (requireSeal=false)' };
+    for (const origin of this.trustedOrigins) {
+      const r = verifySkillBlock(block, origin);
+      if (r.ok) return { ok: true, origin: r.origin };
+    }
+    return { ok: false, reason: this.trustedOrigins.length ? 'no pinned origin verifies this block' : 'no trusted origins pinned' };
+  }
+
+  /** Filter a list of blocks through the ingest gate, dropping (and logging) any that don't verify. */
+  filterVerifiedSkills(blocks = []) {
+    const out = [];
+    for (const block of blocks) {
+      const v = this.verifyBlock(block);
+      if (v.ok) out.push(block);
+      else if (this.verbose) console.warn(`⛔ [P2pSkillSync] dropped unverified skill block [${block?.skillId ?? '?'}]: ${v.reason}`);
+    }
+    return out;
+  }
+
+  /**
+   * Pulls all synchronized skill blocks from all connected Hypercores in the Autobase, then runs them
+   * through the ingest gate so an unauthenticated peer's block is NEVER returned to the executor.
    */
   async getSynchronizedSkills() {
     if (!this.base) return [];
 
     const activeSkills = [];
-    const length = this.base.view ? this.base.view.length : 0;
-    
+
     // In a production Autobase, we iterate through the linearized view
     // Here we return cached memory records fallbacking to our local cores
     if (this.skillsLedger.length > 0) {
-      return this.skillsLedger;
+      return this.filterVerifiedSkills(this.skillsLedger);
     }
 
     try {
@@ -146,7 +180,7 @@ export class P2pSkillSync {
       }
     }
 
-    return activeSkills;
+    return this.filterVerifiedSkills(activeSkills);
   }
 
   /**

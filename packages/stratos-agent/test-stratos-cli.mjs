@@ -41,9 +41,9 @@ ok(/qwen2\.5:7b/.test(s) && /ready/.test(s), 'model readiness from effectiveCapa
 ok(/off/.test(s) && /not joined/.test(s), 'mesh reported off (no fleet.json) — not fabricated');
 ok(!/SOL|12\.45|Maximus|EsportsCafe|records|connected/.test(s), 'NO fabricated SOL balance / peer list / record counts');
 
-console.log('\n=== status: model not installed → honest "requested", daemon up when port listening ===');
+console.log('\n=== status: model not installed → honest "not pulled", daemon up when port listening ===');
 r = await run(['status'], { config, probes: probes({ probeOllama: async () => ({ reachable: false, models: [] }), probePort: async () => true }), port: 4099 });
-ok(/requested/.test(text(r)), 'model not installed → state "requested" (not overstated as ready)');
+ok(/not pulled/.test(text(r)), 'local model not installed → "not pulled" (not overstated as ready)');
 ok(/running/.test(text(r)), 'daemon "running" when the port is listening');
 
 console.log('\n=== doctor is read-only & reflects real failures ===');
@@ -82,5 +82,31 @@ ok(r.action === 'service-install', 'service install → action delegated to bin 
 const unit = generateSystemdUnit({ execPath: '/usr/bin/node', binPath: '/x/stratos.js', port: 4099 });
 ok(/systemd/i.test('[Unit]') === false && unit.includes('[Service]') && unit.includes('ExecStart=/usr/bin/node /x/stratos.js start'), 'systemd unit: ExecStart wired to the bin');
 ok(unit.includes('WantedBy=default.target') && unit.includes('Environment=PORT=4099') && !/root|sudo/i.test(unit), 'systemd unit: user target (default.target), PORT env, no root');
+
+// connectors — metadata-only listing (injected stub)
+r = await run(['connectors'], { config, connectors: { listConnectors: () => [{ name: 'github', hasCredential: true, command: 'node' }] } });
+ok(r.code === 0 && /github/.test(text(r)) && /credentialed/.test(text(r)), 'connectors lists onboarded connectors (metadata)');
+r = await run(['connectors'], { config, connectors: { listConnectors: () => [] } });
+ok(/stratos connect/.test(text(r)), 'empty connectors → points to onboarding');
+
+// mesh — walkthrough + honest status
+r = await run(['mesh'], { config });
+ok(r.code === 0 && /Atmosphere/.test(text(r)) && /not joined|opted in/.test(text(r)), 'mesh shows the walkthrough + status');
+
+// connect — interactive, delegated to bin
+r = await run(['connect'], { config });
+ok(r.action === 'connect', 'connect → action delegated to the interactive bin handler');
+
+ok(['connect', 'connectors', 'mesh'].every((c) => COMMANDS.includes(c)), 'new commands are in the COMMANDS surface');
+
+console.log('\n=== status/doctor/models reflect the wizard config (model sources + channels) ===');
+config.enableProvider('anthropic', 'cvault:anthropic:api-key:' + 'a'.repeat(32));
+config.setMessagingChannel('telegram', { enabled: true, tokenHandle: 'cvault:telegram:bot-token:' + 'b'.repeat(32) });
+r = await run(['status'], { config, probes: probes() });
+ok(/anthropic/.test(text(r)) && /telegram/.test(text(r)), 'status shows the configured provider + channel');
+r = await run(['models'], { config, probes: probes() });
+ok(/anthropic/.test(text(r)) && /✓/.test(text(r)), 'models lists the configured provider with its key set');
+r = await run(['doctor'], { config, probes: probes() });
+ok(/anthropic key/.test(text(r)) && /telegram/.test(text(r)), 'doctor checks the provider key + channel token');
 
 console.log(`\n✅ ALL ${pass} stratos-cli checks passed.`);

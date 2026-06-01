@@ -104,13 +104,16 @@ export class P2pSkillSync {
   async appendSkillBlock(skillId, skillMeta, wasmHash, signature) {
     if (!this.base) throw new Error('P2pSkillSync not initialized');
 
+    // NOTE: we deliberately do NOT stamp an in-band "local/trusted" flag here. Such a field would be
+    // serialized into the replicated block, and a malicious peer could set it on its OWN block to spoof
+    // trust. Self-authorship is decided OUT-OF-BAND at read time by provenance (which core the block came
+    // from) — see getSynchronizedSkills(selfAuthored:true) for our own core vs verifyBlock() for remotes.
     const skillBlock = {
       skillId,
       timestamp: new Date().toISOString(),
       metadata: skillMeta,
       wasmHash,
       signatureSeal: signature,
-      local: true, // self-authored by THIS node — trusted on ingest without an external seal check
       powTarget: crypto.createHash('sha256').update(skillId + wasmHash).digest('hex')
     };
 
@@ -127,12 +130,12 @@ export class P2pSkillSync {
   }
 
   /**
-   * The INGEST GATE (Gap 7/#39): a skill block is trusted only if it is self-authored (local) OR its
-   * hybrid seal verifies under one of the pinned trustedOrigins. Pure + fail-closed. Returns {ok, ...}.
+   * The INGEST GATE (Gap 7/#39) for a REMOTE block: trusted only if its hybrid seal verifies under one of
+   * the pinned trustedOrigins. Pure + fail-closed. NB: there is intentionally NO in-band "trusted" bit —
+   * a peer could forge one; self-authorship is established by provenance (the caller), never by the block.
    */
   verifyBlock(block) {
-    if (!block) return { ok: false, reason: 'empty block' };
-    if (block.local === true) return { ok: true, reason: 'self-authored' }; // this node made it
+    if (!block || !block.skillId || !block.wasmHash || !block.signatureSeal) return { ok: false, reason: 'malformed block' };
     if (!this.requireSeal) return { ok: true, reason: 'seal check disabled (requireSeal=false)' };
     for (const origin of this.trustedOrigins) {
       const r = verifySkillBlock(block, origin);
@@ -141,20 +144,26 @@ export class P2pSkillSync {
     return { ok: false, reason: this.trustedOrigins.length ? 'no pinned origin verifies this block' : 'no trusted origins pinned' };
   }
 
-  /** Filter a list of blocks through the ingest gate, dropping (and logging) any that don't verify. */
-  filterVerifiedSkills(blocks = []) {
+  /**
+   * Filter a list of blocks through the ingest gate. `selfAuthored` is set by the CALLER from the block
+   * SOURCE (e.g. this node's own localInput core) — provenance trust that no peer can forge. Remote blocks
+   * (selfAuthored:false) must pass verifyBlock(); unverified blocks are dropped (and logged).
+   */
+  filterVerifiedSkills(blocks = [], { selfAuthored = false } = {}) {
+    if (selfAuthored) return blocks.slice(); // provenance: came from our OWN core — trusted by source
     const out = [];
     for (const block of blocks) {
       const v = this.verifyBlock(block);
       if (v.ok) out.push(block);
-      else if (this.verbose) console.warn(`⛔ [P2pSkillSync] dropped unverified skill block [${block?.skillId ?? '?'}]: ${v.reason}`);
+      else if (this.verbose) console.warn(`⛔ [P2pSkillSync] dropped unverified remote skill block [${block?.skillId ?? '?'}]: ${v.reason}`);
     }
     return out;
   }
 
   /**
-   * Pulls all synchronized skill blocks from all connected Hypercores in the Autobase, then runs them
-   * through the ingest gate so an unauthenticated peer's block is NEVER returned to the executor.
+   * Pulls skill blocks from THIS node's own ledger / local core. These are self-authored (provenance
+   * trust). When peer-core replication is wired, remote blocks MUST be read separately and passed through
+   * filterVerifiedSkills(remote, { selfAuthored:false }) so an unauthenticated peer's block is never run.
    */
   async getSynchronizedSkills() {
     if (!this.base) return [];
@@ -164,7 +173,7 @@ export class P2pSkillSync {
     // In a production Autobase, we iterate through the linearized view
     // Here we return cached memory records fallbacking to our local cores
     if (this.skillsLedger.length > 0) {
-      return this.filterVerifiedSkills(this.skillsLedger);
+      return this.filterVerifiedSkills(this.skillsLedger, { selfAuthored: true });
     }
 
     try {
@@ -180,7 +189,7 @@ export class P2pSkillSync {
       }
     }
 
-    return this.filterVerifiedSkills(activeSkills);
+    return this.filterVerifiedSkills(activeSkills, { selfAuthored: true }); // own localInput core
   }
 
   /**

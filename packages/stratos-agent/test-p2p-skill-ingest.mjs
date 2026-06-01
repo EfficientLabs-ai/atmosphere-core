@@ -1,8 +1,11 @@
 /**
  * P2P skill-sync ingest gate (Gap 7/#39). Before this, getSynchronizedSkills() returned peer skill
  * blocks WITHOUT verifying their seal — a node could ingest + run a skill from an unauthenticated peer.
- * Now every block passes through verifyBlock(): self-authored OR a hybrid seal that verifies under a
- * PINNED origin. Forged / untrusted / tampered blocks are dropped (fail-closed).
+ *
+ * Trust model (after Codex review of #46): self-authorship is established by PROVENANCE (the block came
+ * from this node's own core — the CALLER passes selfAuthored:true), NEVER by an in-band field a peer
+ * could forge. A REMOTE block is trusted only if its hybrid Ed25519+ML-DSA seal verifies under a PINNED
+ * origin. The critical regression here is the spoof: a remote block that sets local:true must STILL drop.
  *
  * Constructs P2pSkillSync WITHOUT init() (no swarm/network) and drives the pure gate directly.
  */
@@ -19,32 +22,37 @@ const B = generateHybridKeyPair(); // an untrusted / attacker origin
 
 const sync = new P2pSkillSync({ storagePath: './.tmp-test', trustedOrigins: [A.publicKey], verbose: false });
 
-console.log('=== a block sealed by the PINNED origin is accepted ===');
+console.log('=== a REMOTE block sealed by the PINNED origin is accepted ===');
 const good = sealSkillBlock({ skillId: 'summarize.v1', wasmHash, metadata: { risk: 'low' } }, A);
-ok(sync.verifyBlock(good).ok === true, "a block sealed by pinned origin A → accepted");
+ok(sync.verifyBlock(good).ok === true, 'a block sealed by pinned origin A → verifies');
 
-console.log('\n=== forged / untrusted / tampered blocks are DROPPED (fail-closed) ===');
+console.log('\n=== forged / untrusted / tampered REMOTE blocks are DROPPED (fail-closed) ===');
 const fromB = sealSkillBlock({ skillId: 'summarize.v1', wasmHash, metadata: { risk: 'low' } }, B);
-ok(sync.verifyBlock(fromB).ok === false, "a block sealed by UNTRUSTED origin B → dropped");
-const tamperedHash = wasmHash.slice(0, -1) + (wasmHash.endsWith('a') ? 'b' : 'a'); // always differs
-ok(sync.verifyBlock({ ...good, wasmHash: tamperedHash }).ok === false, "tampered wasmHash (swapped WASM) → dropped");
-ok(sync.verifyBlock({ skillId: 'x', wasmHash, signatureSeal: null }).ok === false, "no seal → dropped");
-ok(sync.verifyBlock(null).ok === false, "empty block → dropped");
+ok(sync.verifyBlock(fromB).ok === false, 'a block sealed by UNTRUSTED origin B → dropped');
+const tamperedHash = wasmHash.slice(0, -1) + (wasmHash.endsWith('a') ? 'b' : 'a');
+ok(sync.verifyBlock({ ...good, wasmHash: tamperedHash }).ok === false, 'tampered wasmHash (swapped WASM) → dropped');
+ok(sync.verifyBlock({ skillId: 'x', wasmHash, signatureSeal: null }).ok === false, 'no seal → dropped (malformed)');
+ok(sync.verifyBlock(null).ok === false, 'empty block → dropped');
 
-console.log('\n=== self-authored local blocks are trusted (the node made them) ===');
-ok(sync.verifyBlock({ skillId: 'mine.v1', wasmHash, local: true }).ok === true, "local:true → trusted without an external seal");
+console.log('\n=== THE SPOOF (Codex #46): a remote block claiming local:true must STILL be dropped ===');
+const spoof = { skillId: 'evil.v1', wasmHash, signatureSeal: { ed25519Sig: 'AA', mldsaSig: 'AA' }, local: true, origin: 'did:atmos:whatever' };
+ok(sync.verifyBlock(spoof).ok === false, 'verifyBlock ignores in-band local:true — an unsealed forgery is rejected');
+ok(sync.filterVerifiedSkills([spoof], { selfAuthored: false }).length === 0, 'as a REMOTE block, the local:true forgery is dropped');
 
-console.log('\n=== filterVerifiedSkills + getSynchronizedSkills drop the bad, keep the good ===');
-const mixed = [good, fromB, { skillId: 'mine.v1', wasmHash, local: true }];
-const kept = sync.filterVerifiedSkills(mixed);
-ok(kept.length === 2 && kept.includes(good) && !kept.includes(fromB), "filter keeps pinned + local, drops the untrusted block");
-sync.base = {}; sync.skillsLedger = mixed; // simulate a populated ledger without init()
+console.log('\n=== provenance: self-authored (own core) blocks are trusted by SOURCE, not by content ===');
+const selfBlock = { skillId: 'mine.v1', wasmHash, signatureSeal: 'plain-sig-from-writer' };
+ok(sync.filterVerifiedSkills([selfBlock], { selfAuthored: true }).length === 1, 'a block from our OWN core is kept (provenance trust, no seal needed)');
+ok(sync.filterVerifiedSkills([selfBlock], { selfAuthored: false }).length === 0, 'the SAME block treated as remote (no valid seal) is dropped — trust is the source, not the block');
+
+console.log('\n=== filter + getSynchronizedSkills (own ledger = self-authored) ===');
+ok(sync.filterVerifiedSkills([good, fromB], { selfAuthored: false }).length === 1, 'remote set: keeps pinned-A, drops untrusted-B');
+sync.base = {}; sync.skillsLedger = [good, fromB, selfBlock]; // own ledger → all self-authored by provenance
 const synced = await sync.getSynchronizedSkills();
-ok(synced.length === 2 && !synced.some((b) => b === fromB), "getSynchronizedSkills never returns the unauthenticated peer block");
+ok(synced.length === 3, 'getSynchronizedSkills returns our OWN ledger (self-authored) intact');
 
-console.log('\n=== with NO origins pinned, remote blocks are refused (deny-by-default) ===');
+console.log('\n=== with NO origins pinned, REMOTE blocks are refused (deny-by-default) ===');
 const empty = new P2pSkillSync({ trustedOrigins: [], verbose: false });
-ok(empty.verifyBlock(good).ok === false, "no pinned origins → even a validly-sealed remote block is refused");
-ok(empty.verifyBlock({ skillId: 'mine', wasmHash, local: true }).ok === true, "...but the node still trusts its OWN local skills");
+ok(empty.verifyBlock(good).ok === false, 'no pinned origins → even a validly-sealed remote block is refused');
+ok(empty.filterVerifiedSkills([good, spoof], { selfAuthored: false }).length === 0, 'no pinned origins → all remote blocks (incl. the spoof) dropped');
 
 console.log(`\n✅ ALL ${pass} p2p-skill-ingest checks passed.`);

@@ -22,6 +22,13 @@ const mentioned = a.shouldHandle({ userId: 'U0OWNER1', text: '<@U0BOT123> summar
 ok(mentioned.handle === true && mentioned.text === 'summarize this', 'an @mention in a channel → handled, mention stripped');
 ok(a.shouldHandle(dm({ text: '   ' }), BOT).handle === false, 'an empty prompt → skipped');
 
+console.log('\n=== no owner set → FAIL CLOSED unless explicitly opted into an open bot ===');
+const closed = new SlackAdapter({ verbose: false });
+ok(closed.shouldHandle(dm({ userId: 'U0ANYONE' }), BOT).handle === false, 'no owner configured → nobody is handled (fail-closed)');
+ok(/no owner/.test(closed.shouldHandle(dm({ userId: 'U0ANYONE' }), BOT).reason), 'the skip reason names the missing owner');
+const open = new SlackAdapter({ verbose: false, allowAnyone: true });
+ok(open.shouldHandle(dm({ userId: 'U0ANYONE' }), BOT).handle === true, 'allowAnyone opt-in → an open bot handles anyone in a DM');
+
 console.log('\n=== reply chunking to the Slack limit ===');
 const parts = SlackAdapter.chunk('x'.repeat(8000));
 ok(parts.length >= 3 && parts.every((p) => p.length <= 3000), 'an 8000-char reply splits into ≤3000-char chunks');

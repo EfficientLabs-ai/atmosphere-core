@@ -15,9 +15,11 @@
     "start:maximus": "npm run start --workspace=packages/maximus-telemetry",
     "start:desktop": "npm run tauri dev --workspace=packages/atmos-desktop"
   },
-  "devDependencies": {},
   "dependencies": {
+    "@lancedb/lancedb": "^0.29.0",
+    "@slack/bolt": "^4.7.3",
     "@solana/web3.js": "^1.98.4",
-    "@lancedb/lancedb": "^0.29.0"
+    "discord.js": "^14.26.4",
+    "matrix-js-sdk": "^41.6.0"
   }
 }

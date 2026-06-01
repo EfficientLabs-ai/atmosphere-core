@@ -386,12 +386,12 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.post('/v1/messages', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
-  // Cost/ToS approval gate (the human-in-the-loop "ask" UX). NOTE: unlike /v1/chat/completions, this
-  // route NEVER performs a paid BYOK passthrough — it only local-falls-back or proxies to the local
-  // Stratos agent (STRATOS_AGENT_URL). So there is no gateway-level spend to FAIL-CLOSE on: if the gate
-  // itself throws, we simply proceed (blocking here would be a false-positive — Codex review of #45).
-  try { if (complianceApprovalGate(req, res)) return; }
-  catch { /* gate unevaluable + this route can't spend at the gateway → proceed, do not false-block */ }
+  // NO cost/ToS gate here — by design. Unlike /v1/chat/completions, this route NEVER performs a paid BYOK
+  // passthrough: it only local-falls-back or proxies to the local Stratos agent (STRATOS_AGENT_URL), so it
+  // incurs no gateway-level spend. Running the compliance gate here only produced false-positive 402s for
+  // paid-looking models that never actually spend on this route (both the 'ask' path AND the gate's own
+  // internal fail-closed — Codex review of #45). The cost-approval gate lives solely on the spend-capable
+  // route. (If /v1/messages ever gains a BYOK passthrough, re-add the gate + a route-aware fail-closed.)
   languageGate(req); // reply in the user's configured language (no-op for English)
 
   const isLocalRequest = req.body.model && (

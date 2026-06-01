@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 import readline from 'node:readline';
-import { run, applyInit, generateSystemdUnit } from '../src/cli/stratos-cli.js';
+import { run, applyInit, generateSystemdUnit, banner } from '../src/cli/stratos-cli.js';
 import * as config from '../src/core/agent-config.js';
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
@@ -21,7 +21,8 @@ function pkgVersion() {
 async function initWizard() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = (q) => new Promise((res) => rl.question(q, res));
-  console.log('\n🌌 StratosAgent setup — local-first, private by default.\n');
+  console.log(banner());
+  console.log('🌌 Welcome. Let\'s set up your sovereign agent — local-first, private by default.\n');
   const name = (await ask('Name your agent (default StratosAgent): ')).trim() || 'StratosAgent';
   console.log('\nModel: run a LOCAL open-weights model (private, no API key) or a cloud model with YOUR key (BYOK).');
   const cloud = /^c/i.test(((await ask('  [L]ocal (default) or [C]loud? ')).trim() || 'L'));

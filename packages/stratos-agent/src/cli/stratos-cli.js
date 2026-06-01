@@ -18,8 +18,31 @@ import path from 'node:path';
 import * as realConfig from '../core/agent-config.js';
 import { realProbes } from './probes.js';
 
-const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m' };
+const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
+
+// Branded wordmark for first-run / help (like the polished onboarding of OpenCode/Hermes).
+const _F = {
+  S: ['█████', '█    ', '█████', '    █', '█████'],
+  T: ['█████', '  █  ', '  █  ', '  █  ', '  █  '],
+  R: ['████ ', '█   █', '████ ', '█  █ ', '█   █'],
+  A: ['█████', '█   █', '█████', '█   █', '█   █'],
+  O: ['█████', '█   █', '█   █', '█   █', '█████'],
+};
+const _WORDMARK = [0, 1, 2, 3, 4]
+  .map((r) => '  ' + 'STRATOS'.split('').map((c) => _F[c][r]).join(' '))
+  .join('\n');
+
+/** The branded banner shown on `stratos init` and `stratos help`. */
+export function banner() {
+  return [
+    '',
+    C.b + C.B + _WORDMARK + C.x,
+    '  ' + C.b + C.B + 'A G E N T' + C.x + C.d + '   ·   sovereign, local-first AI   ·   Efficient Labs' + C.x,
+    '  ' + C.d + 'The cloud is a ceiling. ' + C.x + C.b + 'The Atmosphere is limitless.' + C.x,
+    '',
+  ].join('\n');
+}
 
 function readFleet() {
   for (const base of [process.cwd(), path.join(process.cwd(), '.stratos-profile')]) {
@@ -33,8 +56,7 @@ function readFleet() {
 
 function helpText() {
   return [
-    `${C.b}stratos${C.x} — your sovereign, local-first AI agent (Efficient Labs)`,
-    '',
+    banner(),
     'Usage: stratos <command> [args]',
     '',
     `  ${C.g}init${C.x}            Set up your agent (name + local/BYOK model). Local-only, no wallet.`,

@@ -30,6 +30,22 @@ ok(r.kind === 'local', 'unknown family → local (default)');
 r = resolveRoute('gpt-4o', { BYOK_AUTO_LOCAL: '1' });
 ok(r.kind === 'error' && r.allowAuto === true, 'no key + BYOK_AUTO_LOCAL=1 → error flagged allowAuto (opt-in fallback)');
 
+console.log('\n=== OpenRouter meta-provider (one key → 100+ models via vendor/model slug) ===');
+const orKey = { OPENROUTER_API_KEY: 'sk-or-v1-xxxxxxxxxxxx' };
+r = resolveRoute('anthropic/claude-3.5-sonnet', orKey);
+ok(r.kind === 'byok' && r.provider === 'openrouter' && r.endpoint.includes('openrouter.ai') && r.model === 'anthropic/claude-3.5-sonnet', 'vendor/model slug + key → BYOK OpenRouter (slug preserved)');
+r = resolveRoute('meta-llama/llama-3-70b-instruct', orKey);
+ok(r.kind === 'byok' && r.provider === 'openrouter', 'any vendor/model slug → OpenRouter (the breadth)');
+r = resolveRoute('anthropic/claude-3.5-sonnet', {});
+ok(r.kind === 'error' && r.provider === 'openrouter' && r.status === 501, 'slug + NO OpenRouter key → explicit error (no silent local sub)');
+// native providers must still win for their OWN (slash-free) names, even with an OpenRouter key set:
+r = resolveRoute('gpt-4o', { ...orKey, OPENAI_API_KEY: 'sk-live-xxxxxxxxxxxx' });
+ok(r.kind === 'byok' && r.provider === 'openai', 'native gpt-* still routes to OpenAI, not OpenRouter');
+r = resolveRoute('claude-3-5-sonnet', { ...orKey, ANTHROPIC_API_KEY: 'sk-ant-xxxxxxxxxxxx' });
+ok(r.kind === 'byok' && r.provider === 'anthropic', 'native claude-* (no slash) still routes to Anthropic adapter');
+r = resolveRoute('qwen2.5:7b', orKey);
+ok(r.kind === 'local', 'local model (colon, no slash) still local even with OpenRouter key');
+
 console.log('\n=== selectLocalModel (install-gated, hardware-aware, honest concrete model) ===');
 let s = await selectLocalModel({ requested: 'default', probe: { cap: { gb: 6, kind: 'ram' }, installed: ['qwen2.5:7b'] } });
 ok(s.model === 'qwen2.5:7b', `6GB RAM, only qwen installed → ${s.model} (CPU-only reality)`);

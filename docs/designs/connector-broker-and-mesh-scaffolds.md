@@ -16,7 +16,13 @@ already built and tested (vault #11, write-approval gate #13) are the primitives
 the write-gate's cross-process enforcement (#13). The broker is a SEPARATE process so the model never
 holds `resolveSecret` or the approval ledger in-memory.
 
-**Real now:** vault (#11), write-approval logic (#13). **Designed:** everything below. **Needs:** build + a dedicated security review before any connector touches a live account.
+**Real now (BUILT + tested, 23 tests):** `broker-core.js` (capability token, read-only subset,
+write→approval, secret isolation, **destination/SSRF control**, broker-derived proposals),
+`mcp-client.js` (JSON-RPC framing), `mcp-stdio-transport.js` (real sidecar round-trip, auth-via-env).
+Passed a dedicated Codex adversarial review (2 CRITICAL + 5 HIGH); the fixable controls were folded in.
+**Still TODO before a live account:** `broker.js` — the socket wrapper must use an **inherited
+socketpair** (no named socket → no same-UID process can connect; Codex HIGH peer-binding) + cap-token
+expiry on disconnect/idle; and connector configs must **pin the sidecar binary+hash** (Codex HIGH).
 
 ### Architecture
 ```

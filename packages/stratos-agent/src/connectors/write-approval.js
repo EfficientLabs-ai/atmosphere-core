@@ -45,6 +45,11 @@ function fingerprint(connector, account, action, args, scopes) {
   return crypto.createHash('sha256').update(stableStringify({ connector, account, action, args, scopes })).digest('hex');
 }
 
+function deepFreeze(o) {
+  if (o && typeof o === 'object') { for (const v of Object.values(o)) deepFreeze(v); Object.freeze(o); }
+  return o;
+}
+
 function summarize(connector, action, args) {
   const parts = Object.entries(args || {}).map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 60) : JSON.stringify(v)}`);
   return `${connector}.${action}(${parts.join(', ')})`;
@@ -61,7 +66,11 @@ export function proposeWrite({ connector, account = 'default', action, args = {}
   const nonce = crypto.randomBytes(16).toString('hex'); // owner-only secret; gates approval
   const summary = summarize(connector, action, args);
   const fp = fingerprint(connector, account, action, args, normScopes);
-  pending.set(id, { id, nonce, fp, connector, account, action, scopes: normScopes, summary, status: 'pending', createdAt: Date.now(), ttlMs: ttl });
+  // store the EXACT args (structured) so the owner reviews precisely what will execute — a truncated
+  // summary alone lets a model hide a dangerous suffix/nested field past the cut while the full-args
+  // fingerprint still matches (Codex HIGH). Deep-frozen so nothing mutates the approved object.
+  const exactArgs = deepFreeze(structuredClone(args));
+  pending.set(id, { id, nonce, fp, connector, account, action, args: exactArgs, scopes: normScopes, summary, status: 'pending', createdAt: Date.now(), ttlMs: ttl });
   // returned to the model only WITHOUT the nonce; the owner channel gets the nonce separately
   return { id, connector, account, action, scopes: normScopes, summary, ttlMs: ttl, requiresApproval: true };
 }
@@ -77,6 +86,7 @@ export function approvalChallenge(id) {
   return {
     id, nonce: r.nonce,
     connector: r.connector, account: r.account, action: r.action,
+    args: r.args, // EXACT structured args — the owner reviews precisely what executes, not a truncated string
     summary: r.summary, scopes: r.scopes,
     ttlMs: r.ttlMs, expiresInMs: Math.max(0, r.ttlMs - (Date.now() - r.createdAt)),
   };

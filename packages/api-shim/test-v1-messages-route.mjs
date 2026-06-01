@@ -51,6 +51,12 @@ try {
   const proxied = await post({ model: 'some-upstream-model', messages: [{ role: 'user', content: 'hi' }] });
   ok(proxied.status === 502, 'unreachable upstream + no local fallback → 502 Bad Gateway (route ran end-to-end, no ReferenceError)');
 
+  console.log('\n=== /v1/messages does NOT fail-closed-block a PAID model (it can\'t spend on this route) — Codex #45 ===');
+  // This route never does a paid BYOK passthrough (it proxies to the local Stratos agent), so a paid
+  // model must NOT be 402-blocked when the gate isn't asking — it should proxy like any other model.
+  const paidProxied = await post({ model: 'claude-3-5-sonnet-20241022', messages: [{ role: 'user', content: 'hi' }] });
+  ok(paidProxied.status === 502, 'a paid model in non-ask mode → proxies (502), NOT a 402 false-block (route does no gateway spend)');
+
   console.log(`\n✅ ALL ${pass} /v1/messages route checks passed.`);
 } finally {
   server.close();

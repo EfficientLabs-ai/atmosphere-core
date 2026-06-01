@@ -87,16 +87,17 @@ const reasoningBank = new ReasoningBank({
 app.use(cors());
 app.use(bodyParser.json());
 
-// Fail-closed helper for when the compliance gate THROWS (couldn't be evaluated). The ONLY way a request
-// spends on a paid EXTERNAL API is the BYOK passthrough — i.e. exactly when resolveRoute() classifies the
-// model as 'byok' (a provider matched AND its key is configured). resolveRoute is the SAME classifier the
-// routing itself uses, so the gate can never disagree with where the request actually goes: we block
-// precisely the calls that would spend, and let everything that does NOT spend (local, no-key error,
-// unknown→local) proceed. If resolveRoute itself throws, assume the worst and block.
+// Fail-closed helper for when the compliance gate THROWS on the BYOK-capable route (/v1/chat/completions).
+// The ONLY way a request spends on a paid EXTERNAL API is the BYOK passthrough — i.e. exactly when
+// resolveRoute() classifies the model as 'byok' (a provider matched AND its key is configured).
+// resolveRoute is the SAME classifier that route uses, so the gate can never disagree with where the
+// request actually goes: we block precisely the calls that would spend, and let everything that does NOT
+// spend (local, no-key error, unknown→local) proceed. If resolveRoute itself throws, assume the worst.
 //
-// This supersedes the earlier providerForModel / isProvablyLocalModel heuristics (Codex reviews of #41 +
-// #45): those re-derived "is local" and couldn't match the router's case-sensitive, env-flag-dependent
-// behavior — e.g. they mis-handled `QWEN2.5:7B`, `STRATOS_FORCE_LOCAL=1`, and bare local-family names.
+// Used ONLY by /v1/chat/completions. /v1/messages does no BYOK passthrough (proxies to the local agent),
+// so it must NOT use this predicate — it would false-block paid models that never spend on that route
+// (Codex review of #45). This also supersedes the earlier providerForModel / isProvablyLocalModel
+// heuristics (Codex #41 + #45), which couldn't match the router's case-sensitive, env-dependent behavior.
 export function failClosedOnGateError(req, res) {
   let spends;
   try { spends = resolveRoute(req.body?.model).kind === 'byok'; } catch { spends = true; }
@@ -385,9 +386,12 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.post('/v1/messages', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
-  // Cost/ToS gate first — parity with /v1/chat/completions (fail-CLOSED for spend on any gate error).
+  // Cost/ToS approval gate (the human-in-the-loop "ask" UX). NOTE: unlike /v1/chat/completions, this
+  // route NEVER performs a paid BYOK passthrough — it only local-falls-back or proxies to the local
+  // Stratos agent (STRATOS_AGENT_URL). So there is no gateway-level spend to FAIL-CLOSE on: if the gate
+  // itself throws, we simply proceed (blocking here would be a false-positive — Codex review of #45).
   try { if (complianceApprovalGate(req, res)) return; }
-  catch { if (failClosedOnGateError(req, res)) return; }
+  catch { /* gate unevaluable + this route can't spend at the gateway → proceed, do not false-block */ }
   languageGate(req); // reply in the user's configured language (no-op for English)
 
   const isLocalRequest = req.body.model && (

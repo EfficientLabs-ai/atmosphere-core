@@ -35,11 +35,11 @@ export function didOf(pub) {
 
 const envBody = (e) => canonical({ sender: e.sender, recipient: e.recipient, action: String(e.action), payload: e.payload ?? {}, ts: e.ts, nonce: e.nonce });
 
-export function createAcpNode({ keyPair, name = 'node' } = {}) {
+export function createAcpNode({ keyPair, name = 'node', maxClockSkewMs = 300_000 } = {}) {
   if (!keyPair?.privateKey || !keyPair?.publicKey) throw new Error('createAcpNode needs a hybrid keypair');
   const myDid = didOf(keyPair.publicKey);
   const peers = new Map();       // did -> { publicBundle, grants:Set<string> }
-  const seenNonces = new Set();  // single-use nonce replay guard
+  const seenNonces = new Map();  // nk -> signed ts; bounded to the freshness window (not unbounded)
 
   /** Pin a peer's public bundle + the EXACT set of actions granted to them (deny-by-default otherwise). */
   function registerPeer(publicBundle, grants = []) {
@@ -59,9 +59,19 @@ export function createAcpNode({ keyPair, name = 'node' } = {}) {
     return { ...body, sig: { ed25519Sig: sig.ed25519Sig.toString('base64'), mldsaSig: sig.mldsaSig.toString('base64') } };
   }
 
-  /** Verify + authorize an inbound envelope. Deny-by-default at every step. */
-  function receiveTask(env, handler) {
-    if (!env || !env.sig || !env.sender || !env.action || env.nonce == null) return { ok: false, reason: 'malformed envelope' };
+  /**
+   * Verify + authorize an inbound envelope. Deny-by-default at every step. `now` is injectable for tests.
+   *
+   * Replay defense is two-layered: (1) the SIGNED `ts` must be within ±maxClockSkewMs of now — so a
+   * captured envelope replayed later (incl. against a freshly-restarted node) is rejected as stale; and
+   * (2) a single-use nonce blocks replay WITHIN the window. The nonce store is bounded to the window.
+   *
+   * Residual (documented): a replay WITHIN the freshness window against a node that restarted mid-window
+   * is still possible — fully closing that needs a persisted nonce store or a per-peer monotonic sequence.
+   * That is the follow-up; for alpha the window bounds the exposure to maxClockSkewMs.
+   */
+  function receiveTask(env, handler, { now = Date.now() } = {}) {
+    if (!env || !env.sig || !env.sender || !env.action || env.nonce == null || env.ts == null) return { ok: false, reason: 'malformed envelope' };
     if (env.recipient !== myDid) return { ok: false, reason: 'not addressed to this node' };
     const peer = peers.get(env.sender);
     if (!peer) return { ok: false, reason: 'sender is not a registered peer' };
@@ -70,10 +80,13 @@ export function createAcpNode({ keyPair, name = 'node' } = {}) {
     catch { return { ok: false, reason: 'malformed signature encoding' }; }
     // REAL verification against the pinned peer key (the scaffold only checked existence → forgery bypass)
     if (!verifyPayload(envBody(env), sig, peer.publicBundle)) return { ok: false, reason: 'signature verification failed (forged/tampered)' };
+    // ts is part of the signed body, so it's now trusted: enforce freshness so it actually defends replay
+    if (!Number.isFinite(env.ts) || Math.abs(now - env.ts) > maxClockSkewMs) return { ok: false, reason: 'stale or future-dated envelope (outside freshness window)' };
     if (!peer.grants.has(String(env.action))) return { ok: false, reason: `action '${env.action}' not granted to this peer` };
     const nk = env.sender + ':' + env.nonce;
+    for (const [k, t] of seenNonces) if (now - t > maxClockSkewMs) seenNonces.delete(k); // prune past-window nonces (bounded memory)
     if (seenNonces.has(nk)) return { ok: false, reason: 'replayed nonce' };
-    seenNonces.add(nk);
+    seenNonces.set(nk, env.ts);
     // authorized — hand to the local handler. NO auto-forward; a downstream hop must re-check its own grants.
     const result = handler ? handler({ sender: env.sender, action: env.action, payload: env.payload ?? {} }) : { accepted: true };
     return { ok: true, result };

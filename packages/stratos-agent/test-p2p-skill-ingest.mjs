@@ -34,9 +34,16 @@ ok(sync.verifyBlock({ ...good, wasmHash: tamperedHash }).ok === false, 'tampered
 ok(sync.verifyBlock({ skillId: 'x', wasmHash, signatureSeal: null }).ok === false, 'no seal → dropped (malformed)');
 ok(sync.verifyBlock(null).ok === false, 'empty block → dropped');
 
-console.log('\n=== THE SPOOF (Codex #46): a remote block claiming local:true must STILL be dropped ===');
+console.log('\n=== THE SPOOF (Codex #46): in-band local:true must be INERT — isolate it as the only variable ===');
+// fromB is a REAL, validly-sealed block (by untrusted origin B) — dropped purely because B is not pinned.
+// Adding local:true is the ONLY change; if local:true granted trust (the old bug) this block would pass.
+// It must drop IDENTICALLY, proving local:true is inert — not a tautology of an otherwise-broken block.
+const fromBNoLocal = sync.verifyBlock(fromB).ok;                       // false (untrusted origin)
+const fromBWithLocal = sync.verifyBlock({ ...fromB, local: true }).ok; // must ALSO be false
+ok(fromBNoLocal === false && fromBWithLocal === false, 'a validly-sealed-but-untrusted block drops the SAME with/without local:true (the flag changes nothing)');
+ok(sync.filterVerifiedSkills([{ ...fromB, local: true }], { selfAuthored: false }).length === 0, 'as a REMOTE block, {...validSeal-by-B, local:true} is still dropped — local:true grants no trust');
 const spoof = { skillId: 'evil.v1', wasmHash, signatureSeal: { ed25519Sig: 'AA', mldsaSig: 'AA' }, local: true, origin: 'did:atmos:whatever' };
-ok(sync.verifyBlock(spoof).ok === false, 'verifyBlock ignores in-band local:true — an unsealed forgery is rejected');
+ok(sync.verifyBlock(spoof).ok === false, 'an unsealed forgery with local:true is also rejected');
 ok(sync.filterVerifiedSkills([spoof], { selfAuthored: false }).length === 0, 'as a REMOTE block, the local:true forgery is dropped');
 
 console.log('\n=== provenance: self-authored (own core) blocks are trusted by SOURCE, not by content ===');

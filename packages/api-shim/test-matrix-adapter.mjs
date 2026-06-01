@@ -21,10 +21,13 @@ ok(a.shouldHandle(msg({ body: '   ' }), BOT).handle === false, 'an empty body �
 const handled = a.shouldHandle(msg({ body: 'what is the weather' }), BOT);
 ok(handled.handle === true && handled.text === 'what is the weather', 'a real prompt → handled, text extracted');
 
-console.log('\n=== no owner set → responds to anyone, still skips self ===');
-const open = new MatrixAdapter({ verbose: false });
-ok(open.shouldHandle(msg({ sender: '@anyone:matrix.org' }), BOT).handle === true, 'no owner configured → anyone is handled');
-ok(open.shouldHandle(msg({ sender: BOT }), BOT).handle === false, 'still skips its own messages');
+console.log('\n=== no owner set → FAIL CLOSED unless explicitly opted into an open bot ===');
+const closed = new MatrixAdapter({ verbose: false });
+ok(closed.shouldHandle(msg({ sender: '@anyone:matrix.org' }), BOT).handle === false, 'no owner configured → nobody is handled (fail-closed)');
+ok(/no owner/.test(closed.shouldHandle(msg({ sender: '@anyone:matrix.org' }), BOT).reason), 'the skip reason names the missing owner');
+const open = new MatrixAdapter({ verbose: false, allowAnyone: true });
+ok(open.shouldHandle(msg({ sender: '@anyone:matrix.org' }), BOT).handle === true, 'allowAnyone opt-in → an open bot handles anyone');
+ok(open.shouldHandle(msg({ sender: BOT }), BOT).handle === false, 'an open bot still skips its own messages');
 
 console.log('\n=== reply chunking ===');
 const parts = MatrixAdapter.chunk('y'.repeat(10000));

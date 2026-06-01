@@ -19,6 +19,9 @@ export class DiscordAdapter {
     this.verbose = options.verbose !== false;
     this.token = options.token || process.env.DISCORD_BOT_TOKEN || null;
     this.ownerId = options.ownerId || process.env.DISCORD_OWNER_ID || null; // only this user may command it
+    // Fail CLOSED: with no owner configured, serve NOBODY unless an open bot is explicitly opted into
+    // (DISCORD_ALLOW_ANYONE=1). Stops the "anyone who finds the bot can command it" footgun.
+    this.allowAnyone = options.allowAnyone === true || process.env.DISCORD_ALLOW_ANYONE === '1';
     this.port = options.port || process.env.PORT || 4099;
     this.model = options.model || process.env.STRATOS_MODEL || 'local';
     this._fetch = options.fetch || fetch; // injectable for tests
@@ -34,7 +37,8 @@ export class DiscordAdapter {
     if (!msg) return { handle: false, reason: 'no message' };
     if (botUserId && String(msg.authorId) === String(botUserId)) return { handle: false, reason: 'own message' };
     if (msg.authorBot) return { handle: false, reason: 'other bot' };
-    if (this.ownerId && String(msg.authorId) !== String(this.ownerId)) return { handle: false, reason: 'not the owner' };
+    if (!this.ownerId) { if (!this.allowAnyone) return { handle: false, reason: 'no owner configured (set DISCORD_OWNER_ID, or DISCORD_ALLOW_ANYONE=1 for an open bot)' }; }
+    else if (String(msg.authorId) !== String(this.ownerId)) return { handle: false, reason: 'not the owner' };
     if (!msg.isDM && !msg.mentionedBot) return { handle: false, reason: 'not @mentioned in a server' };
     const text = String(msg.content || '').replace(/<@!?\d+>/g, '').trim(); // strip the mention token
     if (!text) return { handle: false, reason: 'empty' };

@@ -18,10 +18,13 @@ ok(a.shouldHandle(env({ dataMessage: { message: '   ' } })).handle === false, 'a
 const h = a.shouldHandle(env({ dataMessage: { message: 'what time is it' } }));
 ok(h.handle === true && h.text === 'what time is it' && h.sender === '+15550000001', 'real prompt → handled, text + sender extracted');
 
-console.log('\n=== no owner set → responds to anyone, still skips self ===');
-const open = new SignalAdapter({ number: '+15559999999', verbose: false });
-ok(open.shouldHandle(env({ source: '+1555anyone', sourceNumber: '+1555anyone' })).handle === true, 'no owner → anyone is handled');
-ok(open.shouldHandle(env({ source: '+15559999999', sourceNumber: '+15559999999' })).handle === false, 'still skips its own number');
+console.log('\n=== no owner set → FAIL CLOSED unless explicitly opted into an open bot ===');
+const closed = new SignalAdapter({ number: '+15559999999', verbose: false });
+ok(closed.shouldHandle(env({ source: '+1555anyone', sourceNumber: '+1555anyone' })).handle === false, 'no owner → nobody is handled (fail-closed)');
+ok(/no owner/.test(closed.shouldHandle(env({ source: '+1555anyone', sourceNumber: '+1555anyone' })).reason), 'the skip reason names the missing owner');
+const open = new SignalAdapter({ number: '+15559999999', verbose: false, allowAnyone: true });
+ok(open.shouldHandle(env({ source: '+1555anyone', sourceNumber: '+1555anyone' })).handle === true, 'allowAnyone opt-in → an open bot handles anyone');
+ok(open.shouldHandle(env({ source: '+15559999999', sourceNumber: '+15559999999' })).handle === false, 'an open bot still skips its own number');
 
 console.log('\n=== chunking + routing ===');
 const parts = SignalAdapter.chunk('z'.repeat(5000));

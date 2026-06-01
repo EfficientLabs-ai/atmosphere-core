@@ -366,6 +366,10 @@ app.post('/v1/chat/completions', async (req, res) => {
 // Router interceptor for Anthropic Messages
 app.post('/v1/messages', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
+
+  // Cost/ToS gate first — parity with /v1/chat/completions (fail-CLOSED for spend on any gate error).
+  try { if (complianceApprovalGate(req, res)) return; }
+  catch { if (wouldSpend(req)) { res.status(402).json({ error: 'approval_required', reason: 'cost gate error — blocking a paid call to be safe' }); return; } }
   languageGate(req); // reply in the user's configured language (no-op for English)
 
   const isLocalRequest = req.body.model && (
@@ -397,6 +401,11 @@ app.post('/v1/messages', async (req, res) => {
     req.body.model = classification.targetModel;
     return handleAnthropicFallback(req, res);
   }
+
+  let shouldFallback = false;
+  let response;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), STRATOS_TIMEOUT);
 
   try {
     const proxyHeaders = { ...req.headers };

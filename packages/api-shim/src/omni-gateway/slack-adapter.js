@@ -21,6 +21,8 @@ export class SlackAdapter {
     this.botToken = options.botToken || process.env.SLACK_BOT_TOKEN || null;
     this.appToken = options.appToken || process.env.SLACK_APP_TOKEN || null;
     this.ownerId = options.ownerId || process.env.SLACK_OWNER_ID || null; // only this user may command it
+    // Fail CLOSED: no owner ⇒ serve nobody unless an open bot is explicitly opted into (SLACK_ALLOW_ANYONE=1).
+    this.allowAnyone = options.allowAnyone === true || process.env.SLACK_ALLOW_ANYONE === '1';
     this.port = options.port || process.env.PORT || 4099;
     this.model = options.model || process.env.STRATOS_MODEL || 'local';
     this.signingSecret = options.signingSecret || process.env.SLACK_SIGNING_SECRET || null;
@@ -37,7 +39,8 @@ export class SlackAdapter {
     if (!msg) return { handle: false, reason: 'no message' };
     if (msg.botId || msg.subtype) return { handle: false, reason: 'bot/system message' };
     if (botUserId && String(msg.userId) === String(botUserId)) return { handle: false, reason: 'own message' };
-    if (this.ownerId && String(msg.userId) !== String(this.ownerId)) return { handle: false, reason: 'not the owner' };
+    if (!this.ownerId) { if (!this.allowAnyone) return { handle: false, reason: 'no owner configured (set SLACK_OWNER_ID, or SLACK_ALLOW_ANYONE=1 for an open bot)' }; }
+    else if (String(msg.userId) !== String(this.ownerId)) return { handle: false, reason: 'not the owner' };
     if (!msg.isDM && !msg.mentionedBot) return { handle: false, reason: 'not @mentioned in a channel' };
     const text = String(msg.text || '').replace(/<@[A-Z0-9]+>/g, '').trim(); // strip Slack mention tokens
     if (!text) return { handle: false, reason: 'empty' };

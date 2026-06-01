@@ -13,15 +13,33 @@ import { run, generateSystemdUnit, banner } from '../src/cli/stratos-cli.js';
 import { validateModelChoice, applyWizard, privacyPosture, MODEL_SOURCES, multiSelectReduce, CHANNELS, channelDef, resolveProviderKeysToEnv, resolveChannelTokensToEnv } from '../src/cli/wizard.js';
 import { realProbes } from '../src/cli/probes.js';
 import * as config from '../src/core/agent-config.js';
+import { LANGUAGES } from '../src/core/languages.js';
 import * as connectorRegistry from '../src/connectors/connector-registry.js';
 import * as vault from '../src/connectors/vault.js';
 
 // ---- TUI helpers (presentation only; the wizard's logic is tested in src/cli/wizard.js) ----------
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', m: '\x1b[35m', d: '\x1b[2m', bold: '\x1b[1m', x: '\x1b[0m' };
 const strip = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, '');
+// terminal display width: East-Asian wide chars + emoji count as 2; combining marks as 0. This keeps the
+// boxes aligned for CJK and emoji (plain code-point length under-counts them and skews the borders).
+function displayWidth(s) {
+  let w = 0;
+  for (const ch of strip(s)) {
+    const cp = ch.codePointAt(0);
+    if ((cp >= 0x300 && cp <= 0x36f) || (cp >= 0x200b && cp <= 0x200f) || cp === 0xfeff) continue; // combining / zero-width
+    const wide = cp >= 0x1100 && (
+      cp <= 0x115f || cp === 0x2329 || cp === 0x232a ||
+      (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) || (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x20000 && cp <= 0x3fffd)
+    );
+    w += wide ? 2 : 1;
+  }
+  return w;
+}
 function box(lines, pad = 2) {
-  const w = Math.max(...lines.map((l) => strip(l).length)) + pad * 2;
-  const body = lines.map((l) => '│' + ' '.repeat(pad) + l + ' '.repeat(w - pad - strip(l).length) + '│');
+  const w = Math.max(...lines.map((l) => displayWidth(l))) + pad * 2;
+  const body = lines.map((l) => '│' + ' '.repeat(pad) + l + ' '.repeat(w - pad - displayWidth(l)) + '│');
   return [`╭${'─'.repeat(w)}╮`, ...body, `╰${'─'.repeat(w)}╯`].join('\n');
 }
 const stepHdr = (n, total, title) => `\n${C.m}${C.bold}  ◆ Step ${n}/${total}${C.x}${C.bold} · ${title}${C.x}`;
@@ -69,29 +87,30 @@ function makeAsker() {
  * open at the same time). Non-TTY fallback: numbered list + a comma-separated line from the shared queue.
  * `items`: [{ label, hint, value, checked? }]. Returns the selected values (in list order).
  */
-async function multiSelect(title, items, { min = 0 } = {}) {
+async function multiSelect(title, items, { min = 0, single = false } = {}) {
   const preselect = items.map((it, i) => (it.checked ? i : -1)).filter((i) => i >= 0);
   if (!process.stdin.isTTY) {
     await nonTtyReady();
     process.stdout.write(title + '\n');
     items.forEach((it, i) => process.stdout.write(`    ${i + 1}) ${it.label}  ${C.d}${it.hint || ''}${C.x}\n`));
-    process.stdout.write(`  ${C.b}→${C.x} Enter numbers ${C.d}(comma-separated, e.g. 1,2)${C.x}: `);
+    process.stdout.write(`  ${C.b}→${C.x} ${single ? 'Enter a number' : `Enter numbers ${C.d}(comma-separated, e.g. 1,2)${C.x}`}: `);
     const raw = nextNonTtyLine(); process.stdout.write(raw + '\n');
     let picks = raw ? raw.split(/[,\s]+/).map((n) => parseInt(n, 10) - 1).filter((n) => n >= 0 && n < items.length) : [];
-    if (!picks.length) picks = preselect;
-    return picks.map((i) => items[i].value);
+    if (!picks.length) picks = preselect.length ? preselect : (single ? [0] : []);
+    return (single ? picks.slice(0, 1) : picks).map((i) => items[i].value);
   }
   return new Promise((resolve) => {
-    let state = { index: 0, selected: new Set(preselect), count: items.length };
+    let state = { index: preselect[0] || 0, selected: new Set(preselect), count: items.length };
     readline.emitKeypressEvents(process.stdin);
     process.stdin.setRawMode(true); process.stdin.resume();
     const draw = (first) => {
       const out = [title];
       items.forEach((it, i) => {
         const cur = i === state.index, on = state.selected.has(i);
-        out.push(`  ${cur ? C.b + '›' + C.x : ' '} ${on ? C.g + '◉' + C.x : '◯'} ${cur ? C.b + it.label + C.x : it.label}  ${C.d}${it.hint || ''}${C.x}`);
+        const marker = single ? (cur ? C.g + '●' + C.x : '○') : (on ? C.g + '◉' + C.x : '◯');
+        out.push(`  ${cur ? C.b + '›' + C.x : ' '} ${marker} ${cur ? C.b + it.label + C.x : it.label}  ${C.d}${it.hint || ''}${C.x}`);
       });
-      out.push(`  ${C.d}↑/↓ move · space select · enter confirm${C.x}`);
+      out.push(`  ${C.d}↑/↓ move · ${single ? 'enter to choose' : 'space select · enter confirm'}${C.x}`);
       if (!first) process.stdout.write(`\x1b[${out.length}A`);
       process.stdout.write(out.map((l) => '\x1b[2K' + l).join('\n') + '\n');
     };
@@ -101,11 +120,12 @@ async function multiSelect(title, items, { min = 0 } = {}) {
       if (!key) return;
       if (key.ctrl && key.name === 'c') { cleanup(); process.stdout.write('\n'); process.exit(130); }
       if (key.name === 'return' || key.name === 'enter') {
+        if (single) { cleanup(); resolve([items[state.index].value]); return; } // enter picks the highlighted item
         if (state.selected.size < min) return;
         cleanup(); resolve([...state.selected].sort((a, b) => a - b).map((i) => items[i].value)); return;
       }
       const action = key.name === 'space' || str === ' ' ? 'space' : key.name;
-      const next = multiSelectReduce(state, action);
+      const next = single && action === 'space' ? state : multiSelectReduce(state, action); // space is a no-op in single mode
       if (next !== state) { state = next; draw(false); }
     };
     process.stdin.on('keypress', onKey);
@@ -121,6 +141,12 @@ function pkgVersion() {
 async function initWizard() {
   console.log(banner());
   console.log(box([`${C.bold}Set up your sovereign agent${C.x}`, `${C.d}5 quick steps · local-first · private by default${C.x}`]));
+
+  // Language first — the agent will reply in it (single-select; raw mode runs before any line reader).
+  console.log(`\n${C.m}${C.bold}  ◆ Language${C.x}`);
+  const langItems = LANGUAGES.map((l) => ({ label: l.label, hint: l.native, value: l.code, checked: l.code === config.getLanguage() }));
+  const [lang] = await multiSelect(`  ${C.d}Your agent will reply in this language (↑/↓ · enter)${C.x}`, langItems, { single: true });
+  if (lang) { try { config.setLanguage(lang); } catch { /* keep default */ } }
 
   // Step 1 — name
   let asker = makeAsker();

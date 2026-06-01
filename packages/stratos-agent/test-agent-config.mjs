@@ -14,6 +14,7 @@ process.chdir(tmp);
 const {
   getConfig, updateConfig, setAgentName, setLocalModel, getAgentName,
   effectiveCapabilities, getOwner, bindOwner, isOwner, markConfigured, _reset,
+  setLanguage, getLanguage,
 } = await import('./src/core/agent-config.js');
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
@@ -94,5 +95,12 @@ _reset();
 const m = getConfig();
 ok(m.agentName === 'Nova', 'migrated agentName from .env.local');
 ok(m.meshOptIn === true, 'migrated mesh opt-in from .env.local');
+
+console.log('\n=== language (i18n) ===');
+ok(getLanguage() === 'en', 'default language is English');
+setLanguage('es');
+ok(getLanguage() === 'es' && getConfig().language === 'es', 'setLanguage persists a valid language');
+let langThrew = false; try { setLanguage('klingon'); } catch { langThrew = true; }
+ok(langThrew && getLanguage() === 'es', 'an unsupported language is rejected; the previous value is unchanged');
 
 console.log(`\n✅ ALL ${pass} agent-config checks passed.`);

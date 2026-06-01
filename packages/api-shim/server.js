@@ -10,6 +10,7 @@ import { TaskClassifierRouter } from './src/task-router.js';
 import { resolveRoute, selectLocalModel } from './src/model-manager.js';
 import { passthroughCloud } from './src/routers/cloud-byok.js';
 import { passthroughAnthropic } from './src/routers/anthropic-adapter.js';
+import { languageGate } from './src/language-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 
@@ -201,6 +202,9 @@ async function harvestTelemetry(prompt, responseText) {
 app.post('/v1/chat/completions', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
+  // i18n: make the agent reply in the user's configured language (no-op for English; fail-open).
+  languageGate(req);
+
   // ── Universal Model Manager (clean path): resolve on the RAW body BEFORE any local mutation.
   const route = resolveRoute(req.body.model);
   if (route.kind === 'byok') {
@@ -358,6 +362,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 // Router interceptor for Anthropic Messages
 app.post('/v1/messages', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
+  languageGate(req); // reply in the user's configured language (no-op for English)
 
   const isLocalRequest = req.body.model && (
     req.body.model.includes('local') || 

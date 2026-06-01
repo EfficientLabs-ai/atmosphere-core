@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert';
 import { DiscordAdapter } from './src/omni-gateway/discord-adapter.js';
+import { SECRET_REFUSAL } from './src/secret-guard.js';
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
 const BOT = 'bot-999';
@@ -21,7 +22,19 @@ const mentioned = a.shouldHandle({ authorId: 'owner-1', authorBot: false, isDM: 
 ok(mentioned.handle === true && mentioned.text === 'summarize this', 'an @mention in a server → handled, mention stripped');
 ok(a.shouldHandle(dm({ content: '   ' }), BOT).handle === false, 'an empty prompt → skipped');
 const sec = a.shouldHandle(dm({ content: 'store this sk-ant-api03-abcdef1234567890abcdef1234567890' }), BOT);
-ok(sec.handle === false && sec.refuse === true && typeof sec.reply === 'string', 'a pasted API key → refused (not forwarded), with a refusal reply');
+ok(sec.handle === false && sec.refuse === true && sec.reply === SECRET_REFUSAL, 'a pasted API key → refused with exactly SECRET_REFUSAL (not forwarded)');
+
+console.log('\n=== dispatch: a secret is REFUSED and NEVER reaches the agent; a normal msg IS routed ===');
+let fetched = false;
+const guard = new DiscordAdapter({ ownerId: 'owner-1', verbose: false, fetch: async () => { fetched = true; return { json: async () => ({}) }; } });
+const sent = [];
+const d = await guard.dispatch(dm({ content: 'key sk-ant-api03-abcdef1234567890abcdef1234567890' }), BOT, (t) => sent.push(t));
+ok(d.refuse === true && sent.length === 1 && sent[0] === SECRET_REFUSAL, 'dispatch sends exactly SECRET_REFUSAL on a secret');
+ok(fetched === false, 'the agent gateway fetch is NEVER called for a secret message');
+const sent2 = [];
+const okAdapter = new DiscordAdapter({ ownerId: 'owner-1', verbose: false, fetch: async () => ({ json: async () => ({ choices: [{ message: { content: 'hi back' } }] }) }) });
+await okAdapter.dispatch(dm({ content: 'what is the weather' }), BOT, (t) => sent2.push(t));
+ok(sent2.includes('hi back'), 'a normal message IS routed to the agent and replied');
 
 console.log('\n=== no owner set → FAIL CLOSED (serves nobody) unless explicitly opted into an open bot ===');
 const closed = new DiscordAdapter({ verbose: false });

@@ -74,6 +74,18 @@ export class SlackAdapter {
     return out.length ? out : [''];
   }
 
+  /**
+   * Run ONE normalized message: gate it, refuse on a secret (SECRET_REFUSAL, stopping BEFORE askAgent),
+   * else route to the agent and reply via the injected `say(text)`. Unit-testable without @slack/bolt.
+   */
+  async dispatch(norm, botUserId, say) {
+    const decision = this.shouldHandle(norm, botUserId);
+    if (!decision.handle) { if (decision.refuse) await say(decision.reply); return decision; }
+    const reply = await this.askAgent(decision.text);
+    for (const part of SlackAdapter.chunk(reply)) await say(part);
+    return decision;
+  }
+
   /** Connect over Socket Mode and serve. Lazy-imports @slack/bolt so the module loads without the SDK. */
   async start() {
     if (!this.botToken || !this.appToken) {
@@ -93,10 +105,7 @@ export class SlackAdapter {
           isDM: message.channel_type === 'im',
           mentionedBot: botUserId ? String(message.text || '').includes(`<@${botUserId}>`) : false,
         };
-        const decision = this.shouldHandle(norm, botUserId);
-        if (!decision.handle) { if (decision.refuse) await say(decision.reply); return; }
-        const reply = await this.askAgent(decision.text);
-        for (const part of SlackAdapter.chunk(reply)) await say(part);
+        await this.dispatch(norm, botUserId, (t) => say(t));
       } catch (e) { if (this.verbose) console.error('❌ [Slack] handler error:', e.message); }
     });
     await this.app.start();

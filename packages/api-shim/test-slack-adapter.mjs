@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert';
 import { SlackAdapter } from './src/omni-gateway/slack-adapter.js';
+import { SECRET_REFUSAL } from './src/secret-guard.js';
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
 const BOT = 'U0BOT123';
@@ -22,7 +23,19 @@ const mentioned = a.shouldHandle({ userId: 'U0OWNER1', text: '<@U0BOT123> summar
 ok(mentioned.handle === true && mentioned.text === 'summarize this', 'an @mention in a channel → handled, mention stripped');
 ok(a.shouldHandle(dm({ text: '   ' }), BOT).handle === false, 'an empty prompt → skipped');
 const sec = a.shouldHandle(dm({ text: 'save sk-ant-api03-abcdef1234567890abcdef1234567890' }), BOT);
-ok(sec.handle === false && sec.refuse === true && typeof sec.reply === 'string', 'a pasted API key → refused (not forwarded)');
+ok(sec.handle === false && sec.refuse === true && sec.reply === SECRET_REFUSAL, 'a pasted API key → refused with exactly SECRET_REFUSAL (not forwarded)');
+{
+  let fetched = false;
+  const guard = new SlackAdapter({ ownerId: 'U0OWNER1', verbose: false, fetch: async () => { fetched = true; return { json: async () => ({}) }; } });
+  const sent = [];
+  const d = await guard.dispatch(dm({ text: 'key sk-ant-api03-abcdef1234567890abcdef1234567890' }), BOT, (t) => sent.push(t));
+  ok(d.refuse === true && sent.length === 1 && sent[0] === SECRET_REFUSAL, 'dispatch sends exactly SECRET_REFUSAL on a secret');
+  ok(fetched === false, 'the agent gateway fetch is NEVER called for a secret message');
+  const sent2 = [];
+  const okAdapter = new SlackAdapter({ ownerId: 'U0OWNER1', verbose: false, fetch: async () => ({ json: async () => ({ choices: [{ message: { content: 'hi back' } }] }) }) });
+  await okAdapter.dispatch(dm({ text: 'what is the weather' }), BOT, (t) => sent2.push(t));
+  ok(sent2.includes('hi back'), 'a normal message IS routed to the agent and replied');
+}
 
 console.log('\n=== no owner set → FAIL CLOSED unless explicitly opted into an open bot ===');
 const closed = new SlackAdapter({ verbose: false });

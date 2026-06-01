@@ -70,3 +70,50 @@ Give the agent tool-use over the user's real accounts (Gmail/Slack/GitHub/Notion
    writes + connector allow-list" sufficient against prompt-injection-driven tool abuse?
 4. Where exactly do OAuth tokens live, and how do we prove to a skeptical user they never leave the box?
 5. Honest scope: what can we truthfully claim at launch vs mark "expanding"?
+
+---
+## ✅ REVISED per Codex Pattern-C SECURITY review (verdict: BUILD WITH CHANGES) — Half B governs
+Codex found the design over-relied on secret-guard + chat/owner gating, while existing telemetry /
+chat-history / LanceDB / mesh-export paths would make "tokens never leave the box" FALSE. Half B is
+**NOT built** until these land. Required (all adopted):
+
+1. **CRITICAL — write approval OUT of chat AND the model loop.** Every state-changing tool call stops
+   at a **local CLI/browser approval** showing exact connector, account, scopes, normalized args/diff,
+   and an action **nonce**. PR#7 owner-DM gating is necessary but NOT sufficient for writes.
+2. **CRITICAL — deterministic BROKER between the model and Composio.** Never expose the raw 1,000+
+   catalog; publish only a **curated, risk-tagged subset** with per-tool grants (read / draft / send /
+   admin / destructive).
+3. **CRITICAL — no autonomous chaining from attacker-controlled tool output.** Connector output is
+   **untrusted → inert structured data only**; no follow-on tool call unless rooted in the latest
+   owner request or a fresh local approval. **At launch, cross-connector chaining is DISABLED.**
+4. **CRITICAL — exclude connector traffic from ALL persistence/export.** Hard-block connector
+   requests/results from chat-history, LanceDB/ReasoningBank, telemetry harvest + rollups, and any
+   mesh/export path. Only **redacted local audit metadata** is kept.
+5. **CRITICAL — OAuth vault separated from config + process env.** Dedicated local vault subtree /
+   OS keychain — NOT `agent-config.json` / `runtime-state.json` / chat memory / inherited env. The
+   agent gets **opaque handles only**.
+6. **HIGH — Composio as a pinned least-privileged SIDECAR** (absolute-path spawn, no shell, stripped
+   env, stdio/Unix-socket only, private workdir, version pin + checksum, kill process group on exit).
+   Do NOT reuse the generic `LegacyBridge` / `bridged_mcp_*` path.
+7. **HIGH — scope/tool-specific grants.** `github.read_repo` must not imply `github.push`/`delete`;
+   request minimum OAuth scopes; local revoke.
+8. **HIGH — `stratos connectors audit`** — a user-verifiable non-egress proof: vault path/modes,
+   sidecar bind, env scrub, destination allowlist, and **sentinel-token absence** from logs, model
+   payloads, vector stores, and telemetry artifacts.
+9. **HIGH — narrow the launch claim.** "Self-hosted connector layer with **local OAuth custody**,
+   selected audited tools, **read-only first, local approval for writes**." NOT "1,000+ safe
+   autonomous tools" or absolute "never leaves the box."
+
+**Answers:** (1) native+OpenRouter ✅ built; detect LiteLLM only if present. (2) child-process sidecar,
+pinned/stripped/private. (3) deny-by-default+confirm+allowlist is necessary, NOT sufficient — also need
+the broker, output-tainting, no-chaining, out-of-band write approval. (4) dedicated local vault +
+opaque handles; proof via sentinel integration tests + the audit command. (5) claim local OAuth
+custody + curated access; do NOT claim 1,000+ audited or zero egress (calls to the target SaaS are
+unavoidable egress).
+
+### Half B build order (each its own tested increment; read-only first)
+- **B1 — READ-ONLY connectors only** (no writes, no chaining): dedicated vault + opaque handles +
+  deterministic broker + curated read-only tool subset + sidecar isolation + persistence-exclusion +
+  `connectors audit`. Shippable after the CRITICAL controls. ← this is the real "Build #1 Half B".
+- **B2 — write-capable tools** behind out-of-band local approval + per-tool grants. **Requires a
+  SECOND security review before merge.**

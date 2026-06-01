@@ -11,7 +11,7 @@ import { resolveRoute, selectLocalModel } from './src/model-manager.js';
 import { passthroughCloud } from './src/routers/cloud-byok.js';
 import { passthroughAnthropic } from './src/routers/anthropic-adapter.js';
 import { languageGate } from './src/language-gateway.js';
-import { complianceApprovalGate, wouldSpend } from './src/compliance-gateway.js';
+import { complianceApprovalGate, providerForModel } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 
@@ -86,6 +86,19 @@ const reasoningBank = new ReasoningBank({
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
+
+// Fail-closed helper for when the compliance gate THROWS (couldn't be evaluated). Per Codex review of
+// PR #41: a `wouldSpend`-only catch is just CONDITIONALLY closed — if the gate throws and wouldSpend is
+// falsy, execution falls through to the spend/proxy path. Here we block ANY model that resolves to a
+// paid provider (or that we can't classify), and only let a provably-local model proceed. Returns true
+// if it sent a 402 (the caller must then `return`).
+export function failClosedOnGateError(req, res) {
+  let provider;
+  try { provider = providerForModel(req.body?.model); } catch { provider = 'unknown'; } // unclassifiable → block
+  if (!provider) return false; // provably local (no paid provider) → safe to proceed
+  res.status(402).json({ error: 'approval_required', reason: 'cost gate could not be evaluated; blocking a non-local model to be safe. Use a local model or retry.' });
+  return true;
+}
 
 // Request tracer helper
 function logRequest(req, target) {
@@ -205,7 +218,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
   // Cost/ToS gate first — may answer a 402 and return (fail-CLOSED for spend on any gate error).
   try { if (complianceApprovalGate(req, res)) return; }
-  catch { if (wouldSpend(req)) { res.status(402).json({ error: 'approval_required', reason: 'cost gate error — blocking a paid call to be safe' }); return; } }
+  catch { if (failClosedOnGateError(req, res)) return; }
   // then make the agent reply in the user's configured language (no-op for English; fail-open).
   languageGate(req);
 
@@ -369,7 +382,7 @@ app.post('/v1/messages', async (req, res) => {
 
   // Cost/ToS gate first — parity with /v1/chat/completions (fail-CLOSED for spend on any gate error).
   try { if (complianceApprovalGate(req, res)) return; }
-  catch { if (wouldSpend(req)) { res.status(402).json({ error: 'approval_required', reason: 'cost gate error — blocking a paid call to be safe' }); return; } }
+  catch { if (failClosedOnGateError(req, res)) return; }
   languageGate(req); // reply in the user's configured language (no-op for English)
 
   const isLocalRequest = req.body.model && (

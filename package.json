@@ -13,7 +13,8 @@
     "start:shim": "node packages/api-shim/index.js",
     "start:shim:fips": "node --enable-fips packages/api-shim/index.js",
     "start:maximus": "npm run start --workspace=packages/maximus-telemetry",
-    "start:desktop": "npm run tauri dev --workspace=packages/atmos-desktop"
+    "start:desktop": "npm run tauri dev --workspace=packages/atmos-desktop",
+    "test:ci": "node scripts/ci-test.mjs"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.29.0",

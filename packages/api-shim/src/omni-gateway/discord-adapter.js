@@ -1,50 +1,117 @@
 import crypto from 'node:crypto';
+import fetch from 'node-fetch';
 
 /**
- * DiscordAdapter: Normalizes incoming Discord events, mapping message signals
- * to standard dispatcher frames and establishing strict, isolated guild-level
- * contexts inside LanceDB queries.
+ * DiscordAdapter — a REAL two-way Discord channel for StratosAgent (was a stub with a mock token).
+ *
+ * It connects to Discord with discord.js, listens for messages, gates them (owner-only by default; in
+ * servers only when @mentioned, DMs always), routes the text to the local gateway (/v1/chat/completions),
+ * and replies — chunked to Discord's 2000-char limit. Mirrors the proven telegram-bridge flow.
+ *
+ * The decision/format/routing LOGIC is pure + unit-tested (shouldHandle, chunk, askAgent with injected
+ * fetch). The live connection is in start(), which LAZY-imports discord.js so this module + its tests load
+ * without the SDK installed; start() is exercised live by the operator with a real bot token.
  */
+const DISCORD_LIMIT = 1900; // hard limit is 2000; leave headroom for reply formatting
+
 export class DiscordAdapter {
   constructor(options = {}) {
     this.verbose = options.verbose !== false;
-    this.clientToken = options.clientToken || 'mock-discord-client-token-99999';
+    this.token = options.token || process.env.DISCORD_BOT_TOKEN || null;
+    this.ownerId = options.ownerId || process.env.DISCORD_OWNER_ID || null; // only this user may command it
+    this.port = options.port || process.env.PORT || 4099;
+    this.model = options.model || process.env.STRATOS_MODEL || 'local';
+    this._fetch = options.fetch || fetch; // injectable for tests
+    this.client = null;
   }
 
   /**
-   * Translates incoming raw discord.js message objects into standard Stratos format.
-   * Enforces mathematical context boundary tags to secure corporate files.
-   * 
-   * @param {Object} discordMessage - Raw message object from Discord client
-   * @returns {Object} - Standardized request envelope
+   * PURE: decide whether to handle a normalized message and extract the prompt. Deny-by-default:
+   * skip our own + other bots, enforce owner-gating when an owner is set, and in guild channels only
+   * respond when @mentioned (DMs always). Returns { handle, text? , reason? }.
    */
+  shouldHandle(msg, botUserId) {
+    if (!msg) return { handle: false, reason: 'no message' };
+    if (botUserId && String(msg.authorId) === String(botUserId)) return { handle: false, reason: 'own message' };
+    if (msg.authorBot) return { handle: false, reason: 'other bot' };
+    if (this.ownerId && String(msg.authorId) !== String(this.ownerId)) return { handle: false, reason: 'not the owner' };
+    if (!msg.isDM && !msg.mentionedBot) return { handle: false, reason: 'not @mentioned in a server' };
+    const text = String(msg.content || '').replace(/<@!?\d+>/g, '').trim(); // strip the mention token
+    if (!text) return { handle: false, reason: 'empty' };
+    return { handle: true, text };
+  }
+
+  /** Route a prompt to the local gateway and return the reply text. */
+  async askAgent(text) {
+    const res = await this._fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: this.model, messages: [{ role: 'user', content: text }] }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return data?.choices?.[0]?.message?.content || '(no response from the agent)';
+  }
+
+  /** Split a reply into Discord-sized chunks, preferring to break on newlines. */
+  static chunk(text, max = DISCORD_LIMIT) {
+    const out = [];
+    let s = String(text ?? '');
+    while (s.length > max) {
+      let cut = s.lastIndexOf('\n', max);
+      if (cut < max * 0.5) cut = max; // no good newline → hard cut
+      out.push(s.slice(0, cut));
+      s = s.slice(cut).replace(/^\n/, '');
+    }
+    if (s.length) out.push(s);
+    return out.length ? out : [''];
+  }
+
+  /** Connect to Discord and serve. Lazy-imports discord.js so the module loads without the SDK. */
+  async start() {
+    if (!this.token) {
+      if (this.verbose) console.warn('⚠️  [Discord] No DISCORD_BOT_TOKEN configured — adapter disabled (dry-run).');
+      return false;
+    }
+    let discord;
+    try { discord = await import('discord.js'); }
+    catch { console.warn('⚠️  [Discord] discord.js not installed — run `npm i discord.js` to enable.'); return false; }
+    const { Client, GatewayIntentBits, Partials } = discord;
+    this.client = new Client({
+      intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages],
+      partials: [Partials.Channel], // required to receive DMs
+    });
+    this.client.once('ready', (c) => { if (this.verbose) console.log(`💬 [Discord] Connected as ${c.user.tag}`); });
+    this.client.on('messageCreate', async (m) => {
+      try {
+        const norm = {
+          authorId: m.author.id, authorBot: m.author.bot, content: m.content,
+          isDM: !m.guild, mentionedBot: this.client.user ? m.mentions.has(this.client.user.id) : false,
+        };
+        const decision = this.shouldHandle(norm, this.client.user?.id);
+        if (!decision.handle) return;
+        await m.channel.sendTyping().catch(() => {});
+        const reply = await this.askAgent(decision.text);
+        for (const part of DiscordAdapter.chunk(reply)) {
+          await m.reply(part).catch(() => m.channel.send(part).catch(() => {}));
+        }
+      } catch (e) { if (this.verbose) console.error('❌ [Discord] handler error:', e.message); }
+    });
+    await this.client.login(this.token);
+    return true;
+  }
+
+  async stop() { try { await this.client?.destroy(); } catch { /* */ } }
+
+  /** Normalize a raw discord.js message into a Stratos envelope (kept for context tagging). */
   normalizeRequest(discordMessage) {
     const { author, content, channel, guild } = discordMessage;
-    
-    if (this.verbose) {
-      console.log(`📡 [DiscordAdapter] Normalizing Discord prompt in guild [${guild ? guild.id : 'DM'}]`);
-    }
-
-    // Isolate context tag to isolate DM sessions from multi-tenant guild channels
-    const isolatedContextTag = guild 
+    const isolatedContextTag = guild
       ? `discord-context-guild_${guild.id}-channel_${channel.id}`
       : `discord-context-direct-user_${author.id}`;
-
     return {
-      protocol: 'omni-acp-v1',
-      channel: 'discord',
-      sender: author.username || author.id,
-      text: content,
-      timestamp: Date.now(),
-      messageId: discordMessage.id || crypto.randomBytes(16).toString('hex'),
-      sessionMeta: {
-        isolatedContextTag, // Prevents prompt leakage across guilds or channels
-        platformMeta: {
-          guildId: guild ? guild.id : null,
-          channelId: channel.id,
-          authorId: author.id
-        }
-      }
+      protocol: 'omni-acp-v1', channel: 'discord', sender: author.username || author.id, text: content,
+      timestamp: Date.now(), messageId: discordMessage.id || crypto.randomBytes(16).toString('hex'),
+      sessionMeta: { isolatedContextTag, platformMeta: { guildId: guild ? guild.id : null, channelId: channel.id, authorId: author.id } },
     };
   }
 }

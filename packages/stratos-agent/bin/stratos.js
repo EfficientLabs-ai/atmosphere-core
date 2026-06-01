@@ -189,7 +189,7 @@ async function initWizard() {
 
   // Step 5 — talk to your agent (messaging channels). Telegram is live; others are roadmap.
   console.log(stepHdr(5, 5, 'Talk to your agent'));
-  console.log(`  ${C.d}Pick how you'll message it. Telegram works today; Slack/Discord/Matrix are coming.${C.x}`);
+  console.log(`  ${C.d}Pick how you'll message it. Telegram + Discord work today; Slack/Matrix are coming.${C.x}`);
   const channels = await setupChannels();
 
   // persist name/routing/mesh (+ legacy default model if local). model sources were applied above.
@@ -252,17 +252,17 @@ async function setupChannels() {
   for (const ch of chosen) {
     const def = channelDef(ch);
     if (!def || def.status !== 'ready') {
-      console.log(`    ${C.y}• ${def ? def.label : ch} — coming soon.${C.x} ${C.d}Noted; the adapter ships soon (Telegram works today).${C.x}`);
+      console.log(`    ${C.y}• ${def ? def.label : ch} — coming soon.${C.x} ${C.d}Noted; the adapter ships soon (Telegram + Discord work today).${C.x}`);
       continue;
     }
     const token = (await asker.askSecret(`  ${C.b}→${C.x} ${def.label} ${def.credLabel} ${C.d}(hidden — encrypted in your vault)${C.x}: `)).trim();
     if (!token) { console.log(`    ${C.y}• ${def.label} skipped — no ${def.credLabel} entered.${C.x}`); continue; }
     const handle = vault.putSecret({ connector: ch, kind: 'bot-token', value: token });
-    config.setMessagingChannel(ch, { enabled: true, tokenHandle: handle });
-    const chatId = (await asker.ask(`  ${C.b}→${C.x} Your ${def.label} chat id ${C.d}(only you can command it — optional, digits)${C.x}: `)).trim();
-    const bound = /^-?\d{3,}$/.test(chatId);
-    if (bound) config.bindOwner(chatId);
-    console.log(`    ${okMark(`${def.label} connected — token encrypted; ${bound ? 'owner bound' : 'bind your chat later: stratos bind <id>'}`)}`);
+    const ownerRaw = (await asker.ask(`  ${C.b}→${C.x} Your ${def.label} ${def.ownerLabel} ${C.d}(so only you can command it — optional, digits)${C.x}: `)).trim();
+    const ownerId = /^-?\d{3,}$/.test(ownerRaw) ? ownerRaw : null;
+    config.setMessagingChannel(ch, { enabled: true, tokenHandle: handle, ownerId });
+    if (ch === 'telegram' && ownerId) config.bindOwner(ownerId); // the telegram bridge reads getOwner()
+    console.log(`    ${okMark(`${def.label} connected — token encrypted; ${ownerId ? 'owner set' : `set your ${def.ownerLabel} later to lock it down`}`)}`);
   }
   asker.close();
   return chosen;

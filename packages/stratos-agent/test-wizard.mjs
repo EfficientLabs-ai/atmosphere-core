@@ -69,18 +69,19 @@ ok(wired.includes('anthropic') && env.ANTHROPIC_API_KEY === 'sk-ant-REAL', 'the 
 config.disableProvider('anthropic');
 ok(!config.getModelSources().providers.anthropic, 'disableProvider removes the entry');
 
-console.log('\n=== messaging channels: HONEST status (telegram ready, others soon) ===');
-ok(channelDef('telegram').status === 'ready', 'telegram is marked ready (it really works)');
-ok(['slack', 'discord', 'matrix'].every((c) => channelDef(c).status === 'soon'), 'slack/discord/matrix are marked coming-soon — not faked as working');
+console.log('\n=== messaging channels: HONEST status (telegram + discord ready, slack/matrix soon) ===');
+ok(channelDef('telegram').status === 'ready' && channelDef('discord').status === 'ready', 'telegram + discord are marked ready (real adapters)');
+ok(['slack', 'matrix'].every((c) => channelDef(c).status === 'soon'), 'slack/matrix are marked coming-soon — not faked as working');
 
-console.log('\n=== messaging channel setup stores ONLY a vault handle; token resolves to env at runtime ===');
-config.setMessagingChannel('telegram', { enabled: true, tokenHandle: 'cvault:telegram:bot-token:' + 'b'.repeat(32) });
+console.log('\n=== channel setup stores ONLY a vault handle (+ owner id); token resolves to env at runtime ===');
+config.setMessagingChannel('discord', { enabled: true, tokenHandle: 'cvault:discord:bot-token:' + 'b'.repeat(32), ownerId: '555000111222333444' });
 const msg = config.getMessaging();
-ok(msg.telegram.enabled && msg.telegram.tokenHandle.startsWith('cvault:'), 'telegram enabled + holds a vault handle (not the token)');
-ok(!JSON.stringify(msg).includes('123456:'), 'no raw bot token in the messaging config');
-const tvault = { resolveSecret: (h) => (h === 'cvault:telegram:bot-token:' + 'b'.repeat(32) ? '123456:REAL-BOT-TOKEN' : null) };
+ok(msg.discord.enabled && msg.discord.tokenHandle.startsWith('cvault:') && msg.discord.ownerId === '555000111222333444', 'discord enabled + vault handle + owner id stored');
+ok(!JSON.stringify(msg).includes('MTk4:'), 'no raw bot token in the messaging config');
+const tvault = { resolveSecret: (h) => (h === 'cvault:discord:bot-token:' + 'b'.repeat(32) ? 'MTk4-REAL-DISCORD-TOKEN' : null) };
 const tenv = {};
 const wiredChans = resolveChannelTokensToEnv(config, tvault, tenv);
-ok(wiredChans.includes('telegram') && tenv.TELEGRAM_BOT_TOKEN === '123456:REAL-BOT-TOKEN', 'the encrypted bot token resolves into TELEGRAM_BOT_TOKEN for the bridge');
+ok(wiredChans.includes('discord') && tenv.DISCORD_BOT_TOKEN === 'MTk4-REAL-DISCORD-TOKEN', 'the encrypted bot token resolves into DISCORD_BOT_TOKEN for the adapter');
+ok(tenv.DISCORD_OWNER_ID === '555000111222333444', 'the owner id resolves into DISCORD_OWNER_ID (owner-gates the adapter)');
 
 console.log(`\n✅ ALL ${pass} wizard-brain checks passed.`);

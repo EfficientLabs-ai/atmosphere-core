@@ -97,10 +97,10 @@ export function resolveProviderKeysToEnv(config, vault, env = process.env) {
  * marked 'soon', and NOT presented as functional until their adapters ship.
  */
 export const CHANNELS = [
-  { value: 'telegram', label: 'Telegram', hint: 'ready · bot token + your chat id', status: 'ready', credLabel: 'bot token', envKey: 'TELEGRAM_BOT_TOKEN' },
-  { value: 'slack',    label: 'Slack',    hint: 'coming soon',                       status: 'soon',  credLabel: 'bot token', envKey: 'SLACK_BOT_TOKEN' },
-  { value: 'discord',  label: 'Discord',  hint: 'coming soon',                       status: 'soon',  credLabel: 'bot token', envKey: 'DISCORD_BOT_TOKEN' },
-  { value: 'matrix',   label: 'Matrix',   hint: 'coming soon',                       status: 'soon',  credLabel: 'access token', envKey: 'MATRIX_ACCESS_TOKEN' },
+  { value: 'telegram', label: 'Telegram', hint: 'ready · bot token + your chat id',  status: 'ready', credLabel: 'bot token', ownerLabel: 'chat id', envKey: 'TELEGRAM_BOT_TOKEN' },
+  { value: 'discord',  label: 'Discord',  hint: 'ready · bot token + your user id',  status: 'ready', credLabel: 'bot token', ownerLabel: 'user id', envKey: 'DISCORD_BOT_TOKEN' },
+  { value: 'slack',    label: 'Slack',    hint: 'coming soon',                       status: 'soon',  credLabel: 'bot token', ownerLabel: 'user id', envKey: 'SLACK_BOT_TOKEN' },
+  { value: 'matrix',   label: 'Matrix',   hint: 'coming soon',                       status: 'soon',  credLabel: 'access token', ownerLabel: 'user id', envKey: 'MATRIX_ACCESS_TOKEN' },
 ];
 export const channelDef = (value) => CHANNELS.find((c) => c.value === value) || null;
 
@@ -112,7 +112,11 @@ export function resolveChannelTokensToEnv(config, vault, env = process.env) {
     if (!m || !m.enabled || !m.tokenHandle) continue;
     const def = channelDef(channel);
     const token = vault.resolveSecret(m.tokenHandle);
-    if (def && token) { env[def.envKey] = token; wired.push(channel); }
+    if (def && token) {
+      env[def.envKey] = token;
+      if (m.ownerId) env[`${channel.toUpperCase()}_OWNER_ID`] = String(m.ownerId); // owner-gates the adapter
+      wired.push(channel);
+    }
   }
   return wired;
 }

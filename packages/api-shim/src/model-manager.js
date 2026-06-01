@@ -28,8 +28,15 @@ export const PROVIDERS = {
   openrouter: { matches: (m) => /\S\/\S/.test(m), endpoint: 'https://openrouter.ai/api/v1/chat/completions', envKey: 'OPENROUTER_API_KEY', supported: true },
 };
 
-const isForcedLocal = (m, env) =>
-  /^local:/i.test(m) || /^(qwen|gemma|llama|mistral|phi|deepseek)/i.test(m) || env.STRATOS_FORCE_LOCAL === '1';
+const isForcedLocal = (m, env) => {
+  const s = String(m);
+  if (env.STRATOS_FORCE_LOCAL === '1') return true;   // explicit operator override
+  if (/^local:/i.test(s)) return true;                // explicit "local:" prefix → the user means local
+  // A "vendor/model" slug is an OpenRouter (PAID) route — NEVER force-local by family name, even when the
+  // vendor matches a local family (e.g. deepseek/deepseek-chat, qwen/qwen-2.5-72b, mistralai/mistral-large).
+  if (s.includes('/')) return false;
+  return /^(qwen|gemma|llama|mistral|phi|deepseek)/i.test(s);
+};
 
 /**
  * Resolve a route from the RAW model string. Returns one of:

@@ -19,6 +19,16 @@ for (const model of ['claude-3-5-sonnet-20241022', 'gpt-4o', 'o3-mini', 'gemini-
   ok(blocked === true && res.code === 402 && res.body?.error === 'approval_required', `${model} → 402 blocked`);
 }
 
+console.log('\n=== paid OpenRouter slugs whose VENDOR matches a local family are still BLOCKED (Codex #45 finding) ===');
+// deepseek/deepseek-chat, qwen/qwen-2.5-72b, mistralai/mistral-large used to force-local (the vendor
+// prefix matched the local-family regex) → providerForModel null → the gate let them through. They are
+// PAID OpenRouter slugs and must block.
+for (const model of ['deepseek/deepseek-chat', 'qwen/qwen-2.5-72b-instruct', 'mistralai/mistral-large']) {
+  const res = mockRes();
+  const blocked = failClosedOnGateError({ body: { model } }, res);
+  ok(blocked === true && res.code === 402, `${model} (OpenRouter slug) → 402 blocked, not misrouted to local`);
+}
+
 console.log('\n=== a provably-local model PROCEEDS (no false block) ===');
 for (const model of ['qwen2.5:7b', 'llama3', 'local', 'phi3']) {
   const res = mockRes();

@@ -10,7 +10,7 @@ import path from 'node:path';
 import url from 'node:url';
 import readline from 'node:readline';
 import { run, generateSystemdUnit, banner } from '../src/cli/stratos-cli.js';
-import { validateModelChoice, applyWizard, privacyPosture, MODEL_SOURCES, multiSelectReduce } from '../src/cli/wizard.js';
+import { validateModelChoice, applyWizard, privacyPosture, MODEL_SOURCES, multiSelectReduce, CHANNELS, channelDef, resolveProviderKeysToEnv, resolveChannelTokensToEnv } from '../src/cli/wizard.js';
 import { realProbes } from '../src/cli/probes.js';
 import * as config from '../src/core/agent-config.js';
 import * as connectorRegistry from '../src/connectors/connector-registry.js';
@@ -120,16 +120,16 @@ function pkgVersion() {
 
 async function initWizard() {
   console.log(banner());
-  console.log(box([`${C.bold}Set up your sovereign agent${C.x}`, `${C.d}4 quick steps · local-first · private by default${C.x}`]));
+  console.log(box([`${C.bold}Set up your sovereign agent${C.x}`, `${C.d}5 quick steps · local-first · private by default${C.x}`]));
 
   // Step 1 — name
   let asker = makeAsker();
-  console.log(stepHdr(1, 4, 'Name'));
+  console.log(stepHdr(1, 5, 'Name'));
   const agentName = (await asker.ask(`  ${C.b}→${C.x} Name your agent ${C.d}(default StratosAgent)${C.x}: `)).trim() || 'StratosAgent';
   asker.close(); // release the line reader before the raw-mode multi-select
 
   // Step 2 — your models (multi-select; drop in keys for providers)
-  console.log(stepHdr(2, 4, 'Your models — pick one or more'));
+  console.log(stepHdr(2, 5, 'Your models — pick one or more'));
   console.log(`  ${C.d}Mix and match: run private local models, and/or connect providers with your own API key.${C.x}`);
   const items = MODEL_SOURCES.map((s) => ({ label: s.label, hint: s.hint, value: s.value, checked: s.value === 'local' }));
   const chosen = await multiSelect('', items, { min: 1 });
@@ -166,7 +166,7 @@ async function initWizard() {
 
   // Step 3 — routing & cost (transparency description; no jargon, no "beta")
   asker = makeAsker();
-  console.log(stepHdr(3, 4, 'Routing & cost'));
+  console.log(stepHdr(3, 5, 'Routing & cost'));
   console.log(`  ${C.d}Routing decides WHERE each task runs so you don't overspend: simple work can run on your free${C.x}`);
   console.log(`  ${C.d}local models, and only what truly needs a paid model uses your API key. Nothing is sent to a${C.x}`);
   console.log(`  ${C.d}provider you didn't connect — and you choose how paid calls are handled.${C.x}`);
@@ -179,13 +179,18 @@ async function initWizard() {
   const costApproval = cm === '2' ? 'auto-local' : cm === '3' ? 'always-spend' : 'ask';
 
   // Step 4 — mesh walkthrough (optional, clearly separate)
-  console.log(stepHdr(4, 4, 'The Atmosphere mesh (optional)'));
+  console.log(stepHdr(4, 5, 'The Atmosphere mesh (optional)'));
   console.log(`    ${C.d}A public-DHT, hole-punched (no inbound ports), post-quantum zero-trust mesh that lets your${C.x}`);
   console.log(`    ${C.d}agent borrow/lend spare compute. Data stays end-to-end encrypted; peers are PQC-verified.${C.x}`);
   console.log(`    ${C.d}Opting in just sets a flag — you bring a device online later by running a ghost-node bundle.${C.x}`);
   const meshEnroll = /^y/i.test(((await asker.ask(`  ${C.b}→${C.x} Opt in to the mesh now? ${C.d}(you can join devices later) [y/N]${C.x} `)).trim() || 'N'));
   if (meshEnroll) console.log(`    ${C.g}✓ Opted in.${C.x} ${C.d}Next: see ${C.x}${C.b}stratos mesh${C.x}${C.d} for how to bring this device online.${C.x}`);
-  asker.close();
+  asker.close(); // release before the raw-mode channel multi-select
+
+  // Step 5 — talk to your agent (messaging channels). Telegram is live; others are roadmap.
+  console.log(stepHdr(5, 5, 'Talk to your agent'));
+  console.log(`  ${C.d}Pick how you'll message it. Telegram works today; Slack/Discord/Matrix are coming.${C.x}`);
+  const channels = await setupChannels();
 
   // persist name/routing/mesh (+ legacy default model if local). model sources were applied above.
   applyWizard({ agentName, provider: 'local', localModel: localModel || undefined, saveApiSpend, costApproval, meshEnroll }, config);
@@ -195,10 +200,12 @@ async function initWizard() {
 
   const modeLabel = { ask: 'ask before paid calls', 'auto-local': 'prefer local; spend only if needed', 'always-spend': 'always use my selected model' }[costApproval];
   const sourcesLabel = [chosen.includes('local') ? `local${localModel ? ' (' + localModel + ')' : ''}` : null, ...providers].filter(Boolean).join(' · ');
+  const readyChannels = channels.filter((c) => channelDef(c)?.status === 'ready');
   console.log('\n' + box([
     `${C.g}${C.bold}✓ Saved — "${agentName}" is configured${C.x}`,
     `${C.d}Models:${C.x}  ${sourcesLabel || C.y + 'none' + C.x}`,
     `${C.d}Routing:${C.x} save-spend ${saveApiSpend ? C.g + 'on' + C.x : 'off'} · ${modeLabel}`,
+    `${C.d}Talk:${C.x}    ${readyChannels.length ? readyChannels.join(' · ') : C.y + 'no channel yet (stratos channels)' + C.x}`,
     `${C.d}Mesh:${C.x}    ${meshEnroll ? 'joining' : 'off (optional)'}`,
   ]));
   console.log(`\n  Next:  ${C.b}stratos doctor${C.x} ${C.d}(check readiness)${C.x}  →  ${C.b}stratos start${C.x}`);
@@ -232,9 +239,53 @@ async function connectWizard() {
   }
 }
 
+/**
+ * Pick messaging channels + set up the ready ones. Self-contained: runs the raw-mode multi-select with
+ * NO readline open, then a fresh asker for credentials. HONEST: only 'ready' channels (Telegram today)
+ * are actually configured; 'soon' ones are noted, not faked.
+ */
+async function setupChannels() {
+  const items = CHANNELS.map((c) => ({ label: c.label, hint: c.hint, value: c.value, checked: false }));
+  const chosen = await multiSelect(`  ${C.d}Which channels do you want to message your agent through? (space to pick, enter to confirm)${C.x}`, items, { min: 0 });
+  if (!chosen.length) { console.log(`    ${C.d}No channel selected — you can add one anytime with ${C.x}${C.b}stratos channels${C.x}${C.d}.${C.x}`); return chosen; }
+  const asker = makeAsker();
+  for (const ch of chosen) {
+    const def = channelDef(ch);
+    if (!def || def.status !== 'ready') {
+      console.log(`    ${C.y}• ${def ? def.label : ch} — coming soon.${C.x} ${C.d}Noted; the adapter ships soon (Telegram works today).${C.x}`);
+      continue;
+    }
+    const token = (await asker.askSecret(`  ${C.b}→${C.x} ${def.label} ${def.credLabel} ${C.d}(hidden — encrypted in your vault)${C.x}: `)).trim();
+    if (!token) { console.log(`    ${C.y}• ${def.label} skipped — no ${def.credLabel} entered.${C.x}`); continue; }
+    const handle = vault.putSecret({ connector: ch, kind: 'bot-token', value: token });
+    config.setMessagingChannel(ch, { enabled: true, tokenHandle: handle });
+    const chatId = (await asker.ask(`  ${C.b}→${C.x} Your ${def.label} chat id ${C.d}(only you can command it — optional, digits)${C.x}: `)).trim();
+    const bound = /^-?\d{3,}$/.test(chatId);
+    if (bound) config.bindOwner(chatId);
+    console.log(`    ${okMark(`${def.label} connected — token encrypted; ${bound ? 'owner bound' : 'bind your chat later: stratos bind <id>'}`)}`);
+  }
+  asker.close();
+  return chosen;
+}
+
+async function channelsWizard() {
+  console.log(banner());
+  console.log(box([`${C.bold}Talk to your agent${C.x}`, `${C.d}connect a messaging channel · tokens encrypted in your vault${C.x}`]));
+  await setupChannels();
+  console.log(`\n  ${C.d}Tokens are decrypted into the agent only at start; restart with ${C.x}${C.b}stratos start${C.x}${C.d} to apply.${C.x}\n`);
+}
+
 async function startDaemon() {
   process.env.PORT = process.env.PORT || '4099';
   process.env.LOCAL_FALLBACK_ENABLED = process.env.LOCAL_FALLBACK_ENABLED || 'true';
+  // decrypt the keys/tokens you dropped in during setup into this process's env (the gateway + bridge
+  // read PROVIDER_API_KEY / TELEGRAM_BOT_TOKEN). They live encrypted at rest and only here at runtime.
+  try {
+    const keys = resolveProviderKeysToEnv(config, vault);
+    const chans = resolveChannelTokensToEnv(config, vault);
+    if (keys.length) console.log(`🔑 Loaded API keys from your vault: ${keys.join(', ')}`);
+    if (chans.length) console.log(`💬 Loaded messaging channels from your vault: ${chans.join(', ')}`);
+  } catch (e) { console.warn(`⚠️  Could not load vault credentials: ${e.message}`); }
   console.log(`🚀 Starting StratosAgent on 127.0.0.1:${process.env.PORT} (Ctrl-C to stop)…`);
   await import('../../api-shim/index.js'); // monorepo path; the publish pipeline rewrites this for the package
 }
@@ -265,6 +316,7 @@ function installService() {
 const res = await run(process.argv.slice(2), { config, version: pkgVersion() });
 if (res.action === 'init') { await initWizard(); process.exit(0); }
 else if (res.action === 'connect') { await connectWizard(); process.exit(process.exitCode || 0); }
+else if (res.action === 'channels') { await channelsWizard(); process.exit(process.exitCode || 0); }
 else if (res.action === 'start') { await startDaemon(); /* daemon holds the event loop open */ }
 else if (res.action === 'service-install') { installService(); process.exit(0); }
 else { for (const l of res.lines) console.log(l); process.exit(res.code); }

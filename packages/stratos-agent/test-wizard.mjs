@@ -9,7 +9,7 @@ import path from 'node:path';
 
 // isolate config in a temp cwd BEFORE import (agent-config resolves off process.cwd())
 process.chdir(fs.mkdtempSync(path.join(os.tmpdir(), 'wiz-')));
-const { validateModelChoice, applyWizard, privacyPosture, MODEL_SOURCES, multiSelectReduce, resolveProviderKeysToEnv } = await import('./src/cli/wizard.js');
+const { validateModelChoice, applyWizard, privacyPosture, MODEL_SOURCES, multiSelectReduce, resolveProviderKeysToEnv, CHANNELS, channelDef, resolveChannelTokensToEnv } = await import('./src/cli/wizard.js');
 const config = await import('./src/core/agent-config.js');
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
@@ -68,5 +68,19 @@ const wired = resolveProviderKeysToEnv(config, fakeVault, env);
 ok(wired.includes('anthropic') && env.ANTHROPIC_API_KEY === 'sk-ant-REAL', 'the encrypted key is resolved into ANTHROPIC_API_KEY for the gateway');
 config.disableProvider('anthropic');
 ok(!config.getModelSources().providers.anthropic, 'disableProvider removes the entry');
+
+console.log('\n=== messaging channels: HONEST status (telegram ready, others soon) ===');
+ok(channelDef('telegram').status === 'ready', 'telegram is marked ready (it really works)');
+ok(['slack', 'discord', 'matrix'].every((c) => channelDef(c).status === 'soon'), 'slack/discord/matrix are marked coming-soon — not faked as working');
+
+console.log('\n=== messaging channel setup stores ONLY a vault handle; token resolves to env at runtime ===');
+config.setMessagingChannel('telegram', { enabled: true, tokenHandle: 'cvault:telegram:bot-token:' + 'b'.repeat(32) });
+const msg = config.getMessaging();
+ok(msg.telegram.enabled && msg.telegram.tokenHandle.startsWith('cvault:'), 'telegram enabled + holds a vault handle (not the token)');
+ok(!JSON.stringify(msg).includes('123456:'), 'no raw bot token in the messaging config');
+const tvault = { resolveSecret: (h) => (h === 'cvault:telegram:bot-token:' + 'b'.repeat(32) ? '123456:REAL-BOT-TOKEN' : null) };
+const tenv = {};
+const wiredChans = resolveChannelTokensToEnv(config, tvault, tenv);
+ok(wiredChans.includes('telegram') && tenv.TELEGRAM_BOT_TOKEN === '123456:REAL-BOT-TOKEN', 'the encrypted bot token resolves into TELEGRAM_BOT_TOKEN for the bridge');
 
 console.log(`\n✅ ALL ${pass} wizard-brain checks passed.`);

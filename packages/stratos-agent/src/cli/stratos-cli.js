@@ -66,6 +66,7 @@ function helpText() {
     `  ${C.g}doctor${C.x}          Read-only preflight — tells you exactly what's missing`,
     `  ${C.g}models${C.x}          List locally-installed models + the configured route`,
     `  ${C.g}bind${C.x} <chat-id>  Bind your Telegram chat id as owner (enables chat config)`,
+    `  ${C.g}channels${C.x}        Connect a messaging channel to talk to your agent (Telegram live)`,
     `  ${C.g}connect${C.x}         Onboard a connector/MCP server (credential → vault, sidecar pinned)`,
     `  ${C.g}connectors${C.x}      List onboarded connectors (metadata only; secrets stay in the vault)`,
     `  ${C.g}mesh${C.x}            The Atmosphere mesh — status + how to join (optional)`,
@@ -213,7 +214,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'connect', 'connectors', 'mesh', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'service', 'version', 'help'];
 
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
@@ -248,6 +249,7 @@ export async function run(argv = [], deps = {}) {
     case 'connectors': return cmdConnectors(d);
     case 'mesh': return cmdMesh(d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
+    case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);
     case 'init': return { code: 0, lines: [], action: 'init' };   // interactive — handled by bin
     case 'start': return { code: 0, lines: [], action: 'start' }; // daemon — handled by bin

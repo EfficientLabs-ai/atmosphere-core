@@ -90,3 +90,29 @@ export function resolveProviderKeysToEnv(config, vault, env = process.env) {
   }
   return wired;
 }
+
+/**
+ * Messaging channels you talk to the agent through. HONEST STATUS: telegram is a real, working two-way
+ * channel (node-telegram-bot-api). slack/discord/matrix are on the roadmap — listed so they're visible,
+ * marked 'soon', and NOT presented as functional until their adapters ship.
+ */
+export const CHANNELS = [
+  { value: 'telegram', label: 'Telegram', hint: 'ready · bot token + your chat id', status: 'ready', credLabel: 'bot token', envKey: 'TELEGRAM_BOT_TOKEN' },
+  { value: 'slack',    label: 'Slack',    hint: 'coming soon',                       status: 'soon',  credLabel: 'bot token', envKey: 'SLACK_BOT_TOKEN' },
+  { value: 'discord',  label: 'Discord',  hint: 'coming soon',                       status: 'soon',  credLabel: 'bot token', envKey: 'DISCORD_BOT_TOKEN' },
+  { value: 'matrix',   label: 'Matrix',   hint: 'coming soon',                       status: 'soon',  credLabel: 'access token', envKey: 'MATRIX_ACCESS_TOKEN' },
+];
+export const channelDef = (value) => CHANNELS.find((c) => c.value === value) || null;
+
+/** Resolve enabled channels' bot tokens from the VAULT into the env the bridge reads. Returns wired list. */
+export function resolveChannelTokensToEnv(config, vault, env = process.env) {
+  const msg = config.getMessaging ? config.getMessaging() : {};
+  const wired = [];
+  for (const [channel, m] of Object.entries(msg || {})) {
+    if (!m || !m.enabled || !m.tokenHandle) continue;
+    const def = channelDef(channel);
+    const token = vault.resolveSecret(m.tokenHandle);
+    if (def && token) { env[def.envKey] = token; wired.push(channel); }
+  }
+  return wired;
+}

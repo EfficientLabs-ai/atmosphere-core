@@ -27,6 +27,9 @@ const DEFAULTS = () => ({
   // handle to the API key (the key itself lives encrypted in the vault, never here). The compliance router
   // reads this to know which backends exist.
   modelSources: { local: { enabled: true, name: 'qwen2.5:7b' }, providers: {} },
+  // messaging channels you talk to the agent through. Each holds ONLY a vault handle to its bot token
+  // (the token itself is encrypted in the vault). telegram is live; others are reserved for their adapters.
+  messaging: {},
   permissions: { files: 'disabled', network: 'disabled', skills: 'disabled', shell: 'disabled' }, // CLI-only grants
   channels: { telegram: 'configured', slack: 'disabled', discord: 'disabled' },                    // desired states
   // routing prefs read by the gateway/router. costApproval: 'ask' (notify + approve each cloud spend),
@@ -154,6 +157,16 @@ export function disableProvider(provider) {
   });
 }
 export function getModelSources() { return { ...DEFAULTS().modelSources, ...getConfig().modelSources }; }
+
+/** Enable a messaging channel with the VAULT HANDLE to its bot token (never the token itself). */
+export function setMessagingChannel(channel, { enabled = true, tokenHandle } = {}) {
+  if (!PROVIDER_RE.test(String(channel || ''))) throw new Error('invalid channel');
+  return updateConfig((c) => {
+    c.messaging = { ...c.messaging };
+    c.messaging[channel] = { enabled: !!enabled, tokenHandle: tokenHandle || null };
+  });
+}
+export function getMessaging() { return { ...getConfig().messaging }; }
 
 /** Desired→effective: what is actually usable, given installed local models + present cloud keys. */
 export function effectiveCapabilities({ installedModels = [], env = process.env } = {}) {

@@ -16,13 +16,23 @@ already built and tested (vault #11, write-approval gate #13) are the primitives
 the write-gate's cross-process enforcement (#13). The broker is a SEPARATE process so the model never
 holds `resolveSecret` or the approval ledger in-memory.
 
-**Real now (BUILT + tested, 23 tests):** `broker-core.js` (capability token, read-only subset,
-write→approval, secret isolation, **destination/SSRF control**, broker-derived proposals),
-`mcp-client.js` (JSON-RPC framing), `mcp-stdio-transport.js` (real sidecar round-trip, auth-via-env).
-Passed a dedicated Codex adversarial review (2 CRITICAL + 5 HIGH); the fixable controls were folded in.
-**Still TODO before a live account:** `broker.js` — the socket wrapper must use an **inherited
-socketpair** (no named socket → no same-UID process can connect; Codex HIGH peer-binding) + cap-token
-expiry on disconnect/idle; and connector configs must **pin the sidecar binary+hash** (Codex HIGH).
+**BUILT + tested (65 connector-layer assertions).** Read-only native MCP works end-to-end, out of
+process, secret-isolated:
+- `broker-core.js` — capability token, read-only subset, write→approval, secret isolation,
+  **destination/SSRF control**, broker-derived proposals. (Codex review: 2 CRITICAL + 5 HIGH; fixable controls folded in.)
+- `mcp-client.js` + `mcp-stdio-transport.js` — JSON-RPC framing; auth injected as env at sidecar spawn (not the wire).
+- `broker-process.js` + `broker-client.js` — the broker runs as a SEPARATE child process over a private
+  inherited stdio pipe (**no named socket → no same-UID connect**; Codex HIGH peer-binding); cap token
+  held by the client, never surfaced to the model; token dies with the pipe. Proven end-to-end: the
+  secret is resolved only in the child and never crosses back to the parent.
+
+**Honest residuals before a LIVE WRITE to a real account** (reads are complete):
+1. **Owner-approval channel** — in multi-process, the owner (CLI/Telegram) needs a SEPARATE channel to
+   the broker child to `approve` proposals (the model's channel must never approve). Until wired, writes
+   are correctly deny-only across the boundary. This is the #13↔#12 integration.
+2. **Sidecar hash-pinning** — registry pins the command; add binary hash verification at connect (Codex HIGH).
+3. **Separate-UID deployment** — run the broker under a dedicated UID that owns the vault 0600 (the
+   split-user topology) so the agent's UID can't read vault files directly. Deployment property, documented.
 
 ### Architecture
 ```

@@ -502,6 +502,13 @@ app.post('/v1/messages', async (req, res) => {
 app.post('/mcp', async (req, res) => {
   const { jsonrpc, method, params, id } = req.body;
 
+  // SECURITY (Gap 2, #34): the MCP surface drives powerful local tools — defense-in-depth, reject any
+  // non-loopback caller even though the daemon already binds 127.0.0.1 only.
+  const ip = req.socket?.remoteAddress || '';
+  if (!(ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1')) {
+    return res.status(403).json({ jsonrpc: '2.0', error: { code: -32600, message: 'MCP is localhost-only' }, id: id || null });
+  }
+
   if (jsonrpc !== '2.0') {
     return res.status(400).json({
       jsonrpc: '2.0',
@@ -550,7 +557,7 @@ app.post('/mcp', async (req, res) => {
             },
             action: {
               type: 'string',
-              description: 'Optional complete custom JavaScript code to evaluate on the page'
+              description: 'Optional browser instruction(s) in the safe DSL (navigate/click/type/wait). NOT raw code — raw JavaScript evaluation was removed for security (no arbitrary code execution).'
             }
           },
           required: ['prompt']
@@ -673,11 +680,12 @@ app.post('/mcp', async (req, res) => {
         }
 
         let executionResult;
-        if (action) {
-          executionResult = await page.evaluate(new Function(action));
-        } else {
-          executionResult = await executeBrowserPrompt(page, prompt);
-        }
+        // SECURITY (Gap 2, #34): this branch previously ran `new Function(action)` on an attacker-
+        // supplied string from the UNAUTHENTICATED /mcp body — and the mock harness executes it
+        // IN-PROCESS, i.e. arbitrary remote code execution on the host. The raw code-eval path is
+        // removed. `action` is now interpreted by the SAME safe instruction DSL as `prompt`
+        // (navigate / click / type / wait only — no code is ever compiled or evaluated).
+        executionResult = await executeBrowserPrompt(page, action || prompt);
 
         await harness.saveSession(page);
         await harness.close();

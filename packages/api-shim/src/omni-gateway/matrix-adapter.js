@@ -23,6 +23,8 @@ export class MatrixAdapter {
     this.accessToken = options.accessToken || process.env.MATRIX_ACCESS_TOKEN || null;
     this.userId = options.userId || process.env.MATRIX_USER_ID || null;       // the bot's own @bot:server
     this.ownerId = options.ownerId || process.env.MATRIX_OWNER_ID || null;    // only this @user:server may command it
+    // Fail CLOSED: no owner ⇒ serve nobody unless an open bot is explicitly opted into (MATRIX_ALLOW_ANYONE=1).
+    this.allowAnyone = options.allowAnyone === true || process.env.MATRIX_ALLOW_ANYONE === '1';
     this.port = options.port || process.env.PORT || 4099;
     this.model = options.model || process.env.STRATOS_MODEL || 'local';
     this._fetch = options.fetch || fetch; // injectable for tests
@@ -38,7 +40,8 @@ export class MatrixAdapter {
     if (!msg) return { handle: false, reason: 'no message' };
     if (msg.type !== 'm.room.message' || msg.msgtype !== 'm.text') return { handle: false, reason: 'not a text message' };
     if (botUserId && msg.sender === botUserId) return { handle: false, reason: 'own message' };
-    if (this.ownerId && msg.sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
+    if (!this.ownerId) { if (!this.allowAnyone) return { handle: false, reason: 'no owner configured (set MATRIX_OWNER_ID, or MATRIX_ALLOW_ANYONE=1 for an open bot)' }; }
+    else if (msg.sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
     const text = String(msg.body || '').trim();
     if (!text) return { handle: false, reason: 'empty' };
     return { handle: true, text };
@@ -81,6 +84,13 @@ export class MatrixAdapter {
     this.client = sdk.createClient({ baseUrl: this.baseUrl, accessToken: this.accessToken, userId: this.userId || undefined });
     try { const who = await this.client.whoami(); this.botUserId = who.user_id; } catch { this.botUserId = this.userId; }
     const botUserId = this.botUserId;
+    // Self-reply-loop guard: without knowing our own @user:server we cannot reliably skip our OWN messages,
+    // so an open bot (allowAnyone) would answer itself forever. Refuse to serve until the id is resolved.
+    if (!botUserId) {
+      console.warn('⚠️  [Matrix] Could not resolve the bot user id (whoami failed + no MATRIX_USER_ID) — refusing to serve to avoid a self-reply loop. Set MATRIX_USER_ID.');
+      try { await this.client.stopClient?.(); } catch { /* */ }
+      return false;
+    }
     let live = false; // ignore the historical backfill delivered during the initial sync
     this.client.once('sync', (state) => { if (state === 'PREPARED') live = true; });
     this.client.on('Room.timeline', async (event, room, toStartOfTimeline) => {

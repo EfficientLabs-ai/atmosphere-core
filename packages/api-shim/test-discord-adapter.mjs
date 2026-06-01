@@ -21,10 +21,13 @@ const mentioned = a.shouldHandle({ authorId: 'owner-1', authorBot: false, isDM: 
 ok(mentioned.handle === true && mentioned.text === 'summarize this', 'an @mention in a server → handled, mention stripped');
 ok(a.shouldHandle(dm({ content: '   ' }), BOT).handle === false, 'an empty prompt → skipped');
 
-console.log('\n=== no owner set → responds to anyone (open bot), still skips bots/self ===');
-const open = new DiscordAdapter({ verbose: false });
-ok(open.shouldHandle(dm({ authorId: 'anyone' }), BOT).handle === true, 'no owner configured → anyone in a DM is handled');
-ok(open.shouldHandle(dm({ authorId: BOT }), BOT).handle === false, 'still skips its own messages');
+console.log('\n=== no owner set → FAIL CLOSED (serves nobody) unless explicitly opted into an open bot ===');
+const closed = new DiscordAdapter({ verbose: false });
+ok(closed.shouldHandle(dm({ authorId: 'anyone' }), BOT).handle === false, 'no owner configured → nobody is handled (fail-closed)');
+ok(/no owner/.test(closed.shouldHandle(dm({ authorId: 'anyone' }), BOT).reason), 'the skip reason names the missing owner + how to open it');
+const open = new DiscordAdapter({ verbose: false, allowAnyone: true });
+ok(open.shouldHandle(dm({ authorId: 'anyone' }), BOT).handle === true, 'allowAnyone opt-in → an open bot handles anyone in a DM');
+ok(open.shouldHandle(dm({ authorId: BOT }), BOT).handle === false, 'an open bot still skips its own messages');
 
 console.log('\n=== reply chunking to the 2000-char limit ===');
 const long = 'x'.repeat(5000);

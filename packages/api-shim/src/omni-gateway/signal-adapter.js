@@ -20,6 +20,8 @@ export class SignalAdapter {
     this.verbose = options.verbose !== false;
     this.number = options.number || process.env.SIGNAL_NUMBER || null;     // the agent's Signal number (+E.164)
     this.ownerId = options.ownerId || process.env.SIGNAL_OWNER_ID || null; // only this number may command it
+    // Fail CLOSED: no owner ⇒ serve nobody unless an open bot is explicitly opted into (SIGNAL_ALLOW_ANYONE=1).
+    this.allowAnyone = options.allowAnyone === true || process.env.SIGNAL_ALLOW_ANYONE === '1';
     this.cliPath = options.cliPath || process.env.SIGNAL_CLI_PATH || 'signal-cli';
     this.port = options.port || process.env.PORT || 4099;
     this.model = options.model || process.env.STRATOS_MODEL || 'local';
@@ -34,7 +36,8 @@ export class SignalAdapter {
     if (!dm || dm.message == null) return { handle: false, reason: 'not a text message' };
     const sender = env.sourceNumber || env.source;
     if (this.number && sender === this.number) return { handle: false, reason: 'own message' };
-    if (this.ownerId && sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
+    if (!this.ownerId) { if (!this.allowAnyone) return { handle: false, reason: 'no owner configured (set SIGNAL_OWNER_ID, or SIGNAL_ALLOW_ANYONE=1 for an open bot)' }; }
+    else if (sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
     const text = String(dm.message).trim();
     if (!text) return { handle: false, reason: 'empty' };
     return { handle: true, text, sender };

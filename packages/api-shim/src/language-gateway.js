@@ -6,15 +6,15 @@
 import { languageDirective } from '../../stratos-agent/src/core/languages.js';
 import * as realConfig from '../../stratos-agent/src/core/agent-config.js';
 
-/** Prepend/augment a system message with the language directive. Idempotent. Returns the new messages. */
+/**
+ * Prepend the language directive as its OWN system message (never merged into caller-controlled content,
+ * which a caller could pre-include to suppress, or override with conflicting text — Codex). It is a
+ * separate message the caller can't edit; idempotent on an exact match of our directive.
+ */
 export function applyLanguageDirective(messages, code) {
   const directive = languageDirective(code);
   if (!directive || !Array.isArray(messages)) return messages;
-  const head = messages[0];
-  if (head && head.role === 'system' && typeof head.content === 'string') {
-    if (head.content.includes(directive)) return messages; // already applied
-    return [{ role: 'system', content: `${directive}\n\n${head.content}` }, ...messages.slice(1)];
-  }
+  if (messages.some((m) => m && m.role === 'system' && m.content === directive)) return messages; // already ours
   return [{ role: 'system', content: directive }, ...messages];
 }
 

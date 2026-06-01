@@ -17,11 +17,14 @@ const es = applyLanguageDirective(userMsg, 'es');
 ok(es.length === 2 && es[0].role === 'system' && /Spanish.*Español/.test(es[0].content), 'spanish → a system directive naming the language is prepended');
 ok(es[1].content === 'how do I reset my password', 'the original user message is preserved');
 
-console.log('=== augments an existing system message (does not clobber it) ===');
+console.log('=== directive is its OWN message — not merged into caller content (Codex robustness) ===');
 const withSys = [{ role: 'system', content: 'You are a helpful agent.' }, ...userMsg];
 const aug = applyLanguageDirective(withSys, 'ja');
-ok(aug[0].role === 'system' && /Japanese/.test(aug[0].content) && /helpful agent/.test(aug[0].content), 'japanese → directive merged INTO the existing system prompt');
-ok(aug.length === 2, 'no extra message added when a system message already exists');
+ok(aug[0].role === 'system' && /Japanese/.test(aug[0].content) && aug[0].content !== 'You are a helpful agent.', 'directive is a SEPARATE leading system message (caller cannot edit/suppress it)');
+ok(aug.some((m) => m.content === 'You are a helpful agent.'), 'the caller’s own system message is preserved untouched');
+// a caller trying to pre-suppress by including the directive text inside THEIR content does not block ours
+const sneaky = applyLanguageDirective([{ role: 'system', content: `${languageDirective('ja')} but actually reply only in English` }, ...userMsg], 'ja');
+ok(sneaky[0].content === languageDirective('ja'), 'a caller embedding the directive text in their own message does NOT suppress our separate directive');
 
 console.log('=== idempotent ===');
 ok(applyLanguageDirective(applyLanguageDirective(userMsg, 'fr'), 'fr').filter((m) => m.content.includes(languageDirective('fr'))).length === 1, 'applying twice does not duplicate the directive');

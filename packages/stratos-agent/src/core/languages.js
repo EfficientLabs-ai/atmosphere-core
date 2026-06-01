@@ -34,5 +34,7 @@ export function languageName(code) { const l = languageDef(code); return l ? l.l
 export function languageDirective(code) {
   const l = languageDef(code);
   if (!l || l.code === 'en') return null;
-  return `Always respond to the user in ${l.label} (${l.native}), regardless of the language they write in, unless they explicitly ask for a different language.`;
+  // default to the user's chosen language, but AUTO-SWITCH to whatever language they write in — so they
+  // can change language anytime just by typing in it, with no setting to touch.
+  return `Reply to the user in ${l.label} (${l.native}) by default. If the user writes to you in a different language, switch and reply in THAT language from then on — always match the language the user is currently writing in.`;
 }

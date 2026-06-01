@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * Main Entry Point for Atmos API Interception Bridge Daemon
+ * Main Entry Point for the Atmos Sovereign API Gateway.
+ *
+ * This is a LOCAL gateway for the user's OWN outbound model traffic: clients point at 127.0.0.1, the
+ * gateway classifies each request and routes it — simple/automatable work to local open-weight models
+ * (saving unnecessary API spend), heavier work passed through to the user's OWN cloud key (BYOK). It does
+ * NOT intercept, scrape, or automate any third-party subscription — that ToS/CFAA-risk path is out of
+ * scope (GROUNDED_STRATEGY §6). The old "API Interception" naming wrongly implied otherwise.
  */
 
 import { startServer } from './server.js';

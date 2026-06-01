@@ -749,7 +749,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     uptime: process.uptime(),
-    shim: 'Atmos Interception Bridge Daemon',
+    shim: 'Atmos Sovereign API Gateway',
     binding: '127.0.0.1',
     port: PORT,
     upstream: STRATOS_AGENT_URL
@@ -767,9 +767,9 @@ export function startServer() {
       console.error('[API-SHIM] Failed to initialize during startup:', err);
     }
     console.log(`================================================================`);
-    console.log(`🛡️  Atmos API Interception Shield Daemon successfully started!  🛡️`);
-    console.log(`📡 Listening strictly on http://127.0.0.1:${PORT}`);
-    console.log(`🔗 Upstream StratosAgent Target: ${STRATOS_AGENT_URL}`);
+    console.log(`🛡️  Atmos Sovereign API Gateway online  🛡️`);
+    console.log(`📡 Listening strictly on http://127.0.0.1:${PORT} (routes YOUR calls: local open-weight ⇄ your BYOK cloud)`);
+    console.log(`🔗 Upstream StratosAgent (sovereign frontier tier): ${STRATOS_AGENT_URL}`);
     console.log(`⏳ Timeout configuration: ${STRATOS_TIMEOUT}ms`);
     console.log(`================================================================`);
   });

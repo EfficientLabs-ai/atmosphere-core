@@ -34,7 +34,8 @@ const SUITES = {
     'test-connector-vault.mjs', 'test-controller-identity.mjs', 'test-job-policy.mjs', 'test-mcp-stdio.mjs',
     'test-pipeline.mjs', 'test-runner.mjs', 'test-skill-seal.mjs', 'test-stratos-cli.mjs', 'test-wizard.mjs',
     'test-write-approval.mjs', 'test-chaos-pqc.js', 'test-gsi-compiler.js', 'test-quantum-ingestion.js',
-    'test-superintelligence-depin.js', 'test-vector-sensory.js', 'test-p2p-skill-ingest.mjs',
+    'test-superintelligence-depin.js', 'test-vector-sensory.js', 'test-exec-sandbox-contract.mjs',
+    'test-p2p-skill-ingest.mjs',
   ],
 };
 

@@ -9,11 +9,31 @@ import { WASI } from 'node:wasi';
 export class WasiSandbox {
   constructor(options = {}) {
     this.verbose = options.verbose !== false;
-    this.allowedPaths = options.allowedPaths || {}; // Maps host directories to sandboxed mount points
+    this.allowedPaths = options.allowedPaths || {}; // Maps GUEST mount point -> HOST directory (matches job-policy.js sanitizer output)
     this.allowedDomains = options.allowedDomains || new Set(); // Domain whitelists for sandboxed networking
     this.allowedEnvKeys = options.allowedEnvKeys instanceof Set
       ? options.allowedEnvKeys
       : new Set(options.allowedEnvKeys || []); // Explicit env passthrough allowlist (deny-by-default)
+  }
+
+  /**
+   * Build the WASI preopen map from allowedPaths. allowedPaths is { guestMountPoint: hostRealPath }
+   * — the exact shape job-policy.js's sanitizer emits — and WASI preopens are likewise
+   * { guestMountPoint: hostPath }, so the mapping passes through 1:1 (only for hosts that exist).
+   *
+   * (Previously execute() destructured entries as [hostPath, guestPath], INVERTING the mapping: every
+   * mount silently failed the existsSync(host) check or mounted the wrong directory. Pure + testable
+   * now so the {guest -> host} contract with job-policy.js can't silently regress.)
+   */
+  buildPreopens() {
+    const preopens = {};
+    for (const [guestPath, hostPath] of Object.entries(this.allowedPaths)) {
+      if (fs.existsSync(hostPath)) {
+        preopens[guestPath] = hostPath;
+        if (this.verbose) console.log(`📂 [WasiSandbox] Cryptographically delegating folder capability: ${hostPath} -> ${guestPath}`);
+      }
+    }
+    return preopens;
   }
 
   /**
@@ -30,16 +50,8 @@ export class WasiSandbox {
     }
 
     try {
-      // 1. Configure pre-opened directory capabilities (libpreopen simulation)
-      const preopens = {};
-      for (const [hostPath, guestPath] of Object.entries(this.allowedPaths)) {
-        if (fs.existsSync(hostPath)) {
-          preopens[guestPath] = hostPath;
-          if (this.verbose) {
-            console.log(`📂 [WasiSandbox] Cryptographically delegating folder capability: ${hostPath} -> ${guestPath}`);
-          }
-        }
-      }
+      // 1. Configure pre-opened directory capabilities (libpreopen simulation).
+      const preopens = this.buildPreopens();
 
       // 2. Initialize WASI instance with strict parameters.
       // Deny-by-default environment: the guest only ever sees the two protocol

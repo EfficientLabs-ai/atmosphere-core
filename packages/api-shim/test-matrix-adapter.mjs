@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert';
 import { MatrixAdapter } from './src/omni-gateway/matrix-adapter.js';
+import { SECRET_REFUSAL } from './src/secret-guard.js';
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
 const BOT = '@stratos:matrix.org';
@@ -18,6 +19,20 @@ ok(a.shouldHandle(msg({ sender: '@stranger:matrix.org' }), BOT).handle === false
 ok(a.shouldHandle(msg({ msgtype: 'm.image' }), BOT).handle === false, 'a non-text (image) message → skipped');
 ok(a.shouldHandle(msg({ type: 'm.room.member' }), BOT).handle === false, 'a non-message event (membership) → skipped');
 ok(a.shouldHandle(msg({ body: '   ' }), BOT).handle === false, 'an empty body → skipped');
+const sec = a.shouldHandle(msg({ body: 'key sk-ant-api03-abcdef1234567890abcdef1234567890' }), BOT);
+ok(sec.handle === false && sec.refuse === true && sec.reply === SECRET_REFUSAL, 'a pasted API key → refused with exactly SECRET_REFUSAL (not forwarded)');
+{
+  let fetched = false;
+  const guard = new MatrixAdapter({ ownerId: '@owner:matrix.org', verbose: false, fetch: async () => { fetched = true; return { json: async () => ({}) }; } });
+  const sent = [];
+  const d = await guard.dispatch(msg({ body: 'key sk-ant-api03-abcdef1234567890abcdef1234567890' }), BOT, (t) => sent.push(t));
+  ok(d.refuse === true && sent.length === 1 && sent[0] === SECRET_REFUSAL, 'dispatch sends exactly SECRET_REFUSAL on a secret');
+  ok(fetched === false, 'the agent gateway fetch is NEVER called for a secret message');
+  const sent2 = [];
+  const okAdapter = new MatrixAdapter({ ownerId: '@owner:matrix.org', verbose: false, fetch: async () => ({ json: async () => ({ choices: [{ message: { content: 'hi back' } }] }) }) });
+  await okAdapter.dispatch(msg({ body: 'what is the weather' }), BOT, (t) => sent2.push(t));
+  ok(sent2.includes('hi back'), 'a normal message IS routed to the agent and replied');
+}
 const handled = a.shouldHandle(msg({ body: 'what is the weather' }), BOT);
 ok(handled.handle === true && handled.text === 'what is the weather', 'a real prompt → handled, text extracted');
 

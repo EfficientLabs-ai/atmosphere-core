@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fetch from 'node-fetch';
+import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
 
 /**
  * SignalAdapter — a REAL two-way Signal channel for StratosAgent (new). The MOST sovereign chat channel:
@@ -40,6 +41,7 @@ export class SignalAdapter {
     else if (sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
     const text = String(dm.message).trim();
     if (!text) return { handle: false, reason: 'empty' };
+    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, sender, reason: 'secret in message' };
     return { handle: true, text, sender };
   }
 
@@ -73,6 +75,18 @@ export class SignalAdapter {
     this.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: ++this._id, method: 'send', params: { recipient: [recipient], message } }) + '\n');
   }
 
+  /**
+   * Run ONE envelope: gate it, refuse on a secret (SECRET_REFUSAL, stopping BEFORE askAgent), else route
+   * to the agent and reply via the injected `send(recipient, text)`. Unit-testable without signal-cli.
+   */
+  async dispatch(envelope, send) {
+    const decision = this.shouldHandle(envelope);
+    if (!decision.handle) { if (decision.refuse) await send(decision.sender, decision.reply); return decision; }
+    const reply = await this.askAgent(decision.text);
+    for (const part of SignalAdapter.chunk(reply)) await send(decision.sender, part);
+    return decision;
+  }
+
   /** Spawn signal-cli in JSON-RPC mode and serve. No-op (safe) if the number/binary is missing. */
   async start() {
     if (!this.number) {
@@ -97,10 +111,7 @@ export class SignalAdapter {
         let msg; try { msg = JSON.parse(line); } catch { continue; }
         if (msg.method !== 'receive' || !msg.params?.envelope) continue;
         try {
-          const decision = this.shouldHandle(msg.params.envelope);
-          if (!decision.handle) continue;
-          const reply = await this.askAgent(decision.text);
-          for (const part of SignalAdapter.chunk(reply)) this.send(decision.sender, part);
+          await this.dispatch(msg.params.envelope, (recipient, text) => this.send(recipient, text));
         } catch (e) { if (this.verbose) console.error('❌ [Signal] handler error:', e.message); }
       }
     });

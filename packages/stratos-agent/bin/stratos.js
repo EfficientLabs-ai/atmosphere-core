@@ -13,6 +13,7 @@ import { run, generateSystemdUnit, banner } from '../src/cli/stratos-cli.js';
 import { validateModelChoice, applyWizard, privacyPosture } from '../src/cli/wizard.js';
 import { realProbes } from '../src/cli/probes.js';
 import * as config from '../src/core/agent-config.js';
+import * as connectorRegistry from '../src/connectors/connector-registry.js';
 
 // ---- TUI helpers (presentation only; the wizard's logic is tested in src/cli/wizard.js) ----------
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', m: '\x1b[35m', d: '\x1b[2m', bold: '\x1b[1m', x: '\x1b[0m' };
@@ -26,6 +27,35 @@ const stepHdr = (n, total, title) => `\n${C.m}${C.bold}  ◆ Step ${n}/${total}$
 const okMark = (s) => `${C.g}✓${C.x} ${s}`;
 const noMark = (s, fix) => `${C.y}✗${C.x} ${s}${fix ? `\n       ${C.d}↳ ${fix}${C.x}` : ''}`;
 
+/**
+ * Unified prompt helper that works for BOTH an interactive TTY and piped/non-interactive input.
+ *  - TTY: readline.question, with secret masking (echoes •) and EOF/Ctrl-D resilience (resolves '').
+ *  - non-TTY: buffer all of stdin once, then serve lines deterministically (no readline race), masking
+ *    secrets in the echo. This is what makes scripted/piped runs reliable.
+ */
+function makeAsker() {
+  if (process.stdin.isTTY) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let closed = false; rl.once('close', () => { closed = true; });
+    const base = (q, mask) => new Promise((res) => {
+      if (closed) return res('');
+      const onC = () => res(''); rl.once('close', onC);
+      const orig = rl._writeToOutput;
+      if (mask) rl._writeToOutput = (s) => orig.call(rl, s.includes(q) ? s : '•');
+      rl.question(q, (a) => { rl.removeListener('close', onC); if (mask) { rl._writeToOutput = orig; process.stdout.write('\n'); } res(a); });
+    });
+    return { ask: (q) => base(q, false), askSecret: (q) => base(q, true), close: () => rl.close() };
+  }
+  let lines = null, i = 0;
+  const ready = new Promise((res) => {
+    let buf = ''; process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (c) => { buf += c; });
+    process.stdin.on('end', () => { lines = buf.length ? buf.split('\n') : []; res(); });
+  });
+  const serve = async (q, mask) => { await ready; process.stdout.write(q); const v = (lines && lines[i++]) || ''; process.stdout.write((mask ? '•'.repeat(v.length) : v) + '\n'); return v; };
+  return { ask: (q) => serve(q, false), askSecret: (q) => serve(q, true), close: () => {} };
+}
+
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 function pkgVersion() {
   try { return JSON.parse(fs.readFileSync(path.join(HERE, '..', 'package.json'), 'utf8')).version || '0.0.0'; }
@@ -38,17 +68,7 @@ async function pickCloud(ask) {
 }
 
 async function initWizard() {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  let closed = false;
-  rl.once('close', () => { closed = true; });
-  // resolve to '' (→ the step's default) if the input stream ends mid-question, so the wizard never
-  // strands on EOF/Ctrl-D (a real TTY never closes; piped/non-interactive input safely takes defaults).
-  const ask = (q) => new Promise((res) => {
-    if (closed) return res('');
-    const onClose = () => res('');
-    rl.once('close', onClose);
-    rl.question(q, (a) => { rl.removeListener('close', onClose); res(a); });
-  });
+  const { ask, close } = makeAsker();
   console.log(banner());
   console.log(box([`${C.bold}Set up your sovereign agent${C.x}`, `${C.d}4 quick steps · local-first · private by default${C.x}`]));
 
@@ -84,11 +104,14 @@ async function initWizard() {
   const cm = ((await ask(`  ${C.b}→${C.x} Choice ${C.d}(default 1)${C.x}: `)).trim() || '1');
   const costApproval = cm === '2' ? 'auto-local' : cm === '3' ? 'always-spend' : 'ask';
 
-  // Step 4 — mesh (optional, clearly separate)
+  // Step 4 — mesh walkthrough (optional, clearly separate)
   console.log(stepHdr(4, 4, 'The Atmosphere mesh (optional)'));
-  console.log(`    ${C.d}A P2P compute mesh. Always optional — never required to use your agent.${C.x}`);
-  const meshEnroll = /^y/i.test(((await ask(`  ${C.b}→${C.x} Join the mesh now? ${C.d}[y/N]${C.x} `)).trim() || 'N'));
-  rl.close();
+  console.log(`    ${C.d}A public-DHT, hole-punched (no inbound ports), post-quantum zero-trust mesh that lets your${C.x}`);
+  console.log(`    ${C.d}agent borrow/lend spare compute. Data stays end-to-end encrypted; peers are PQC-verified.${C.x}`);
+  console.log(`    ${C.d}Opting in just sets a flag — you bring a device online later by running a ghost-node bundle.${C.x}`);
+  const meshEnroll = /^y/i.test(((await ask(`  ${C.b}→${C.x} Opt in to the mesh now? ${C.d}(you can join devices later) [y/N]${C.x} `)).trim() || 'N'));
+  if (meshEnroll) console.log(`    ${C.g}✓ Opted in.${C.x} ${C.d}Next: see ${C.x}${C.b}stratos mesh${C.x}${C.d} for how to bring this device online.${C.x}`);
+  close();
 
   applyWizard({ agentName, provider, localModel, saveApiSpend, costApproval, meshEnroll }, config);
 
@@ -102,6 +125,32 @@ async function initWizard() {
   console.log(`\n  Next:  ${C.b}stratos doctor${C.x} ${C.d}(check readiness)${C.x}  →  ${C.b}stratos start${C.x}`);
   if (!v.ok && v.fix) console.log(`  ${C.y}First, fix the brain:${C.x} ${v.fix}`);
   console.log(`  ${C.d}Tip: let Stratos self-configure from chat later — ${pp.private ? 'fully private with your local brain.' : 'note your cloud brain will see those prompts.'}${C.x}\n`);
+}
+
+async function connectWizard() {
+  const { ask, askSecret, close } = makeAsker();
+  console.log(banner());
+  console.log(box([`${C.bold}Onboard a connector / MCP server${C.x}`, `${C.d}credential → encrypted vault · only an opaque handle is stored${C.x}`]));
+  const name = (await ask(`  ${C.b}→${C.x} Connector name ${C.d}(e.g. github)${C.x}: `)).trim();
+  const command = (await ask(`  ${C.b}→${C.x} Pinned MCP sidecar command ${C.d}(e.g. node)${C.x}: `)).trim();
+  const argsRaw = (await ask(`  ${C.b}→${C.x} Sidecar args ${C.d}(space-separated, e.g. ./gh-mcp.js — optional)${C.x}: `)).trim();
+  const authEnvVar = (await ask(`  ${C.b}→${C.x} Auth env var the sidecar reads ${C.d}[MCP_AUTH_TOKEN]${C.x}: `)).trim() || 'MCP_AUTH_TOKEN';
+  const secret = (await askSecret(`  ${C.b}→${C.x} Credential/token ${C.d}(hidden — stored encrypted in the vault; leave blank for none)${C.x}: `)).trim();
+  close();
+
+  try {
+    const r = connectorRegistry.addConnector({ name, secret: secret || undefined, command, args: argsRaw ? argsRaw.split(/\s+/) : [], authEnvVar });
+    console.log('\n' + box([
+      `${C.g}${C.bold}✓ Connector "${r.name}" onboarded${C.x}`,
+      `${C.d}Credential:${C.x} ${r.hasCredential ? C.g + 'in the vault (encrypted)' + C.x : 'none'}`,
+      `${C.d}Sidecar:${C.x}    ${r.command}`,
+    ]));
+    console.log(`  ${C.d}The broker will use this pinned sidecar; the agent only ever sees results, never the secret.${C.x}`);
+    console.log(`  ${C.d}List anytime:${C.x} ${C.b}stratos connectors${C.x}\n`);
+  } catch (e) {
+    console.log(`\n${C.r}✗ ${e.message}${C.x}\n`);
+    process.exitCode = 1;
+  }
 }
 
 async function startDaemon() {
@@ -136,6 +185,7 @@ function installService() {
 
 const res = await run(process.argv.slice(2), { config, version: pkgVersion() });
 if (res.action === 'init') { await initWizard(); process.exit(0); }
+else if (res.action === 'connect') { await connectWizard(); process.exit(process.exitCode || 0); }
 else if (res.action === 'start') { await startDaemon(); /* daemon holds the event loop open */ }
 else if (res.action === 'service-install') { installService(); process.exit(0); }
 else { for (const l of res.lines) console.log(l); process.exit(res.code); }

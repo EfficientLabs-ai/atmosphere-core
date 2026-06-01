@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as realConfig from '../core/agent-config.js';
+import * as realConnectors from '../connectors/connector-registry.js';
 import { realProbes } from './probes.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
@@ -65,11 +66,44 @@ function helpText() {
     `  ${C.g}doctor${C.x}          Read-only preflight — tells you exactly what's missing`,
     `  ${C.g}models${C.x}          List locally-installed models + the configured route`,
     `  ${C.g}bind${C.x} <chat-id>  Bind your Telegram chat id as owner (enables chat config)`,
+    `  ${C.g}connect${C.x}         Onboard a connector/MCP server (credential → vault, sidecar pinned)`,
+    `  ${C.g}connectors${C.x}      List onboarded connectors (metadata only; secrets stay in the vault)`,
+    `  ${C.g}mesh${C.x}            The Atmosphere mesh — status + how to join (optional)`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
-    `${C.d}Mesh (The Atmosphere) is an optional add-on; mesh commands appear once it's installed.${C.x}`,
+    `${C.d}Mesh (The Atmosphere) is an optional add-on — never required to use your agent.${C.x}`,
   ];
+}
+
+function cmdConnectors(deps) {
+  let list;
+  try { list = deps.connectors.listConnectors(); } catch (e) { return { code: 1, lines: [`${C.r}connector registry error: ${e.message}${C.x}`] }; }
+  const lines = [`${C.b}Connectors${C.x} ${C.d}(credentials live encrypted in the vault — only opaque handles are stored here)${C.x}`];
+  if (!list.length) lines.push(`  ${C.d}none yet — onboard one with: ${C.x}${C.g}stratos connect${C.x}`);
+  else for (const c of list) lines.push(`  - ${c.name.padEnd(16)} ${c.hasCredential ? C.g + '🔑 credentialed' : C.y + 'no credential'}${C.x} ${C.d}(${c.command})${C.x}`);
+  return { code: 0, lines };
+}
+
+function cmdMesh(deps) {
+  const optIn = deps.config.getConfig().meshOptIn;
+  const fleet = readFleet();
+  return {
+    code: 0,
+    lines: [
+      `${C.b}The Atmosphere${C.x} — P2P compute mesh ${C.d}(optional, never required)${C.x}`,
+      `  Status:  ${optIn ? C.g + 'opted in' + C.x : C.y + 'not joined' + C.x}`,
+      `  Fleet:   ${fleet ? `${fleet.nodes} node(s), ${fleet.cores} cores ${C.d}(self-reported)${C.x}` : `off ${C.d}(no fleet.json yet)${C.x}`}`,
+      '',
+      `  ${C.d}What it is: a public-DHT, hole-punched (no inbound ports), post-quantum zero-trust mesh that lets`,
+      `  your agent borrow/lend spare compute. Your data stays end-to-end encrypted; nodes are PQC-verified.${C.x}`,
+      '',
+      `  ${C.d}To join: run a ghost-node bundle (built per platform) — it hole-punches outward, opening no ports.${C.x}`,
+      optIn
+        ? `  ${C.g}✓ You've opted in.${C.x} ${C.d}Build/run your ghost-node bundle to bring this device online.${C.x}`
+        : `  ${C.d}Opt in:${C.x} ${C.g}stratos init${C.x} ${C.d}(mesh step) — or set ATMOSPHERE_P2P_OPT_IN=true.${C.x}`,
+    ],
+  };
 }
 
 async function cmdStatus(deps) {
@@ -179,7 +213,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'connect', 'connectors', 'mesh', 'service', 'version', 'help'];
 
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
@@ -197,6 +231,7 @@ function cmdService(rest) {
 export async function run(argv = [], deps = {}) {
   const d = {
     config: deps.config || realConfig,
+    connectors: deps.connectors || realConnectors,
     probes: deps.probes || realProbes,
     port: deps.port || process.env.PORT || 4099,
     ollamaHost: deps.ollamaHost || process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
@@ -210,6 +245,9 @@ export async function run(argv = [], deps = {}) {
     case 'doctor': return cmdDoctor(d);
     case 'models': return cmdModels(d);
     case 'bind': return cmdBind(rest, d);
+    case 'connectors': return cmdConnectors(d);
+    case 'mesh': return cmdMesh(d);
+    case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'service': return cmdService(rest);
     case 'init': return { code: 0, lines: [], action: 'init' };   // interactive — handled by bin
     case 'start': return { code: 0, lines: [], action: 'start' }; // daemon — handled by bin

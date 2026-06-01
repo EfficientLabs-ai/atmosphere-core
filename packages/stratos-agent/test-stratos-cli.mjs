@@ -83,4 +83,20 @@ const unit = generateSystemdUnit({ execPath: '/usr/bin/node', binPath: '/x/strat
 ok(/systemd/i.test('[Unit]') === false && unit.includes('[Service]') && unit.includes('ExecStart=/usr/bin/node /x/stratos.js start'), 'systemd unit: ExecStart wired to the bin');
 ok(unit.includes('WantedBy=default.target') && unit.includes('Environment=PORT=4099') && !/root|sudo/i.test(unit), 'systemd unit: user target (default.target), PORT env, no root');
 
+// connectors — metadata-only listing (injected stub)
+r = await run(['connectors'], { config, connectors: { listConnectors: () => [{ name: 'github', hasCredential: true, command: 'node' }] } });
+ok(r.code === 0 && /github/.test(text(r)) && /credentialed/.test(text(r)), 'connectors lists onboarded connectors (metadata)');
+r = await run(['connectors'], { config, connectors: { listConnectors: () => [] } });
+ok(/stratos connect/.test(text(r)), 'empty connectors → points to onboarding');
+
+// mesh — walkthrough + honest status
+r = await run(['mesh'], { config });
+ok(r.code === 0 && /Atmosphere/.test(text(r)) && /not joined|opted in/.test(text(r)), 'mesh shows the walkthrough + status');
+
+// connect — interactive, delegated to bin
+r = await run(['connect'], { config });
+ok(r.action === 'connect', 'connect → action delegated to the interactive bin handler');
+
+ok(['connect', 'connectors', 'mesh'].every((c) => COMMANDS.includes(c)), 'new commands are in the COMMANDS surface');
+
 console.log(`\n✅ ALL ${pass} stratos-cli checks passed.`);

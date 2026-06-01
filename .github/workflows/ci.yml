@@ -1,0 +1,40 @@
+name: CI
+
+# Runs the hermetic test suite on every push to main and every pull request.
+# A red ✗ here means a PR broke something — it blocks merge intent before code review even starts.
+# This is the repo enforcing "nothing ships with failing tests", independent of any one contributor.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel an in-progress run if the same branch/PR pushes again (saves CI minutes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Hermetic tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run hermetic test suite
+        run: node scripts/ci-test.mjs

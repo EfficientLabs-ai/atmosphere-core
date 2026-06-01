@@ -158,12 +158,12 @@ export function disableProvider(provider) {
 }
 export function getModelSources() { return { ...DEFAULTS().modelSources, ...getConfig().modelSources }; }
 
-/** Enable a messaging channel with the VAULT HANDLE to its bot token (never the token itself). */
-export function setMessagingChannel(channel, { enabled = true, tokenHandle } = {}) {
+/** Enable a messaging channel: vault HANDLE(S) to its token(s), owner id, + non-secret per-channel config. */
+export function setMessagingChannel(channel, { enabled = true, tokenHandle, appTokenHandle, ownerId, extra } = {}) {
   if (!PROVIDER_RE.test(String(channel || ''))) throw new Error('invalid channel');
   return updateConfig((c) => {
     c.messaging = { ...c.messaging };
-    c.messaging[channel] = { enabled: !!enabled, tokenHandle: tokenHandle || null };
+    c.messaging[channel] = { enabled: !!enabled, tokenHandle: tokenHandle || null, appTokenHandle: appTokenHandle || null, ownerId: ownerId || null, extra: extra || null };
   });
 }
 export function getMessaging() { return { ...getConfig().messaging }; }

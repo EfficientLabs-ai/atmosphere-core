@@ -41,9 +41,9 @@ ok(/qwen2\.5:7b/.test(s) && /ready/.test(s), 'model readiness from effectiveCapa
 ok(/off/.test(s) && /not joined/.test(s), 'mesh reported off (no fleet.json) — not fabricated');
 ok(!/SOL|12\.45|Maximus|EsportsCafe|records|connected/.test(s), 'NO fabricated SOL balance / peer list / record counts');
 
-console.log('\n=== status: model not installed → honest "requested", daemon up when port listening ===');
+console.log('\n=== status: model not installed → honest "not pulled", daemon up when port listening ===');
 r = await run(['status'], { config, probes: probes({ probeOllama: async () => ({ reachable: false, models: [] }), probePort: async () => true }), port: 4099 });
-ok(/requested/.test(text(r)), 'model not installed → state "requested" (not overstated as ready)');
+ok(/not pulled/.test(text(r)), 'local model not installed → "not pulled" (not overstated as ready)');
 ok(/running/.test(text(r)), 'daemon "running" when the port is listening');
 
 console.log('\n=== doctor is read-only & reflects real failures ===');
@@ -98,5 +98,15 @@ r = await run(['connect'], { config });
 ok(r.action === 'connect', 'connect → action delegated to the interactive bin handler');
 
 ok(['connect', 'connectors', 'mesh'].every((c) => COMMANDS.includes(c)), 'new commands are in the COMMANDS surface');
+
+console.log('\n=== status/doctor/models reflect the wizard config (model sources + channels) ===');
+config.enableProvider('anthropic', 'cvault:anthropic:api-key:' + 'a'.repeat(32));
+config.setMessagingChannel('telegram', { enabled: true, tokenHandle: 'cvault:telegram:bot-token:' + 'b'.repeat(32) });
+r = await run(['status'], { config, probes: probes() });
+ok(/anthropic/.test(text(r)) && /telegram/.test(text(r)), 'status shows the configured provider + channel');
+r = await run(['models'], { config, probes: probes() });
+ok(/anthropic/.test(text(r)) && /✓/.test(text(r)), 'models lists the configured provider with its key set');
+r = await run(['doctor'], { config, probes: probes() });
+ok(/anthropic key/.test(text(r)) && /telegram/.test(text(r)), 'doctor checks the provider key + channel token');
 
 console.log(`\n✅ ALL ${pass} stratos-cli checks passed.`);

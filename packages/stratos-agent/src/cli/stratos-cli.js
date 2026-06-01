@@ -107,6 +107,21 @@ function cmdMesh(deps) {
   };
 }
 
+// render the enabled model sources (local + providers) with honest readiness
+function modelsSummary(eff, installedModels, env = process.env) {
+  const ms = eff.modelSources || { local: {}, providers: {} };
+  const parts = [];
+  if (ms.local?.enabled) {
+    const installed = installedModels.some((i) => String(i).split(':')[0] === String(ms.local.name).split(':')[0]);
+    parts.push(`local:${ms.local.name} ${installed ? C.g + '(ready)' : C.y + '(not pulled)'}${C.x}`);
+  }
+  for (const [p, cfg] of Object.entries(ms.providers || {})) {
+    const ready = !!cfg.keyHandle || !!env[`${p.toUpperCase()}_API_KEY`];
+    parts.push(`${p} ${ready ? C.g + '(key set)' : C.y + '(no key)'}${C.x}`);
+  }
+  return parts.length ? parts.join(' · ') : C.y + 'none configured' + C.x;
+}
+
 async function cmdStatus(deps) {
   const { config, probes, port } = deps;
   const { models } = await probes.probeOllama();
@@ -115,11 +130,14 @@ async function cmdStatus(deps) {
   const owner = config.getOwner();
   const fleet = readFleet();
   const meshLine = fleet ? `${fleet.nodes} node(s), ${fleet.cores} cores ${C.d}(self-reported)${C.x}` : `off ${C.d}(not joined)${C.x}`;
+  const chans = Object.entries(eff.messaging || {}).filter(([, m]) => m.enabled).map(([c]) => c);
   return {
     code: 0,
     lines: [
       `${C.b}${eff.agentName}${C.x} — status`,
-      `  Model:    ${eff.model.name} ${eff.model.state === 'ready' ? C.g + '(ready)' : C.y + '(' + eff.model.state + ')'}${C.x}`,
+      `  Models:   ${modelsSummary(eff, models)}`,
+      `  Routing:  save-spend ${eff.routing.saveApiSpend ? C.g + 'on' + C.x : 'off'} ${C.d}·${C.x} ${eff.routing.costApproval}`,
+      `  Talk:     ${chans.length ? chans.join(' · ') + ` ${C.d}(configured)${C.x}` : C.y + 'no channel' + C.x + C.d + ' (stratos channels)' + C.x}`,
       `  Daemon:   ${up ? C.g + 'running' : C.y + 'stopped'}${C.x} ${C.d}(127.0.0.1:${port})${C.x}`,
       `  Owner:    ${owner ? C.g + 'bound' : C.y + 'not bound'}${C.x}${owner ? '' : C.d + ' (run: stratos bind <chat-id>)' + C.x}`,
       `  Mesh:     ${meshLine}`,
@@ -139,16 +157,27 @@ async function cmdDoctor(deps) {
   catch (e) { cfgOk = false; cfgDetail = `unreadable: ${e.message}`; }
   checks.push({ ok: cfgOk, label: 'Config', detail: cfgDetail });
 
-  const oll = await probes.probeOllama();
-  const isLocal = eff && eff.model.provider === 'local';
-  if (isLocal) {
-    checks.push({ ok: oll.reachable, label: 'Ollama', detail: oll.reachable ? `reachable, ${oll.models.length} model(s)` : `unreachable at ${ollamaHost} (needed for the local model)` });
-    const installed = eff && oll.models.some((m) => m.split(':')[0] === eff.model.name.split(':')[0]);
-    checks.push({ ok: !!installed, label: 'Local model', detail: installed ? `${eff.model.name} installed` : `${eff?.model.name} NOT pulled — run: ollama pull ${eff?.model.name}`, warn: !installed });
-  } else if (eff) {
-    const keyVar = `${eff.model.provider.toUpperCase()}_API_KEY`;
-    const present = !!process.env[keyVar];
-    checks.push({ ok: present, label: 'Cloud key', detail: present ? `${keyVar} present` : `${keyVar} not set (BYOK cloud model needs it)`, warn: !present });
+  const ms = eff?.modelSources || { local: {}, providers: {} };
+  // local model source
+  if (ms.local?.enabled) {
+    const oll = await probes.probeOllama();
+    checks.push({ ok: oll.reachable, label: 'Ollama', detail: oll.reachable ? `reachable, ${oll.models.length} model(s)` : `unreachable at ${ollamaHost} (needed for local models)` });
+    const installed = oll.models.some((m) => m.split(':')[0] === String(ms.local.name).split(':')[0]);
+    checks.push({ ok: installed, label: 'Local model', detail: installed ? `${ms.local.name} installed` : `${ms.local.name} NOT pulled — run: ollama pull ${ms.local.name}`, warn: !installed });
+  }
+  // provider keys (configured in the vault, or present in env)
+  for (const [p, cfg] of Object.entries(ms.providers || {})) {
+    const ready = !!cfg.keyHandle || !!process.env[`${p.toUpperCase()}_API_KEY`];
+    checks.push({ ok: ready, label: `${p} key`, detail: ready ? 'configured (vault)' : `no key — re-run stratos init and add ${p}`, warn: !ready });
+  }
+  // messaging channels
+  for (const [ch, m] of Object.entries(eff?.messaging || {})) {
+    if (!m.enabled) continue;
+    const ready = !!m.tokenHandle;
+    checks.push({ ok: ready, label: `${ch}`, detail: ready ? 'token configured (vault)' : `no token — run: stratos channels`, warn: !ready });
+  }
+  if (!ms.local?.enabled && !Object.keys(ms.providers || {}).length) {
+    checks.push({ ok: false, label: 'Models', detail: 'no model source configured — run: stratos init', warn: true });
   }
 
   const up = await probes.probePort(port);
@@ -168,8 +197,12 @@ async function cmdDoctor(deps) {
 async function cmdModels(deps) {
   const { config, probes } = deps;
   const { reachable, models } = await probes.probeOllama();
-  const cfg = config.getConfig();
-  const lines = [`${C.b}Models${C.x}`, `  Configured: ${cfg.model.provider}:${cfg.model.name}`];
+  const ms = config.getModelSources ? config.getModelSources() : { local: {}, providers: {} };
+  const lines = [`${C.b}Models${C.x} ${C.d}— your configured sources${C.x}`];
+  lines.push(`  Local:     ${ms.local?.enabled ? C.g + ms.local.name + C.x : C.d + 'off' + C.x}`);
+  const provs = Object.keys(ms.providers || {});
+  lines.push(`  Providers: ${provs.length ? provs.map((p) => `${p}${ms.providers[p].keyHandle ? C.g + ' ✓' + C.x : C.y + ' (no key)' + C.x}`).join(', ') : C.d + 'none' + C.x}`);
+  lines.push('');
   if (!reachable) lines.push(`  ${C.y}Ollama not reachable — no local models to list.${C.x}`);
   else if (!models.length) lines.push(`  ${C.d}(no local models installed — run: ollama pull qwen2.5:7b)${C.x}`);
   else { lines.push('  Installed locally:'); for (const m of models) lines.push(`    - ${m}`); }

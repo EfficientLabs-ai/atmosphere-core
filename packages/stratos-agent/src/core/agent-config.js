@@ -180,6 +180,8 @@ export function effectiveCapabilities({ installedModels = [], env = process.env 
     model: { ...c.model, state: modelReady ? 'ready' : 'requested' },
     permissions: c.permissions,                 // grants are CLI-only; reported as-is
     channels: c.channels,                       // 'configured' ≠ 'ready'; never overstated
+    modelSources: { ...DEFAULTS().modelSources, ...c.modelSources },
+    messaging: { ...c.messaging },
     routing: { ...DEFAULTS().routing, ...c.routing },
     meshOptIn: c.meshOptIn,
   };

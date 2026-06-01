@@ -1,55 +1,58 @@
 /**
- * Gate fail-closed hardening (Codex review of PR #41). When the compliance gate THROWS (can't be
- * evaluated), the old catch only blocked when `wouldSpend` was truthy — so a gate error on a paid-family
- * model whose key wasn't present (or any unclassifiable model) fell through to the spend/proxy path.
+ * Gate fail-closed hardening (Codex reviews of PR #41 + #45). When the compliance gate THROWS (can't be
+ * evaluated), failClosedOnGateError must block exactly the requests that would SPEND on a paid external
+ * API — and only those. "Would spend" is defined by the router itself: resolveRoute(model).kind==='byok'
+ * (a provider matched AND its key is configured). Local / no-key / unknown do not spend → they proceed.
  *
- * failClosedOnGateError now blocks ANYTHING that resolves to a paid provider (or that it can't classify),
- * and only lets a provably-local model proceed. This tests that helper directly with mock req/res.
+ * This is the precise, router-consistent definition that supersedes the earlier providerForModel /
+ * isProvablyLocalModel heuristics, which couldn't match the router's case-sensitive, env-flag behavior.
  */
 import assert from 'node:assert';
-import { failClosedOnGateError } from './server.js';
+
+// Configure provider keys so paid models resolve to BYOK ("would spend"). Set BEFORE importing the server.
+process.env.OPENAI_API_KEY = 'sk-openai-test-key-1234567890';
+process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key-1234567890';
+process.env.GEMINI_API_KEY = 'gm-test-key-1234567890';
+process.env.OPENROUTER_API_KEY = 'or-test-key-1234567890';
+delete process.env.STRATOS_FORCE_LOCAL;
+
+const { failClosedOnGateError } = await import('./server.js');
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
 const mockRes = () => { const r = { code: null, body: null }; r.status = (c) => { r.code = c; return r; }; r.json = (b) => { r.body = b; return r; }; return r; };
+const block = (model) => { const res = mockRes(); const b = failClosedOnGateError({ body: { model } }, res); return { blocked: b, code: res.code, body: res.body }; };
 
-console.log('=== a paid-provider model is BLOCKED on gate error (fail-closed) ===');
-for (const model of ['claude-3-5-sonnet-20241022', 'gpt-4o', 'o3-mini', 'gemini-2.0-flash', 'meta-llama/llama-3-70b']) {
-  const res = mockRes();
-  const blocked = failClosedOnGateError({ body: { model } }, res);
-  ok(blocked === true && res.code === 402 && res.body?.error === 'approval_required', `${model} → 402 blocked`);
+console.log('=== paid providers WITH a key configured → BLOCKED (a real BYOK spend) ===');
+for (const model of ['gpt-4o', 'o3-mini', 'claude-3-5-sonnet-20241022', 'gemini-2.0-flash']) {
+  const r = block(model);
+  ok(r.blocked === true && r.code === 402 && r.body?.error === 'approval_required', `${model} → 402 blocked`);
 }
 
-console.log('\n=== paid OpenRouter slugs whose VENDOR matches a local family are still BLOCKED (Codex #45 finding) ===');
-// deepseek/deepseek-chat, qwen/qwen-2.5-72b, mistralai/mistral-large used to force-local (the vendor
-// prefix matched the local-family regex) → providerForModel null → the gate let them through. They are
-// PAID OpenRouter slugs and must block.
-for (const model of ['deepseek/deepseek-chat', 'qwen/qwen-2.5-72b-instruct', 'mistralai/mistral-large']) {
-  const res = mockRes();
-  const blocked = failClosedOnGateError({ body: { model } }, res);
-  ok(blocked === true && res.code === 402, `${model} (OpenRouter slug) → 402 blocked, not misrouted to local`);
+console.log('\n=== paid OpenRouter slugs (vendor matches a local family) → BLOCKED (Codex #45) ===');
+for (const model of ['deepseek/deepseek-chat', 'qwen/qwen-2.5-72b-instruct', 'mistralai/mistral-large', 'meta-llama/llama-3-70b']) {
+  const r = block(model);
+  ok(r.blocked === true && r.code === 402, `${model} (OpenRouter byok) → 402 blocked`);
 }
 
-console.log('\n=== a PROVABLY-local model (matches the router\'s own heuristic) PROCEEDS — no false block ===');
-for (const model of ['qwen2.5:7b', 'llama3', 'local', 'local:gemma2', 'my-quantized-model']) {
-  const res = mockRes();
-  const blocked = failClosedOnGateError({ body: { model } }, res);
-  ok(blocked === false && res.code === null, `${model} → not blocked (routes local)`);
+console.log('\n=== a paid model with NO key configured does NOT spend → proceeds ===');
+{
+  delete process.env.OPENAI_API_KEY;
+  const r = block('gpt-4o');
+  ok(r.blocked === false && r.code === null, 'gpt-4o with no OPENAI_API_KEY → resolveRoute=error (no spend possible) → proceeds');
+  process.env.OPENAI_API_KEY = 'sk-openai-test-key-1234567890';
 }
 
-console.log('\n=== bare local-FAMILY names the router does NOT route local are BLOCKED (Codex #45 second finding) ===');
-// isForcedLocal treats these as "local family", but the routing heuristic (local|quantized|qwen|llama)
-// does NOT send them to local inference → they would fall through to the proxy. The gate must block them.
-for (const model of ['mistral-large', 'gemma2:9b', 'phi3', 'deepseek-r1']) {
-  const res = mockRes();
-  const blocked = failClosedOnGateError({ body: { model } }, res);
-  ok(blocked === true && res.code === 402, `${model} (family name, not provably-local) → 402 blocked`);
+console.log('\n=== local + bare local-family names route local (no spend) → PROCEED, no false block (Codex #45) ===');
+for (const model of ['qwen2.5:7b', 'QWEN2.5:7B', 'llama3', 'local', 'local:gemma2', 'mistral-large', 'gemma2:9b', 'phi3', 'deepseek-r1']) {
+  const r = block(model);
+  ok(r.blocked === false && r.code === null, `${model} → not blocked (resolveRoute=local, never spends)`);
 }
 
-console.log('\n=== a missing/empty model is BLOCKED (fail-closed — not provably local) ===');
+console.log('\n=== a missing/empty model resolves local (no provider) → proceeds ===');
 for (const body of [{ model: '' }, {}, { model: null }]) {
   const res = mockRes();
-  const blocked = failClosedOnGateError({ body }, res);
-  ok(blocked === true && res.code === 402, `empty/missing model (${JSON.stringify(body)}) → 402 blocked (fail-closed)`);
+  const b = failClosedOnGateError({ body }, res);
+  ok(b === false, `empty/missing model (${JSON.stringify(body)}) → proceeds (no paid route to spend on)`);
 }
 
 console.log(`\n✅ ALL ${pass} gate-failclosed checks passed.`);

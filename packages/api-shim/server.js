@@ -11,7 +11,7 @@ import { resolveRoute, selectLocalModel } from './src/model-manager.js';
 import { passthroughCloud } from './src/routers/cloud-byok.js';
 import { passthroughAnthropic } from './src/routers/anthropic-adapter.js';
 import { languageGate } from './src/language-gateway.js';
-import { complianceApprovalGate, providerForModel } from './src/compliance-gateway.js';
+import { complianceApprovalGate } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 
@@ -87,28 +87,21 @@ const reasoningBank = new ReasoningBank({
 app.use(cors());
 app.use(bodyParser.json());
 
-// A model is "provably local" ONLY if it matches the SAME narrow heuristic the routing uses to actually
-// send a request to local inference (isLocalRequest below + the task-router). Per Codex review of #45:
-// isForcedLocal's broad family set (mistral/gemma/phi/deepseek) is WIDER than what routes local, so a
-// bare `mistral-large`/`gemma2:9b`/`phi3`/`deepseek-r1` looks local to the gate but actually falls
-// through to the proxy. Keeping this in lock-step with the router avoids that gap.
-function isProvablyLocalModel(model, env = process.env) {
-  const m = String(model || '').toLowerCase();
-  return env.STRATOS_FORCE_LOCAL === '1' || /^local:/.test(m)
-    || m.includes('local') || m.includes('quantized') || m.includes('qwen') || m.includes('llama');
-}
-
-// Fail-closed helper for when the compliance gate THROWS (couldn't be evaluated). Per Codex reviews of
-// #41 + #45: a `wouldSpend`-only catch is only CONDITIONALLY closed, and a provider==null check is too
-// permissive (bare local-family names that don't actually route local slip through). We proceed ONLY when
-// the model is NOT a paid provider AND is provably-local by the router's own heuristic; everything else
-// (paid, ambiguous, empty) is blocked. Returns true if it sent a 402 (the caller must then `return`).
+// Fail-closed helper for when the compliance gate THROWS (couldn't be evaluated). The ONLY way a request
+// spends on a paid EXTERNAL API is the BYOK passthrough — i.e. exactly when resolveRoute() classifies the
+// model as 'byok' (a provider matched AND its key is configured). resolveRoute is the SAME classifier the
+// routing itself uses, so the gate can never disagree with where the request actually goes: we block
+// precisely the calls that would spend, and let everything that does NOT spend (local, no-key error,
+// unknown→local) proceed. If resolveRoute itself throws, assume the worst and block.
+//
+// This supersedes the earlier providerForModel / isProvablyLocalModel heuristics (Codex reviews of #41 +
+// #45): those re-derived "is local" and couldn't match the router's case-sensitive, env-flag-dependent
+// behavior — e.g. they mis-handled `QWEN2.5:7B`, `STRATOS_FORCE_LOCAL=1`, and bare local-family names.
 export function failClosedOnGateError(req, res) {
-  const model = req.body?.model;
-  let provider;
-  try { provider = providerForModel(model); } catch { provider = 'unknown'; } // unclassifiable → block
-  if (provider === null && isProvablyLocalModel(model)) return false; // no paid provider AND routes local
-  res.status(402).json({ error: 'approval_required', reason: 'cost gate could not be evaluated; blocking a non-(provably-local) model to be safe. Use a local model or retry.' });
+  let spends;
+  try { spends = resolveRoute(req.body?.model).kind === 'byok'; } catch { spends = true; }
+  if (!spends) return false; // not a paid BYOK call → no spend at risk → safe to proceed
+  res.status(402).json({ error: 'approval_required', reason: 'cost gate could not be evaluated; blocking a paid (BYOK) call to be safe. Use a local model or retry.' });
   return true;
 }
 

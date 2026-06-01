@@ -101,7 +101,8 @@ export const CHANNELS = [
   { value: 'discord',  label: 'Discord',  hint: 'ready · bot token + your user id',           status: 'ready', credLabel: 'bot token', ownerLabel: 'user id', envKey: 'DISCORD_BOT_TOKEN' },
   { value: 'slack',    label: 'Slack',    hint: 'ready · bot + app tokens (Socket Mode)',     status: 'ready', credLabel: 'bot token (xoxb-)', ownerLabel: 'user id', envKey: 'SLACK_BOT_TOKEN',
     extraCred: { label: 'app-level token (xapp-)', kind: 'app-token', envKey: 'SLACK_APP_TOKEN' } },
-  { value: 'matrix',   label: 'Matrix',   hint: 'coming soon',                                status: 'soon',  credLabel: 'access token', ownerLabel: 'user id', envKey: 'MATRIX_ACCESS_TOKEN' },
+  { value: 'matrix',   label: 'Matrix',   hint: 'ready · access token + homeserver',          status: 'ready', credLabel: 'access token', ownerLabel: 'user id (@you:server)', envKey: 'MATRIX_ACCESS_TOKEN',
+    extraConfig: [{ key: 'baseUrl', label: 'homeserver URL', default: 'https://matrix.org', envKey: 'MATRIX_HOMESERVER' }] },
 ];
 export const channelDef = (value) => CHANNELS.find((c) => c.value === value) || null;
 
@@ -120,6 +121,11 @@ export function resolveChannelTokensToEnv(config, vault, env = process.env) {
       if (def.extraCred && m.appTokenHandle) {
         const extra = vault.resolveSecret(m.appTokenHandle);
         if (extra) env[def.extraCred.envKey] = extra;
+      }
+      // non-secret per-channel config (e.g. Matrix homeserver URL) → env
+      for (const cfg of def.extraConfig || []) {
+        const val = m.extra?.[cfg.key];
+        if (val) env[cfg.envKey] = String(val);
       }
       wired.push(channel);
     }

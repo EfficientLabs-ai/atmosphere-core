@@ -66,7 +66,7 @@ function helpText() {
     `  ${C.g}doctor${C.x}          Read-only preflight — tells you exactly what's missing`,
     `  ${C.g}models${C.x}          List locally-installed models + the configured route`,
     `  ${C.g}bind${C.x} <chat-id>  Bind your Telegram chat id as owner (enables chat config)`,
-    `  ${C.g}channels${C.x}        Connect a messaging channel to talk to your agent (Telegram, Discord, Slack live)`,
+    `  ${C.g}channels${C.x}        Connect a messaging channel to talk to your agent (Telegram, Discord, Slack, Matrix — all live)`,
     `  ${C.g}connect${C.x}         Onboard a connector/MCP server (credential → vault, sidecar pinned)`,
     `  ${C.g}connectors${C.x}      List onboarded connectors (metadata only; secrets stay in the vault)`,
     `  ${C.g}mesh${C.x}            The Atmosphere mesh — status + how to join (optional)`,

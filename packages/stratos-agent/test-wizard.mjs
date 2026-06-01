@@ -69,10 +69,10 @@ ok(wired.includes('anthropic') && env.ANTHROPIC_API_KEY === 'sk-ant-REAL', 'the 
 config.disableProvider('anthropic');
 ok(!config.getModelSources().providers.anthropic, 'disableProvider removes the entry');
 
-console.log('\n=== messaging channels: HONEST status (telegram/discord/slack ready, matrix soon) ===');
-ok(['telegram', 'discord', 'slack'].every((c) => channelDef(c).status === 'ready'), 'telegram + discord + slack are marked ready (real adapters)');
-ok(channelDef('matrix').status === 'soon', 'matrix is marked coming-soon — not faked as working');
+console.log('\n=== messaging channels: ALL FOUR are real adapters now ===');
+ok(['telegram', 'discord', 'slack', 'matrix'].every((c) => channelDef(c).status === 'ready'), 'telegram + discord + slack + matrix are all marked ready');
 ok(channelDef('slack').extraCred?.envKey === 'SLACK_APP_TOKEN', 'slack declares its second (app-level) credential for Socket Mode');
+ok(channelDef('matrix').extraConfig?.[0]?.envKey === 'MATRIX_HOMESERVER', 'matrix declares its non-secret homeserver config');
 
 console.log('\n=== channel setup stores ONLY a vault handle (+ owner id); token resolves to env at runtime ===');
 config.setMessagingChannel('discord', { enabled: true, tokenHandle: 'cvault:discord:bot-token:' + 'b'.repeat(32), ownerId: '555000111222333444' });
@@ -93,5 +93,14 @@ resolveChannelTokensToEnv(config, sv, senv);
 ok(senv.SLACK_BOT_TOKEN === 'xoxb-REAL' && senv.SLACK_APP_TOKEN === 'xapp-REAL', 'both the bot token AND the app-level token resolve into env');
 ok(senv.SLACK_OWNER_ID === 'U0OWNER1', 'the slack owner id resolves into SLACK_OWNER_ID');
 ok(!JSON.stringify(config.getMessaging().slack).includes('xoxb') && !JSON.stringify(config.getMessaging().slack).includes('xapp'), 'neither slack token is stored in config (only vault handles)');
+
+console.log('\n=== Matrix: access token (vault) + non-secret homeserver config both resolve to env ===');
+config.setMessagingChannel('matrix', { enabled: true, tokenHandle: 'cvault:matrix:bot-token:' + 'e'.repeat(32), ownerId: '@owner:matrix.org', extra: { baseUrl: 'https://matrix.org' } });
+const mv = { resolveSecret: (h) => h.includes('matrix:bot-token') ? 'syt_REAL_MATRIX_TOKEN' : null };
+const menv = {};
+resolveChannelTokensToEnv(config, mv, menv);
+ok(menv.MATRIX_ACCESS_TOKEN === 'syt_REAL_MATRIX_TOKEN', 'the encrypted access token resolves into MATRIX_ACCESS_TOKEN');
+ok(menv.MATRIX_HOMESERVER === 'https://matrix.org', 'the non-secret homeserver URL resolves into MATRIX_HOMESERVER');
+ok(menv.MATRIX_OWNER_ID === '@owner:matrix.org', 'the matrix owner (@user:server) resolves into MATRIX_OWNER_ID');
 
 console.log(`\n✅ ALL ${pass} wizard-brain checks passed.`);

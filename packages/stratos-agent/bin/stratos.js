@@ -189,7 +189,7 @@ async function initWizard() {
 
   // Step 5 — talk to your agent (messaging channels). Telegram is live; others are roadmap.
   console.log(stepHdr(5, 5, 'Talk to your agent'));
-  console.log(`  ${C.d}Pick how you'll message it. Telegram, Discord + Slack work today; Matrix is coming.${C.x}`);
+  console.log(`  ${C.d}Pick how you'll message it. Telegram, Discord, Slack, and Matrix — all four are live.${C.x}`);
   const channels = await setupChannels();
 
   // persist name/routing/mesh (+ legacy default model if local). model sources were applied above.
@@ -264,9 +264,15 @@ async function setupChannels() {
       const extra = (await asker.askSecret(`  ${C.b}→${C.x} ${def.label} ${def.extraCred.label} ${C.d}(hidden — encrypted in your vault)${C.x}: `)).trim();
       if (extra) appTokenHandle = vault.putSecret({ connector: ch, kind: def.extraCred.kind, value: extra });
     }
+    // non-secret per-channel config (e.g. Matrix homeserver URL), with a default
+    const extra = {};
+    for (const cfg of def.extraConfig || []) {
+      const v = (await asker.ask(`  ${C.b}→${C.x} ${def.label} ${cfg.label} ${C.d}(default ${cfg.default})${C.x}: `)).trim();
+      extra[cfg.key] = v || cfg.default;
+    }
     const ownerRaw = (await asker.ask(`  ${C.b}→${C.x} Your ${def.label} ${def.ownerLabel} ${C.d}(so only you can command it — optional)${C.x}: `)).trim();
-    const ownerId = /^[A-Za-z0-9_-]{3,}$/.test(ownerRaw) ? ownerRaw : null;
-    config.setMessagingChannel(ch, { enabled: true, tokenHandle: handle, appTokenHandle, ownerId });
+    const ownerId = /^[@A-Za-z0-9_:.-]{3,}$/.test(ownerRaw) ? ownerRaw : null;
+    config.setMessagingChannel(ch, { enabled: true, tokenHandle: handle, appTokenHandle, ownerId, extra: def.extraConfig ? extra : null });
     if (ch === 'telegram' && ownerId) config.bindOwner(ownerId); // the telegram bridge reads getOwner()
     console.log(`    ${okMark(`${def.label} connected — token encrypted; ${ownerId ? 'owner set' : `set your ${def.ownerLabel} later to lock it down`}`)}`);
   }

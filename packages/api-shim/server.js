@@ -11,7 +11,7 @@ import { resolveRoute, selectLocalModel } from './src/model-manager.js';
 import { passthroughCloud } from './src/routers/cloud-byok.js';
 import { passthroughAnthropic } from './src/routers/anthropic-adapter.js';
 import { languageGate } from './src/language-gateway.js';
-import { complianceApprovalGate, wouldSpend } from './src/compliance-gateway.js';
+import { complianceApprovalGate } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 
@@ -86,6 +86,25 @@ const reasoningBank = new ReasoningBank({
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
+
+// Fail-closed helper for when the compliance gate THROWS on the BYOK-capable route (/v1/chat/completions).
+// The ONLY way a request spends on a paid EXTERNAL API is the BYOK passthrough — i.e. exactly when
+// resolveRoute() classifies the model as 'byok' (a provider matched AND its key is configured).
+// resolveRoute is the SAME classifier that route uses, so the gate can never disagree with where the
+// request actually goes: we block precisely the calls that would spend, and let everything that does NOT
+// spend (local, no-key error, unknown→local) proceed. If resolveRoute itself throws, assume the worst.
+//
+// Used ONLY by /v1/chat/completions. /v1/messages does no BYOK passthrough (proxies to the local agent),
+// so it must NOT use this predicate — it would false-block paid models that never spend on that route
+// (Codex review of #45). This also supersedes the earlier providerForModel / isProvablyLocalModel
+// heuristics (Codex #41 + #45), which couldn't match the router's case-sensitive, env-dependent behavior.
+export function failClosedOnGateError(req, res) {
+  let spends;
+  try { spends = resolveRoute(req.body?.model).kind === 'byok'; } catch { spends = true; }
+  if (!spends) return false; // not a paid BYOK call → no spend at risk → safe to proceed
+  res.status(402).json({ error: 'approval_required', reason: 'cost gate could not be evaluated; blocking a paid (BYOK) call to be safe. Use a local model or retry.' });
+  return true;
+}
 
 // Request tracer helper
 function logRequest(req, target) {
@@ -205,7 +224,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
   // Cost/ToS gate first — may answer a 402 and return (fail-CLOSED for spend on any gate error).
   try { if (complianceApprovalGate(req, res)) return; }
-  catch { if (wouldSpend(req)) { res.status(402).json({ error: 'approval_required', reason: 'cost gate error — blocking a paid call to be safe' }); return; } }
+  catch { if (failClosedOnGateError(req, res)) return; }
   // then make the agent reply in the user's configured language (no-op for English; fail-open).
   languageGate(req);
 
@@ -367,9 +386,12 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.post('/v1/messages', async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
-  // Cost/ToS gate first — parity with /v1/chat/completions (fail-CLOSED for spend on any gate error).
-  try { if (complianceApprovalGate(req, res)) return; }
-  catch { if (wouldSpend(req)) { res.status(402).json({ error: 'approval_required', reason: 'cost gate error — blocking a paid call to be safe' }); return; } }
+  // NO cost/ToS gate here — by design. Unlike /v1/chat/completions, this route NEVER performs a paid BYOK
+  // passthrough: it only local-falls-back or proxies to the local Stratos agent (STRATOS_AGENT_URL), so it
+  // incurs no gateway-level spend. Running the compliance gate here only produced false-positive 402s for
+  // paid-looking models that never actually spend on this route (both the 'ask' path AND the gate's own
+  // internal fail-closed — Codex review of #45). The cost-approval gate lives solely on the spend-capable
+  // route. (If /v1/messages ever gains a BYOK passthrough, re-add the gate + a route-aware fail-closed.)
   languageGate(req); // reply in the user's configured language (no-op for English)
 
   const isLocalRequest = req.body.model && (

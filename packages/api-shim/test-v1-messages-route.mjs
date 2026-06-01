@@ -1,7 +1,8 @@
 /**
- * /v1/messages route tests (Gap 6, #38). Proves two fixes:
- *   1. the cost/ToS compliance gate is now WIRED into /v1/messages (parity with /v1/chat/completions):
- *      a paid model under costApproval:'ask' → 402 approval_required + a single-use approvalToken.
+ * /v1/messages route tests (Gap 6, #38; cost-scoping per Codex review of #45). Proves:
+ *   1. /v1/messages carries NO cost gate — by design. It never does a paid BYOK passthrough (it proxies
+ *      to the local Stratos agent / local-falls-back), so even a paid model under costApproval:'ask' must
+ *      NOT be 402-blocked: it proceeds to proxy. (The cost gate lives only on /v1/chat/completions.)
  *   2. the upstream-proxy path no longer ReferenceErrors: response/controller/timeoutId/shouldFallback
  *      are declared, so an unreachable upstream cleanly returns 502 (not a 500 crash / hang).
  *
@@ -34,16 +35,16 @@ const post = (body, headers = {}) => fetch(`${base}/v1/messages`, {
 });
 
 try {
-  console.log('=== cost gate is WIRED into /v1/messages (was missing) ===');
-  // configure the agent: ask-mode + anthropic enabled (paid backend)
+  console.log('=== /v1/messages carries NO cost gate (it can\'t spend) — a paid model is NOT 402-blocked ===');
+  // configure the agent in the STRICTEST gate mode (ask) + a paid backend present. On /v1/chat/completions
+  // this would 402; on /v1/messages it must NOT, because this route never does a BYOK passthrough.
   config.markConfigured();
   config.setRouting({ saveApiSpend: false, costApproval: 'ask' });
   config.enableProvider('anthropic', 'cvault:anthropic:api-key:' + 'a'.repeat(32));
 
   const paid = await post({ model: 'claude-3-5-sonnet-20241022', messages: [{ role: 'user', content: 'Write a full marketing plan.' }] });
-  ok(paid.status === 402, 'a paid model under ask-mode → 402 (the gate fires on /v1/messages now)');
-  const body = await paid.json();
-  ok(body.error === 'approval_required' && typeof body.approvalToken === 'string' && body.approvalToken.length > 0, 'the 402 carries approval_required + a single-use approvalToken');
+  ok(paid.status !== 402, 'a paid model under ask-mode → NOT 402 (no cost gate on /v1/messages — no false block)');
+  ok(paid.status === 502, '…it proceeds to proxy the local agent instead (502, upstream unreachable)');
 
   console.log('\n=== proxy path no longer ReferenceErrors (vars declared) → clean 502, not a crash ===');
   // switch off ask-mode so the gate passes through to the upstream proxy; upstream is unreachable.
@@ -51,7 +52,18 @@ try {
   const proxied = await post({ model: 'some-upstream-model', messages: [{ role: 'user', content: 'hi' }] });
   ok(proxied.status === 502, 'unreachable upstream + no local fallback → 502 Bad Gateway (route ran end-to-end, no ReferenceError)');
 
-  console.log(`\n✅ ALL ${pass} /v1/messages route checks passed.`);
+  console.log('\n=== route-scoping: the SAME paid model + ask-mode DOES 402 on /v1/chat/completions (the spend route) ===');
+  // Proves the cost gate lives exactly where spend can happen — fires here, absent on /v1/messages above.
+  config.setRouting({ saveApiSpend: false, costApproval: 'ask' });
+  const chat = await fetch(`${base}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-3-5-sonnet-20241022', messages: [{ role: 'user', content: 'Write a full marketing plan.' }] }),
+  });
+  ok(chat.status === 402, 'a paid model under ask-mode → 402 on /v1/chat/completions (gate present on the BYOK route)');
+  const cbody = await chat.json();
+  ok(cbody.error === 'approval_required' && typeof cbody.approvalToken === 'string' && cbody.approvalToken.length > 0, 'the 402 carries approval_required + a single-use approvalToken');
+
+  console.log(`\n✅ ALL ${pass} /v1/messages + route-scoping checks passed.`);
 } finally {
   server.close();
 }

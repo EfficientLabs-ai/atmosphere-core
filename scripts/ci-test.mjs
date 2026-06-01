@@ -23,7 +23,7 @@ const SUITES = {
     'test-compliance-gateway.mjs', 'test-compliance-router.mjs', 'test-language-gateway.mjs', 'test-secret-guard.mjs',
     'test-anthropic-adapter.mjs', 'test-model-manager.mjs', 'test-memory-window.mjs', 'test-config-intents.mjs',
     'test-content-orchestrator.mjs', 'test-standalone-graph.mjs',
-    'test-acp.mjs', 'test-mcp-rce.mjs', 'test-v1-messages-route.mjs',
+    'test-acp.mjs', 'test-mcp-rce.mjs', 'test-v1-messages-route.mjs', 'test-gate-failclosed.mjs',
     // EXCLUDED (not hermetic): test-evolution-seam.mjs depends on ambient Ollama — it passes locally
     // only because this dev box runs Ollama, and fails in the clean CI runner (no inference service).
     // test-chat-memory.mjs likewise fails in the clean GitHub runner. Both are integration tests; make

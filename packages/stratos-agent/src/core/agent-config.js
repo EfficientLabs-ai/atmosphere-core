@@ -22,7 +22,11 @@ const runtimePath = () => path.join(dir(), 'runtime-state.json');
 const DEFAULTS = () => ({
   rev: 0,
   agentName: 'StratosAgent',
-  model: { provider: 'local', name: 'qwen2.5:7b' },               // provider switch = CLI-only (data egress)
+  model: { provider: 'local', name: 'qwen2.5:7b' },               // the default brain (provider switch = CLI-only)
+  // the model sources the user enabled in setup. local = Ollama open-weights; providers hold ONLY a vault
+  // handle to the API key (the key itself lives encrypted in the vault, never here). The compliance router
+  // reads this to know which backends exist.
+  modelSources: { local: { enabled: true, name: 'qwen2.5:7b' }, providers: {} },
   permissions: { files: 'disabled', network: 'disabled', skills: 'disabled', shell: 'disabled' }, // CLI-only grants
   channels: { telegram: 'configured', slack: 'disabled', discord: 'disabled' },                    // desired states
   // routing prefs read by the gateway/router. costApproval: 'ask' (notify + approve each cloud spend),
@@ -127,6 +131,29 @@ export function setRouting({ saveApiSpend, costApproval } = {}) {
 }
 export function setMeshOptIn(on) { return updateConfig((c) => { c.meshOptIn = !!on; }); }
 export function getRouting() { return { ...DEFAULTS().routing, ...getConfig().routing }; }
+
+const PROVIDER_RE = /^[a-z0-9_-]+$/i;
+/** Enable a local source (Ollama model). */
+export function setLocalSource({ enabled = true, name } = {}) {
+  return updateConfig((c) => {
+    c.modelSources = { ...DEFAULTS().modelSources, ...c.modelSources };
+    c.modelSources.local = { enabled: !!enabled, name: name || c.modelSources.local?.name || 'qwen2.5:7b' };
+  });
+}
+/** Enable a provider with the VAULT HANDLE to its key (never the key itself). */
+export function enableProvider(provider, keyHandle) {
+  if (!PROVIDER_RE.test(String(provider || ''))) throw new Error('invalid provider');
+  return updateConfig((c) => {
+    c.modelSources = { ...DEFAULTS().modelSources, ...c.modelSources };
+    c.modelSources.providers = { ...c.modelSources.providers, [provider]: { keyHandle: keyHandle || null } };
+  });
+}
+export function disableProvider(provider) {
+  return updateConfig((c) => {
+    if (c.modelSources?.providers) { delete c.modelSources.providers[provider]; }
+  });
+}
+export function getModelSources() { return { ...DEFAULTS().modelSources, ...getConfig().modelSources }; }
 
 /** Desired→effective: what is actually usable, given installed local models + present cloud keys. */
 export function effectiveCapabilities({ installedModels = [], env = process.env } = {}) {

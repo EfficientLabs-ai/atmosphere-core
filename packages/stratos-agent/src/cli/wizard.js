@@ -50,5 +50,43 @@ export function applyWizard(answers = {}, config = realConfig) {
 export function privacyPosture(provider = 'local') {
   return provider === 'local'
     ? { private: true, note: 'Local brain → your prompts and config never leave this machine. Chat self-config later is fully private.' }
-    : { private: false, note: 'Cloud (closed) brain → prompts you send go to that provider under THEIR terms. Your config still stays local.' };
+    : { private: false, note: 'Connected provider → prompts you send to it go to that provider under THEIR terms. Your config + keys stay local (keys encrypted).' };
+}
+
+/**
+ * The model sources a user can enable in setup. `local` runs open-weights on their machine; the rest are
+ * providers reached with the user's OWN API key (stored encrypted in the vault). No "cloud" jargon.
+ */
+export const MODEL_SOURCES = [
+  { value: 'local',      label: 'Local models (Ollama)',     hint: 'private · free · runs on your machine', kind: 'local' },
+  { value: 'anthropic',  label: 'Anthropic — Claude',        hint: 'your API key',                          kind: 'provider' },
+  { value: 'openai',     label: 'OpenAI — GPT',              hint: 'your API key',                          kind: 'provider' },
+  { value: 'gemini',     label: 'Google — Gemini',           hint: 'your API key',                          kind: 'provider' },
+  { value: 'openrouter', label: 'OpenRouter — 100+ models',  hint: 'one key, many models',                  kind: 'provider' },
+];
+
+/** Pure reducer for the keyboard multi-select (↑/↓ move, space toggles). The raw-mode loop lives in bin. */
+export function multiSelectReduce(state, key) {
+  const { index, selected, count } = state;
+  if (key === 'up') return { ...state, index: (index - 1 + count) % count };
+  if (key === 'down') return { ...state, index: (index + 1) % count };
+  if (key === 'space') { const s = new Set(selected); s.has(index) ? s.delete(index) : s.add(index); return { ...state, selected: s }; }
+  return state; // enter/confirm is handled by the caller
+}
+
+/**
+ * Resolve each enabled provider's API key from the VAULT into the environment the gateway reads
+ * (PROVIDER_API_KEY). Called at daemon start so "drop in your key, Stratos handles the rest" actually
+ * works: the key lives encrypted at rest and is only decrypted into the running process. Returns the
+ * list of providers wired. Vault injectable for tests.
+ */
+export function resolveProviderKeysToEnv(config, vault, env = process.env) {
+  const providers = config.getModelSources().providers || {};
+  const wired = [];
+  for (const [provider, p] of Object.entries(providers)) {
+    if (!p || !p.keyHandle) continue;
+    const key = vault.resolveSecret(p.keyHandle);
+    if (key) { env[`${provider.toUpperCase()}_API_KEY`] = key; wired.push(provider); }
+  }
+  return wired;
 }

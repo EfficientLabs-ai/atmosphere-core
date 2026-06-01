@@ -10,10 +10,11 @@ import path from 'node:path';
 import url from 'node:url';
 import readline from 'node:readline';
 import { run, generateSystemdUnit, banner } from '../src/cli/stratos-cli.js';
-import { validateModelChoice, applyWizard, privacyPosture } from '../src/cli/wizard.js';
+import { validateModelChoice, applyWizard, privacyPosture, MODEL_SOURCES, multiSelectReduce } from '../src/cli/wizard.js';
 import { realProbes } from '../src/cli/probes.js';
 import * as config from '../src/core/agent-config.js';
 import * as connectorRegistry from '../src/connectors/connector-registry.js';
+import * as vault from '../src/connectors/vault.js';
 
 // ---- TUI helpers (presentation only; the wizard's logic is tested in src/cli/wizard.js) ----------
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', m: '\x1b[35m', d: '\x1b[2m', bold: '\x1b[1m', x: '\x1b[0m' };
@@ -27,11 +28,24 @@ const stepHdr = (n, total, title) => `\n${C.m}${C.bold}  ◆ Step ${n}/${total}$
 const okMark = (s) => `${C.g}✓${C.x} ${s}`;
 const noMark = (s, fix) => `${C.y}✗${C.x} ${s}${fix ? `\n       ${C.d}↳ ${fix}${C.x}` : ''}`;
 
+// shared non-TTY line queue: buffer stdin ONCE so every prompt + the multi-select draw from the same
+// scripted input (avoids the multiple-reader race when several askers are created across the wizard).
+let _ntLines = null, _ntIdx = 0;
+function nonTtyReady() {
+  if (_ntLines) return Promise.resolve();
+  return new Promise((res) => {
+    let buf = ''; process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (c) => { buf += c; });
+    process.stdin.on('end', () => { _ntLines = buf.length ? buf.replace(/\n$/, '').split('\n') : []; res(); });
+  });
+}
+const nextNonTtyLine = () => (_ntLines && _ntIdx < _ntLines.length ? _ntLines[_ntIdx++] : '');
+
 /**
- * Unified prompt helper that works for BOTH an interactive TTY and piped/non-interactive input.
- *  - TTY: readline.question, with secret masking (echoes •) and EOF/Ctrl-D resilience (resolves '').
- *  - non-TTY: buffer all of stdin once, then serve lines deterministically (no readline race), masking
- *    secrets in the echo. This is what makes scripted/piped runs reliable.
+ * Unified line/secret prompt that works for BOTH an interactive TTY and piped input.
+ *  - TTY: readline.question with secret masking (echoes •) and EOF/Ctrl-D resilience (resolves '').
+ *  - non-TTY: serve from the shared buffered queue, masking secrets in the echo.
+ * Close it BEFORE running multiSelect() (raw mode), then make a fresh one for subsequent prompts.
  */
 function makeAsker() {
   if (process.stdin.isTTY) {
@@ -46,14 +60,56 @@ function makeAsker() {
     });
     return { ask: (q) => base(q, false), askSecret: (q) => base(q, true), close: () => rl.close() };
   }
-  let lines = null, i = 0;
-  const ready = new Promise((res) => {
-    let buf = ''; process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (c) => { buf += c; });
-    process.stdin.on('end', () => { lines = buf.length ? buf.split('\n') : []; res(); });
-  });
-  const serve = async (q, mask) => { await ready; process.stdout.write(q); const v = (lines && lines[i++]) || ''; process.stdout.write((mask ? '•'.repeat(v.length) : v) + '\n'); return v; };
+  const serve = async (q, mask) => { await nonTtyReady(); process.stdout.write(q); const v = nextNonTtyLine(); process.stdout.write((mask ? '•'.repeat(v.length) : v) + '\n'); return v; };
   return { ask: (q) => serve(q, false), askSecret: (q) => serve(q, true), close: () => {} };
+}
+
+/**
+ * Keyboard multi-select: ↑/↓ move, space toggles, enter confirms. Self-contained raw mode (no readline
+ * open at the same time). Non-TTY fallback: numbered list + a comma-separated line from the shared queue.
+ * `items`: [{ label, hint, value, checked? }]. Returns the selected values (in list order).
+ */
+async function multiSelect(title, items, { min = 0 } = {}) {
+  const preselect = items.map((it, i) => (it.checked ? i : -1)).filter((i) => i >= 0);
+  if (!process.stdin.isTTY) {
+    await nonTtyReady();
+    process.stdout.write(title + '\n');
+    items.forEach((it, i) => process.stdout.write(`    ${i + 1}) ${it.label}  ${C.d}${it.hint || ''}${C.x}\n`));
+    process.stdout.write(`  ${C.b}→${C.x} Enter numbers ${C.d}(comma-separated, e.g. 1,2)${C.x}: `);
+    const raw = nextNonTtyLine(); process.stdout.write(raw + '\n');
+    let picks = raw ? raw.split(/[,\s]+/).map((n) => parseInt(n, 10) - 1).filter((n) => n >= 0 && n < items.length) : [];
+    if (!picks.length) picks = preselect;
+    return picks.map((i) => items[i].value);
+  }
+  return new Promise((resolve) => {
+    let state = { index: 0, selected: new Set(preselect), count: items.length };
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true); process.stdin.resume();
+    const draw = (first) => {
+      const out = [title];
+      items.forEach((it, i) => {
+        const cur = i === state.index, on = state.selected.has(i);
+        out.push(`  ${cur ? C.b + '›' + C.x : ' '} ${on ? C.g + '◉' + C.x : '◯'} ${cur ? C.b + it.label + C.x : it.label}  ${C.d}${it.hint || ''}${C.x}`);
+      });
+      out.push(`  ${C.d}↑/↓ move · space select · enter confirm${C.x}`);
+      if (!first) process.stdout.write(`\x1b[${out.length}A`);
+      process.stdout.write(out.map((l) => '\x1b[2K' + l).join('\n') + '\n');
+    };
+    draw(true);
+    const cleanup = () => { process.stdin.removeListener('keypress', onKey); try { process.stdin.setRawMode(false); } catch { /* */ } process.stdin.pause(); };
+    const onKey = (str, key) => {
+      if (!key) return;
+      if (key.ctrl && key.name === 'c') { cleanup(); process.stdout.write('\n'); process.exit(130); }
+      if (key.name === 'return' || key.name === 'enter') {
+        if (state.selected.size < min) return;
+        cleanup(); resolve([...state.selected].sort((a, b) => a - b).map((i) => items[i].value)); return;
+      }
+      const action = key.name === 'space' || str === ' ' ? 'space' : key.name;
+      const next = multiSelectReduce(state, action);
+      if (next !== state) { state = next; draw(false); }
+    };
+    process.stdin.on('keypress', onKey);
+  });
 }
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
@@ -62,46 +118,64 @@ function pkgVersion() {
   catch { return '0.0.0'; }
 }
 
-async function pickCloud(ask) {
-  const a = (await ask(`  ${C.b}→${C.x} Which cloud? ${C.d}[O]penAI / [A]nthropic / [G]emini (default OpenAI)${C.x}: `)).trim().toLowerCase();
-  return a.startsWith('a') ? 'anthropic' : a.startsWith('g') ? 'gemini' : 'openai';
-}
-
 async function initWizard() {
-  const { ask, close } = makeAsker();
   console.log(banner());
   console.log(box([`${C.bold}Set up your sovereign agent${C.x}`, `${C.d}4 quick steps · local-first · private by default${C.x}`]));
 
   // Step 1 — name
+  let asker = makeAsker();
   console.log(stepHdr(1, 4, 'Name'));
-  const agentName = (await ask(`  ${C.b}→${C.x} Name your agent ${C.d}(default StratosAgent)${C.x}: `)).trim() || 'StratosAgent';
+  const agentName = (await asker.ask(`  ${C.b}→${C.x} Name your agent ${C.d}(default StratosAgent)${C.x}: `)).trim() || 'StratosAgent';
+  asker.close(); // release the line reader before the raw-mode multi-select
 
-  // Step 2 — brain (with LIVE validation + honest privacy posture)
-  console.log(stepHdr(2, 4, 'Brain — the model that thinks'));
-  console.log(`    ${C.g}[L]${C.x} Local open-weights  ${C.d}— private, no API key, $0${C.x}`);
-  console.log(`    ${C.y}[C]${C.x} Cloud (BYOK)        ${C.d}— your key, your spend, their terms${C.x}`);
-  const cloud = /^c/i.test(((await ask(`  ${C.b}→${C.x} [L]ocal (default) or [C]loud? `)).trim() || 'L'));
-  const provider = cloud ? await pickCloud(ask) : 'local';
-  let localModel;
-  if (!cloud) {
-    localModel = (await ask(`  ${C.b}→${C.x} Local model ${C.d}(default qwen2.5:7b)${C.x}: `)).trim() || 'qwen2.5:7b';
+  // Step 2 — your models (multi-select; drop in keys for providers)
+  console.log(stepHdr(2, 4, 'Your models — pick one or more'));
+  console.log(`  ${C.d}Mix and match: run private local models, and/or connect providers with your own API key.${C.x}`);
+  const items = MODEL_SOURCES.map((s) => ({ label: s.label, hint: s.hint, value: s.value, checked: s.value === 'local' }));
+  const chosen = await multiSelect('', items, { min: 1 });
+
+  asker = makeAsker();
+  let localModel = null, localReady = null;
+  if (chosen.includes('local')) {
+    localModel = (await asker.ask(`  ${C.b}→${C.x} Local model ${C.d}(default qwen2.5:7b)${C.x}: `)).trim() || 'qwen2.5:7b';
+    config.setLocalSource({ enabled: true, name: localModel });
+    localReady = await validateModelChoice({ provider: 'local', model: localModel }, { probes: realProbes });
+    console.log('    ' + (localReady.ok ? okMark(localReady.detail) : noMark(localReady.detail, localReady.fix)));
   } else {
-    console.log(`    ${C.d}Add YOUR key to the environment (never pasted into chat or stored by us):${C.x}`);
-    console.log(`      ${C.b}export ${provider.toUpperCase()}_API_KEY=…${C.x}`);
+    config.setLocalSource({ enabled: false });
   }
-  const v = await validateModelChoice({ provider, model: localModel }, { probes: realProbes });
-  console.log('    ' + (v.ok ? okMark(v.detail) : noMark(v.detail, v.fix)));
-  const pp = privacyPosture(provider);
+
+  // for each selected provider: drop in the key → stored ENCRYPTED in the vault, Stratos wires the rest
+  const providers = chosen.filter((c) => c !== 'local');
+  for (const provider of providers) {
+    const key = (await asker.askSecret(`  ${C.b}→${C.x} ${provider} API key ${C.d}(hidden — stored encrypted in your vault)${C.x}: `)).trim();
+    if (key) {
+      const handle = vault.putSecret({ connector: provider, kind: 'api-key', value: key });
+      config.enableProvider(provider, handle);
+      console.log('    ' + okMark(`${provider} connected — key encrypted in the vault`));
+    } else {
+      config.enableProvider(provider, null);
+      console.log(`    ${C.y}• ${provider} selected, no key entered — add it later by re-running ${C.x}${C.b}stratos init${C.x}`);
+    }
+  }
+  asker.close();
+
+  const anyProvider = providers.length > 0;
+  const pp = privacyPosture(anyProvider ? 'provider' : 'local');
   console.log(`    ${pp.private ? C.g + '🔒' : C.y + '☁ '}${C.d}${pp.note}${C.x}`);
 
-  // Step 3 — routing & cost (the cost/ToS-approval mode the router will honor)
+  // Step 3 — routing & cost (transparency description; no jargon, no "beta")
+  asker = makeAsker();
   console.log(stepHdr(3, 4, 'Routing & cost'));
-  const saveApiSpend = !/^n/i.test(((await ask(`  ${C.b}→${C.x} Route simple tasks to your local model to save API spend? ${C.d}[Y/n]${C.x} `)).trim() || 'Y'));
-  console.log(`    ${C.d}When a task WOULD incur cloud API spend, Stratos should:${C.x}`);
-  console.log(`      ${C.g}[1]${C.x} Ask me first ${C.d}(notify + approve each spend — human on the loop)${C.x}`);
-  console.log(`      ${C.b}[2]${C.x} Auto-use a capable local model when one can do it`);
-  console.log(`      ${C.y}[3]${C.x} Always proceed and spend`);
-  const cm = ((await ask(`  ${C.b}→${C.x} Choice ${C.d}(default 1)${C.x}: `)).trim() || '1');
+  console.log(`  ${C.d}Routing decides WHERE each task runs so you don't overspend: simple work can run on your free${C.x}`);
+  console.log(`  ${C.d}local models, and only what truly needs a paid model uses your API key. Nothing is sent to a${C.x}`);
+  console.log(`  ${C.d}provider you didn't connect — and you choose how paid calls are handled.${C.x}`);
+  const saveApiSpend = !/^n/i.test(((await asker.ask(`  ${C.b}→${C.x} Route simple tasks to your free local models to save spend? ${C.d}[Y/n]${C.x} `)).trim() || 'Y'));
+  console.log(`    ${C.d}When a task WOULD use a paid model, Stratos should:${C.x}`);
+  console.log(`      ${C.g}[1]${C.x} Ask me first ${C.d}(notify + approve each paid call — you're on the loop)${C.x}`);
+  console.log(`      ${C.b}[2]${C.x} Auto-use a capable local model when one can do it ${C.d}(spend only if needed)${C.x}`);
+  console.log(`      ${C.y}[3]${C.x} Always proceed with my selected model`);
+  const cm = ((await asker.ask(`  ${C.b}→${C.x} Choice ${C.d}(default 1)${C.x}: `)).trim() || '1');
   const costApproval = cm === '2' ? 'auto-local' : cm === '3' ? 'always-spend' : 'ask';
 
   // Step 4 — mesh walkthrough (optional, clearly separate)
@@ -109,22 +183,27 @@ async function initWizard() {
   console.log(`    ${C.d}A public-DHT, hole-punched (no inbound ports), post-quantum zero-trust mesh that lets your${C.x}`);
   console.log(`    ${C.d}agent borrow/lend spare compute. Data stays end-to-end encrypted; peers are PQC-verified.${C.x}`);
   console.log(`    ${C.d}Opting in just sets a flag — you bring a device online later by running a ghost-node bundle.${C.x}`);
-  const meshEnroll = /^y/i.test(((await ask(`  ${C.b}→${C.x} Opt in to the mesh now? ${C.d}(you can join devices later) [y/N]${C.x} `)).trim() || 'N'));
+  const meshEnroll = /^y/i.test(((await asker.ask(`  ${C.b}→${C.x} Opt in to the mesh now? ${C.d}(you can join devices later) [y/N]${C.x} `)).trim() || 'N'));
   if (meshEnroll) console.log(`    ${C.g}✓ Opted in.${C.x} ${C.d}Next: see ${C.x}${C.b}stratos mesh${C.x}${C.d} for how to bring this device online.${C.x}`);
-  close();
+  asker.close();
 
-  applyWizard({ agentName, provider, localModel, saveApiSpend, costApproval, meshEnroll }, config);
+  // persist name/routing/mesh (+ legacy default model if local). model sources were applied above.
+  applyWizard({ agentName, provider: 'local', localModel: localModel || undefined, saveApiSpend, costApproval, meshEnroll }, config);
+  if (!chosen.includes('local') && providers.length) {
+    try { config.updateConfig((c) => { c.model = { provider: providers[0], name: providers[0] }; }); } catch { /* keep default */ }
+  }
 
-  const modeLabel = { ask: 'ask before cloud spend', 'auto-local': 'prefer local; spend only if needed', 'always-spend': 'always proceed' }[costApproval];
+  const modeLabel = { ask: 'ask before paid calls', 'auto-local': 'prefer local; spend only if needed', 'always-spend': 'always use my selected model' }[costApproval];
+  const sourcesLabel = [chosen.includes('local') ? `local${localModel ? ' (' + localModel + ')' : ''}` : null, ...providers].filter(Boolean).join(' · ');
   console.log('\n' + box([
     `${C.g}${C.bold}✓ Saved — "${agentName}" is configured${C.x}`,
-    `${C.d}Brain:${C.x}   ${provider}${localModel ? ' · ' + localModel : ''}  ${v.ok ? C.g + '(ready)' : C.y + '(' + v.state + ')'}${C.x}`,
+    `${C.d}Models:${C.x}  ${sourcesLabel || C.y + 'none' + C.x}`,
     `${C.d}Routing:${C.x} save-spend ${saveApiSpend ? C.g + 'on' + C.x : 'off'} · ${modeLabel}`,
     `${C.d}Mesh:${C.x}    ${meshEnroll ? 'joining' : 'off (optional)'}`,
   ]));
   console.log(`\n  Next:  ${C.b}stratos doctor${C.x} ${C.d}(check readiness)${C.x}  →  ${C.b}stratos start${C.x}`);
-  if (!v.ok && v.fix) console.log(`  ${C.y}First, fix the brain:${C.x} ${v.fix}`);
-  console.log(`  ${C.d}Tip: let Stratos self-configure from chat later — ${pp.private ? 'fully private with your local brain.' : 'note your cloud brain will see those prompts.'}${C.x}\n`);
+  if (localReady && !localReady.ok && localReady.fix) console.log(`  ${C.y}Local model:${C.x} ${localReady.fix}`);
+  console.log(`  ${C.d}Tip: let Stratos self-configure from chat later — ${pp.private ? 'fully private with local-only.' : 'note any connected provider will see those prompts.'}${C.x}\n`);
 }
 
 async function connectWizard() {

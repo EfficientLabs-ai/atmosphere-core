@@ -9,7 +9,7 @@ import path from 'node:path';
 
 // isolate config in a temp cwd BEFORE import (agent-config resolves off process.cwd())
 process.chdir(fs.mkdtempSync(path.join(os.tmpdir(), 'wiz-')));
-const { validateModelChoice, applyWizard, privacyPosture } = await import('./src/cli/wizard.js');
+const { validateModelChoice, applyWizard, privacyPosture, MODEL_SOURCES, multiSelectReduce, resolveProviderKeysToEnv } = await import('./src/cli/wizard.js');
 const config = await import('./src/core/agent-config.js');
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
@@ -41,5 +41,32 @@ ok(config.getRouting().costApproval === 'auto-local', 'the previous valid mode i
 console.log('\n=== honest privacy posture ===');
 ok(privacyPosture('local').private === true, 'local brain → private');
 ok(privacyPosture('openai').private === false && /THEIR terms/.test(privacyPosture('openai').note), 'cloud brain → not blanket-private, stated plainly');
+
+console.log('\n=== model-source catalog has no "cloud" jargon + a free local option ===');
+ok(MODEL_SOURCES.some((s) => s.value === 'local' && /free/.test(s.hint)), 'local source is present + labelled free');
+ok(MODEL_SOURCES.filter((s) => s.kind === 'provider').length >= 3, 'multiple named providers offered');
+ok(!JSON.stringify(MODEL_SOURCES).toLowerCase().includes('cloud'), 'no "cloud" wording anywhere in the source list');
+
+console.log('\n=== multi-select reducer: navigate + toggle ===');
+let st = { index: 0, selected: new Set(), count: MODEL_SOURCES.length };
+st = multiSelectReduce(st, 'down'); ok(st.index === 1, '↓ moves the cursor');
+st = multiSelectReduce(st, 'space'); ok(st.selected.has(1), 'space toggles the current item ON');
+st = multiSelectReduce(st, 'space'); ok(!st.selected.has(1), 'space again toggles it OFF');
+st = multiSelectReduce({ index: 0, selected: new Set(), count: 3 }, 'up'); ok(st.index === 2, '↑ wraps to the end');
+
+console.log('\n=== enabling providers stores ONLY a vault handle in config (key stays in the vault) ===');
+config.setLocalSource({ enabled: true, name: 'qwen2.5:7b' });
+config.enableProvider('anthropic', 'cvault:anthropic:api-key:' + 'a'.repeat(32));
+const ms = config.getModelSources();
+ok(ms.local.enabled && ms.providers.anthropic.keyHandle.startsWith('cvault:'), 'local enabled + anthropic provider holds a vault handle');
+ok(!JSON.stringify(ms).includes('sk-'), 'no raw API key material in the model-sources config');
+
+console.log('\n=== resolveProviderKeysToEnv: vault handle → PROVIDER_API_KEY at runtime ===');
+const fakeVault = { resolveSecret: (h) => (h === 'cvault:anthropic:api-key:' + 'a'.repeat(32) ? 'sk-ant-REAL' : null) };
+const env = {};
+const wired = resolveProviderKeysToEnv(config, fakeVault, env);
+ok(wired.includes('anthropic') && env.ANTHROPIC_API_KEY === 'sk-ant-REAL', 'the encrypted key is resolved into ANTHROPIC_API_KEY for the gateway');
+config.disableProvider('anthropic');
+ok(!config.getModelSources().providers.anthropic, 'disableProvider removes the entry');
 
 console.log(`\n✅ ALL ${pass} wizard-brain checks passed.`);

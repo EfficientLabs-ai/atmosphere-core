@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fetch from 'node-fetch';
 import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
+import { gatewayAuthHeaders } from '../gateway-auth.js';
 import { parseApprovalResponse, dispatchAgentTurn, convKey } from './approval-flow.js';
 
 /**
@@ -54,7 +55,7 @@ export class SignalAdapter {
   async askAgent(text, extraHeaders = {}) {
     const res = await this._fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...extraHeaders },
+      headers: { 'content-type': 'application/json', ...extraHeaders, ...gatewayAuthHeaders() },
       body: JSON.stringify({ model: this.model, messages: [{ role: 'user', content: text }] }),
     });
     const data = await res.json().catch(() => ({}));

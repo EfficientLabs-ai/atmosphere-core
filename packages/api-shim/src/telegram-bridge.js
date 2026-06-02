@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { gatewayAuthHeaders } from './gateway-auth.js';
 import fetch from 'node-fetch';
 import TelegramBot from 'node-telegram-bot-api';
 // Import the dispatcher from its OWN module, NOT the stratos-agent barrel (index.js) — the barrel
@@ -152,7 +153,7 @@ export class TelegramBridge {
               // Trigger vision completions call
               const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...gatewayAuthHeaders() },
                 body: JSON.stringify({
                   model: 'qwen-2.5-vlm-telegram-local',
                   messages: [{ role: 'user', content: 'What is currently active on my display screen?' }],
@@ -205,7 +206,7 @@ export class TelegramBridge {
           chatHistory.appendUser(chatId, text);
           const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...gatewayAuthHeaders() },
             body: JSON.stringify({
               model: 'qwen-2.5-vlm-telegram-local',
               messages: chatHistory.getMessages(chatId),
@@ -300,7 +301,7 @@ export class TelegramBridge {
       chatHistory.appendUser(chatId, transcribedText);
       const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...gatewayAuthHeaders() },
         body: JSON.stringify({
           model: 'qwen-2.5-vlm-telegram-local',
           messages: chatHistory.getMessages(chatId),

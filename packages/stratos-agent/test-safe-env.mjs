@@ -53,6 +53,9 @@ console.log('\n=== a sidecar command MUST be an absolute path (so a poisoned PAT
   let threw = false;
   try { createStdioTransport({ command: 'node', args: [] }); } catch { threw = true; }
   ok(threw, 'a BARE command (e.g. "node") is REJECTED — must be pinned to an absolute path');
+  let cwdThrew = false;
+  try { createStdioTransport({ command: process.execPath, cwd: './relative' }); } catch { cwdThrew = true; }
+  ok(cwdThrew, 'a RELATIVE cwd is REJECTED — must be absolute so relative args don\'t resolve against an ambient dir');
   // an absolute command is accepted (process.execPath); close it immediately so we don't leak a child
   const tt = createStdioTransport({ command: process.execPath, args: ['-e', 'setInterval(()=>{},1e9)'] });
   ok(typeof tt.close === 'function', 'an ABSOLUTE command path is accepted');

@@ -22,6 +22,9 @@ export function createStdioTransport({ command, args = [], env = {}, auth = null
   if (!path.isAbsolute(command)) {
     throw new Error(`stdio transport requires an ABSOLUTE command path (got "${command}") — pin the full path so PATH cannot redirect it`);
   }
+  if (cwd != null && !path.isAbsolute(cwd)) {
+    throw new Error(`stdio transport cwd must be an ABSOLUTE path (got "${cwd}") so relative args don't resolve against an ambient directory`);
+  }
   // An MCP sidecar is an UNTRUSTED third-party process — it must NOT inherit the agent's secrets. Build a
   // minimal, secret-free env (OS essentials + non-secret Stratos paths) plus ONLY the connector's declared
   // env, then inject the single scoped auth var. (Was `{...process.env,...}`.)

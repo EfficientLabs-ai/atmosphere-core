@@ -11,6 +11,16 @@
  * safeChildEnv() returns just the OS-level essentials a process needs to execute, plus an explicit
  * allow-list of NON-secret Stratos path/config vars, plus whatever the caller passes in `extra` (e.g. a
  * connector's declared env or a single scoped auth var). Deny-by-default for everything else.
+ *
+ * SECURITY SCOPE (be precise about what this does and does NOT do):
+ *   - DOES: stop the AGENT's decrypted secrets (API keys/tokens/keypairs, proxy creds, NODE_OPTIONS/
+ *     NODE_PATH) from being inherited by the broker child or any MCP sidecar.
+ *   - Does NOT (by itself) fully sandbox WHICH binary/code a user-PINNED sidecar runs. PATH is kept
+ *     because execution requires it; a sidecar launched via a shebang still resolves its interpreter via
+ *     PATH. That residual is mitigated by (a) requiring an ABSOLUTE command + absolute cwd at the spawn
+ *     site (mcp-stdio-transport.js) and (b) the WASI sandbox for compiled SKILLS — but ultimately a
+ *     sidecar the user pins is inside the trust boundary the user establishes by adding it, and a PATH/cwd
+ *     that an attacker already controls implies host compromise. This module's job is the secret strip.
  */
 
 // OS essentials a child genuinely needs to find/run its binary + resolve $HOME on every platform. NONE

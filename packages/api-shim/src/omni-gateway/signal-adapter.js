@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import fetch from 'node-fetch';
 import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
-import { parseApprovalResponse, dispatchAgentTurn } from './approval-flow.js';
+import { parseApprovalResponse, dispatchAgentTurn, convKey } from './approval-flow.js';
 
 /**
  * SignalAdapter — a REAL two-way Signal channel for StratosAgent (new). The MOST sovereign chat channel:
@@ -43,8 +43,11 @@ export class SignalAdapter {
     else if (sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
     const text = String(dm.message).trim();
     if (!text) return { handle: false, reason: 'empty' };
-    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, sender, reason: 'secret in message' };
-    return { handle: true, text, sender };
+    // signal-cli can deliver GROUP messages, not just 1:1 DMs — capture the group id so a cost-approval
+    // raised in one Signal chat can't be consumed from another by the same sender.
+    const groupId = dm.groupInfo?.groupId || dm.groupV2?.id || dm.groupInfo?.id || null;
+    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, sender, groupId, reason: 'secret in message' };
+    return { handle: true, text, sender, groupId };
   }
 
   /** Route a prompt to the local gateway. Returns the reply string, OR { approval } on a 402 cost gate. */
@@ -88,7 +91,8 @@ export class SignalAdapter {
     if (!decision.handle) { if (decision.refuse) await send(decision.sender, decision.reply); return decision; }
     await dispatchAgentTurn({
       // Signal is 1:1 DMs — the sender number IS the conversation, so it's already conversation-scoped.
-      pending: this.pending, key: String(decision.sender), text: decision.text,
+      // scope to the conversation: a Signal GROUP (when present) or the 1:1 DM (the sender's number)
+      pending: this.pending, key: convKey(decision.sender, decision.groupId, !decision.groupId), text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send: (t) => send(decision.sender, t), chunk: SignalAdapter.chunk,
     });
     return decision;

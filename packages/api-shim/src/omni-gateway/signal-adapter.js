@@ -43,11 +43,14 @@ export class SignalAdapter {
     else if (sender !== this.ownerId) return { handle: false, reason: 'not the owner' };
     const text = String(dm.message).trim();
     if (!text) return { handle: false, reason: 'empty' };
-    // signal-cli can deliver GROUP messages, not just 1:1 DMs — capture the group id so a cost-approval
-    // raised in one Signal chat can't be consumed from another by the same sender.
+    // DM-ONLY (honest scope): signal-cli also delivers GROUP messages, but this adapter replies to the
+    // sender's number — it has no group-send path — so a group cost-approval would be unanswerable from
+    // where the user sees it. Until group-send is implemented, group messages are ignored (DM the bot
+    // directly). This keeps the conversation == the sender's DM, so approvals are correctly scoped.
     const groupId = dm.groupInfo?.groupId || dm.groupV2?.id || dm.groupInfo?.id || null;
-    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, sender, groupId, reason: 'secret in message' };
-    return { handle: true, text, sender, groupId };
+    if (groupId) return { handle: false, reason: 'group messages not supported yet — DM the bot directly' };
+    if (scanForSecrets(text)) return { handle: false, refuse: true, reply: SECRET_REFUSAL, sender, reason: 'secret in message' };
+    return { handle: true, text, sender };
   }
 
   /** Route a prompt to the local gateway. Returns the reply string, OR { approval } on a 402 cost gate. */
@@ -91,8 +94,8 @@ export class SignalAdapter {
     if (!decision.handle) { if (decision.refuse) await send(decision.sender, decision.reply); return decision; }
     await dispatchAgentTurn({
       // Signal is 1:1 DMs — the sender number IS the conversation, so it's already conversation-scoped.
-      // scope to the conversation: a Signal GROUP (when present) or the 1:1 DM (the sender's number)
-      pending: this.pending, key: convKey(decision.sender, decision.groupId, !decision.groupId), text: decision.text,
+      // DM-only (groups are rejected in shouldHandle) → the sender's 1:1 DM is the conversation
+      pending: this.pending, key: convKey(decision.sender, null, true), text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send: (t) => send(decision.sender, t), chunk: SignalAdapter.chunk,
     });
     return decision;

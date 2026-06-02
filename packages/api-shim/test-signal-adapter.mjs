@@ -51,22 +51,18 @@ ok((await adapter.askAgent('ping')) === 'signal reply' && seen.url === 'http://1
 console.log('\n=== start() needs a number → safe no-op otherwise ===');
 ok((await new SignalAdapter({ number: null, verbose: false }).start()) === false, 'no SIGNAL_NUMBER → start() returns false, never throws');
 
-console.log('\n=== group/DM scoping: shouldHandle captures the group id; approvals don\'t collapse (Codex #36) ===');
+console.log('\n=== Signal is DM-only: group messages are ignored (no broken group approval flow) — Codex #36 ===');
 {
   const ad = new SignalAdapter({ number: '+15559999999', ownerId: '+15550000001', verbose: false });
   const inGroup = (gid, msg) => ({ source: '+15550000001', sourceNumber: '+15550000001', dataMessage: { message: msg, groupInfo: { groupId: gid } } });
-  ok(ad.shouldHandle(inGroup('G1', 'hi')).groupId === 'G1', 'a group message exposes its groupId');
-  ok(ad.shouldHandle(env({ dataMessage: { message: 'hi' } })).groupId == null, 'a 1:1 DM has no groupId');
-  // ADAPTER-LEVEL: a 402 in group G1 is NOT consumable from group G2 (same sender)
+  ok(ad.shouldHandle(inGroup('G1', 'hi')).handle === false, 'a group message → NOT handled (DM-only)');
+  ok(/group/i.test(ad.shouldHandle(inGroup('G1', 'hi')).reason), 'the skip reason explains it (DM the bot directly)');
+  ok(ad.shouldHandle(env({ dataMessage: { message: 'hi' } })).handle === true, 'a 1:1 DM → handled');
+  // a 402 in a DM keys to the sender's DM; no group path exists to collapse into
   const mk402 = (tok) => async () => ({ status: 402, json: async () => ({ error: 'approval_required', approvalToken: tok, options: ['proceed-spend'], reason: 'spend' }) });
-  const a2 = new SignalAdapter({ number: '+15559999999', ownerId: '+15550000001', verbose: false, fetch: mk402('tokG1') });
-  const sent = [];
-  await a2.dispatch(inGroup('G1', 'do paid'), (r, t) => sent.push([r, t]));
-  ok([...a2.pending.keys()].some((k) => k.includes('G1')), 'the pending approval is keyed to the group (…@G1)');
-  let g2Replay = 'unset';
-  a2._fetch = async (url, opts) => { g2Replay = opts.headers?.['x-stratos-approval'] ?? null; return mk402('tokG2')(); };
-  await a2.dispatch(inGroup('G2', 'approve'), (r, t) => sent.push([r, t]));
-  ok(g2Replay === null, 'an "approve" in group G2 does NOT replay group G1\'s approval');
+  const a2 = new SignalAdapter({ number: '+15559999999', ownerId: '+15550000001', verbose: false, fetch: mk402('tok1') });
+  await a2.dispatch(env({ dataMessage: { message: 'do paid' } }), () => {});
+  ok([...a2.pending.keys()].every((k) => k.includes('@dm')), 'the pending approval is keyed to the sender\'s DM');
 }
 
 console.log(`\n✅ ALL ${pass} signal-adapter checks passed.`);

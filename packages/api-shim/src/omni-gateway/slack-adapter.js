@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fetch from 'node-fetch';
 import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
+import { parseApprovalResponse, dispatchAgentTurn } from './approval-flow.js';
 
 /**
  * SlackAdapter — a REAL two-way Slack channel for StratosAgent (was a signature-verifier stub).
@@ -30,6 +31,7 @@ export class SlackAdapter {
     this._fetch = options.fetch || fetch; // injectable for tests
     this.app = null;
     this.botUserId = null;
+    this.pending = new Map(); // sender → { text, token } : a cost-approval awaiting the user's reply
   }
 
   /**
@@ -49,14 +51,16 @@ export class SlackAdapter {
     return { handle: true, text };
   }
 
-  /** Route a prompt to the local gateway and return the reply text. */
-  async askAgent(text) {
+  /** Route a prompt to the local gateway. Returns the reply string, OR { approval } on a 402 cost gate. */
+  async askAgent(text, extraHeaders = {}) {
     const res = await this._fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...extraHeaders },
       body: JSON.stringify({ model: this.model, messages: [{ role: 'user', content: text }] }),
     });
     const data = await res.json().catch(() => ({}));
+    const approval = parseApprovalResponse(res.status, data);
+    if (approval.approvalRequired) return { approval };
     return data?.choices?.[0]?.message?.content || '(no response from the agent)';
   }
 
@@ -81,8 +85,10 @@ export class SlackAdapter {
   async dispatch(norm, botUserId, say) {
     const decision = this.shouldHandle(norm, botUserId);
     if (!decision.handle) { if (decision.refuse) await say(decision.reply); return decision; }
-    const reply = await this.askAgent(decision.text);
-    for (const part of SlackAdapter.chunk(reply)) await say(part);
+    await dispatchAgentTurn({
+      pending: this.pending, sender: String(norm.userId), text: decision.text,
+      askAgent: (t, h) => this.askAgent(t, h), send: say, chunk: SlackAdapter.chunk,
+    });
     return decision;
   }
 

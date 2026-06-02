@@ -1,4 +1,4 @@
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { insertAmbientMemory } from '../../stratos-agent/src/memory/vector-bank.js';
@@ -90,9 +90,7 @@ export class AmbientSensoryEngine {
     return new Promise((resolve) => {
       // 1. Attempt calling native whisper.cpp CLI binary
       // CLI: whisper -m models/ggml-base.bin -f wavPath
-      const cmd = `"${this.whisperPath}" -m models/ggml-base.bin -f "${wavPath}" -otxt`;
-      
-      const whisperProc = spawn('cmd.exe', ['/c', cmd]);
+      const whisperProc = spawn(this.whisperPath, ['-m', 'models/ggml-base.bin', '-f', wavPath, '-otxt']);
       let stdout = '';
       
       whisperProc.stdout.on('data', (data) => {
@@ -137,11 +135,12 @@ export class AmbientSensoryEngine {
           `$bmp.Save('${screenshotPath.replace(/\\/g, '/')}', [System.Drawing.Imaging.ImageFormat]::Png); ` +
           `$graphics.Dispose(); $bmp.Dispose();`;
 
-        execSync(`powershell -Command "${psCommand}"`, { stdio: 'ignore' });
+        execFileSync('powershell', ['-Command', psCommand], { stdio: 'ignore' });
 
         // 2. Capture active focused window title natively to extract semantic visual context
-        const windowTitle = execSync(
-          `powershell -Command "Get-Process | Where-Object {$_.mainWindowTitle} | Select-Object -ExpandProperty mainWindowTitle | Select-Object -First 1"`,
+        const windowTitle = execFileSync(
+          'powershell',
+          ['-Command', 'Get-Process | Where-Object {$_.mainWindowTitle} | Select-Object -ExpandProperty mainWindowTitle | Select-Object -First 1'],
           { encoding: 'utf8' }
         ).trim();
 

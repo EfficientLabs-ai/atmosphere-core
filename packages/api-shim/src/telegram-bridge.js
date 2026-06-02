@@ -4,6 +4,10 @@ import { execFile } from 'node:child_process';
 import { gatewayAuthHeaders } from './gateway-auth.js';
 import fetch from 'node-fetch';
 import TelegramBot from 'node-telegram-bot-api';
+
+// F4 — escape dynamic text before embedding it in a Telegram parse_mode:'HTML' message,
+// so stray <, >, & in error messages / model output can't break entity parsing or inject markup.
+const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 // Import the dispatcher from its OWN module, NOT the stratos-agent barrel (index.js) — the barrel
 // re-exports BrowserHarness/GsiScheduler/P2pSkillSync, which would drag playwright + node-cron + the
 // hyperswarm mesh into the standalone agent's load graph. Enforced by test-standalone-graph.mjs.
@@ -182,7 +186,7 @@ export class TelegramBridge {
             }
           } catch (cmdErr) {
             console.error(`❌ [Telegram Bridge] Error executing command ${command}:`, cmdErr.message);
-            await this.bot.sendMessage(chatId, `⚠️  <b>Command Error</b>: <code>${cmdErr.message}</code>`, { parse_mode: 'HTML' });
+            await this.bot.sendMessage(chatId, `⚠️  <b>Command Error</b>: <code>${escapeHtml(cmdErr.message)}</code>`, { parse_mode: 'HTML' });
             return;
           }
         }
@@ -227,7 +231,7 @@ export class TelegramBridge {
 
         } catch (err) {
           console.error('❌ [Telegram Bridge] Completions processing error:', err.message);
-          await this.bot.sendMessage(chatId, `⚠️  <b>Local Processing Error</b>: <code>${err.message}</code>`, { parse_mode: 'HTML' }).catch(() => {
+          await this.bot.sendMessage(chatId, `⚠️  <b>Local Processing Error</b>: <code>${escapeHtml(err.message)}</code>`, { parse_mode: 'HTML' }).catch(() => {
             this.bot.sendMessage(chatId, `⚠️  Local Processing Error: ${err.message}`);
           });
         }
@@ -356,7 +360,7 @@ export class TelegramBridge {
 
     } catch (err) {
       console.error('❌ [Telegram Voice] Processing error:', err.message);
-      await this.bot.sendMessage(chatId, `⚠️  <b>Voice Processing Error</b>: <code>${err.message}</code>`, { parse_mode: 'HTML' }).catch(() => {
+      await this.bot.sendMessage(chatId, `⚠️  <b>Voice Processing Error</b>: <code>${escapeHtml(err.message)}</code>`, { parse_mode: 'HTML' }).catch(() => {
         this.bot.sendMessage(chatId, `⚠️  Voice Processing Error: ${err.message}`);
       });
     }

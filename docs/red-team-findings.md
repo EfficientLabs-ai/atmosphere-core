@@ -39,10 +39,19 @@ driving spend or the `/mcp` browser, not a Tailnet-wide exposure.
 - **Operator action:** set `ATMOS_GATEWAY_SECRET` in the daemon env (and the same value is read by
   the in-process callers) to turn enforcement on.
 
-### F3 — `atmos-desktop` `spawn('cmd.exe', ['/c', cmd])` · UNREVIEWED (Windows)
-`sensory-ingestion.js:95`, `sensory/conversational-audio.js:72` pass a built `cmd` string to
-`cmd.exe /c`. If any part of `cmd` is influenced by input, it's injectable. Needs a focused read
-(pass 2) of how `cmd` is constructed.
+### F3 — `atmos-desktop` shell-string execution (Windows) · LOW–MED · ✅ FIXED
+The two sensory files shelled out via `cmd.exe /c` / `execSync` with interpolated strings in **6
+places**: whisper transcode (×2), `say`/`espeak` TTS, the Windows System.Speech PowerShell TTS
+(×1 each file), the screen-capture PowerShell, and the active-window-title query. All converted to
+`spawn`/`execFileSync` with **array args** (no shell) — eliminating the shell-injection class. Both
+files are now shell-free. (Residual: the PowerShell TTS scripts still embed `sanitizedText` at the
+*PowerShell* layer — a separate PS-escaping concern, deferred; the Node shell layer is gone.)
+
+### F4 — Telegram HTML-entity escaping · LOW · ✅ FIXED
+`telegram-bridge.js` interpolated `err.message` / `cmdErr.message` into `parse_mode:'HTML'` messages
+(`<code>${err.message}</code>`) without escaping → "can't parse entities" breakage + mild markup
+injection (owner-gated, so robustness not XSS). Added an `escapeHtml()` helper applied at all three
+dynamic-interpolation sites.
 
 ## Pass-2 backlog (not yet audited)
 - `/mcp` endpoint post-patch (confirm it rejects untrusted actions, not just the old path)

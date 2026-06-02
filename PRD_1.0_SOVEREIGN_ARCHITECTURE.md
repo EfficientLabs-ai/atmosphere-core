@@ -4,7 +4,12 @@
 
 The transition from a centralized, cloud-dependent technological paradigm toward an autonomous, decentralized agentic web represents the most consequential architectural shift in modern systems engineering. 
 
-To systematically dismantle the centralized mass surveillance economy and eradicate "Shadow AI" (which accounts for over 410 million enterprise Data Loss Prevention violations annually), Efficient Labs establishes the **New Agentic Standard**. This PRD locks down the authoritative requirements, capability-based sandboxing, multi-writer consensus, transport-agnostic coordination, and hybrid post-quantum cryptography blueprints for **The Atmosphere P2P Compute Mesh** and the **StratosAgent** framework.
+To systematically dismantle the centralized mass surveillance economy and address the real risks of "Shadow AI" — employees routing sensitive company data through third-party AI tools outside any sanctioned, sovereign boundary — Efficient Labs establishes the **New Agentic Standard**. (An earlier draft cited a specific "410 million annual DLP violations" figure; it was unsourced and has been removed rather than presented as fact.) This PRD locks down the authoritative requirements, capability-based sandboxing, multi-writer consensus, transport-agnostic coordination, and hybrid post-quantum cryptography blueprints for **The Atmosphere P2P Compute Mesh** and the **StratosAgent** framework.
+
+> **Status note (honesty):** this PRD is a forward-looking *requirements/architecture* blueprint. Several
+> components it specifies are **not yet implemented** (on-chain settlement, multimodal STT/TTS/vision,
+> ACP/DID/SD-JWT/Z3, the token/DePIN economy). For the *verified* state of what actually runs today, see
+> [`STATE_OF_REALITY.md`](./STATE_OF_REALITY.md) — it is the source of truth where the two disagree.
 
 ---
 

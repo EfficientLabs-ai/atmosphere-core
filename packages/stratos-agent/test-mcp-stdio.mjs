@@ -23,7 +23,7 @@ process.stdin.on('data', (c) => { buf += c.toString('utf8'); let nl;
 `);
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
-const transport = createStdioTransport({ command: 'node', args: [server], auth: { kind: 'bearer', value: 'secret-tok-WXYZ' } });
+const transport = createStdioTransport({ command: process.execPath, args: [server], auth: { kind: 'bearer', value: 'secret-tok-WXYZ' } });
 const client = createMcpClient({ transport, name: 'mock' });
 ok((await client.initialize()).protocolVersion === '2024-11-05', 'initialize round-trips over real stdio');
 ok((await client.listTools())[0].name === 'whoami', 'tools/list round-trips');

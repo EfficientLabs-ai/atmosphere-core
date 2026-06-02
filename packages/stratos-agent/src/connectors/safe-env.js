@@ -1,0 +1,73 @@
+/**
+ * safe-env.js — build a MINIMAL child environment for spawned processes (the broker subprocess and every
+ * MCP connector sidecar), so the agent's secrets never leak into them by inheritance (Gap 3, #35).
+ *
+ * The bug it fixes: both the broker child (broker-client.js) and each stdio sidecar
+ * (mcp-stdio-transport.js) were spawned with `{ ...process.env, … }`, handing the FULL parent environment
+ * — every API key / token the daemon decrypted into its own env at start — to those children. A sidecar
+ * is an UNTRUSTED third-party MCP server; it must receive ONLY what it needs to run plus its own injected
+ * credential (resolved from the vault inside the broker), never the rest of the agent's secrets.
+ *
+ * safeChildEnv() returns just the OS-level essentials a process needs to execute, plus an explicit
+ * allow-list of NON-secret Stratos path/config vars, plus whatever the caller passes in `extra` (e.g. a
+ * connector's declared env or a single scoped auth var). Deny-by-default for everything else.
+ *
+ * SECURITY SCOPE (be precise about what this does and does NOT do):
+ *   - DOES: stop the AGENT's decrypted secrets (API keys/tokens/keypairs, proxy creds, NODE_OPTIONS/
+ *     NODE_PATH) from being inherited by the broker child or any MCP sidecar.
+ *   - Does NOT (by itself) fully sandbox WHICH binary/code a user-PINNED sidecar runs. PATH is kept
+ *     because execution requires it; a sidecar launched via a shebang still resolves its interpreter via
+ *     PATH. That residual is mitigated by (a) requiring an ABSOLUTE command + absolute cwd at the spawn
+ *     site (mcp-stdio-transport.js) and (b) the WASI sandbox for compiled SKILLS — but ultimately a
+ *     sidecar the user pins is inside the trust boundary the user establishes by adding it, and a PATH/cwd
+ *     that an attacker already controls implies host compromise. This module's job is the secret strip.
+ */
+
+// OS essentials a child genuinely needs to find/run its binary + resolve $HOME on every platform. NONE
+// of these are secrets. Windows home is USERPROFILE / HOMEDRIVE+HOMEPATH (os.homedir() reads them), so
+// the broker's default vault path keeps working there when STRATOS_VAULT_DIR is unset.
+// DELIBERATELY EXCLUDED: NODE_OPTIONS and NODE_PATH. Both are code-loading vectors under a poisoned
+// parent env — NODE_OPTIONS preloads modules/repopulates secrets (`--require`/`--import`/`--env-file`),
+// NODE_PATH redirects module resolution to attacker-chosen dirs. A connector that genuinely needs either
+// must pass it EXPLICITLY via its declared `env` (the scoped `extra`), never inherit it by default.
+// PATH is UNAVOIDABLE (a child can't be spawned/run without it). Its "which binary launches" risk is
+// mitigated at the broker, which spawns connectors by their PINNED command — that command SHOULD be an
+// absolute path so spawn never resolves a bare name against a poisoned PATH (documented broker policy).
+const OS_ESSENTIAL = ['PATH', 'Path', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP',
+  'TMP', 'SHELL', 'TERM', 'SystemRoot', 'WINDIR', 'COMSPEC',
+  'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA'];
+
+// Standard NON-secret networking/TLS config a networked sidecar needs (CA bundles + no-proxy list). Paths
+// and host lists — never credentials.
+const NET_TLS = ['NO_PROXY', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', 'CURL_CA_BUNDLE'];
+
+// Proxy URLs are passed through too (sidecars behind a proxy need them) BUT a proxy URL can embed
+// credentials (scheme://user:pass@host) — those are secrets. We strip the userinfo before passing.
+const PROXY_VARS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'];
+
+// Non-secret Stratos config the broker/vault need to locate their on-disk files (paths, not credentials).
+const STRATOS_NONSECRET = ['STRATOS_VAULT_DIR', 'STRATOS_PROFILE_DIR'];
+
+/**
+ * Remove embedded credentials from a proxy value so they never leak to a sidecar. Handles BOTH forms:
+ *   scheme://user:pass@host:port → scheme://host:port   (URL form)
+ *   user:pass@host:port          → host:port            (scheme-less form some tools accept)
+ */
+export function stripProxyCreds(v) {
+  const s = String(v);
+  const noSchemeCreds = s.replace(/^([a-z][a-z0-9+.\-]*:\/\/)[^/@]*@/i, '$1'); // scheme://userinfo@ → scheme://
+  if (noSchemeCreds !== s) return noSchemeCreds;
+  return s.replace(/^[^/@]*@/, ''); // scheme-less leading userinfo@ → (gone); no '@' before a path → unchanged
+}
+
+/** A minimal, secret-free base env + the caller's explicit additions. */
+export function safeChildEnv(extra = {}, env = process.env) {
+  const out = {};
+  for (const k of OS_ESSENTIAL) if (env[k] != null) out[k] = env[k];
+  for (const k of NET_TLS) if (env[k] != null) out[k] = env[k];
+  for (const k of PROXY_VARS) if (env[k] != null) out[k] = stripProxyCreds(env[k]); // creds stripped
+  for (const k of STRATOS_NONSECRET) if (env[k] != null) out[k] = env[k];
+  // `extra` is the caller's explicit, scoped additions (connector-declared env, one injected auth var, the
+  // broker registry path) — always applied last so an intentional value wins.
+  return { ...out, ...extra };
+}

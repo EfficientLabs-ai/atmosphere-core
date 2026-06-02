@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fetch from 'node-fetch';
 import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
-import { parseApprovalResponse, dispatchAgentTurn } from './approval-flow.js';
+import { parseApprovalResponse, dispatchAgentTurn, convKey } from './approval-flow.js';
 
 /**
  * SlackAdapter — a REAL two-way Slack channel for StratosAgent (was a signature-verifier stub).
@@ -87,7 +87,7 @@ export class SlackAdapter {
     if (!decision.handle) { if (decision.refuse) await say(decision.reply); return decision; }
     await dispatchAgentTurn({
       // scope the pending approval to THIS conversation (user@channel), not just the user
-      pending: this.pending, key: `${norm.userId}@${norm.channel ?? 'dm'}`, text: decision.text,
+      pending: this.pending, key: convKey(norm.userId, norm.channel, norm.isDM), text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send: say, chunk: SlackAdapter.chunk,
     });
     return decision;

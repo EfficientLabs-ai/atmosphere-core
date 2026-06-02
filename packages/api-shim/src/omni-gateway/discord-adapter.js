@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fetch from 'node-fetch';
 import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
-import { parseApprovalResponse, dispatchAgentTurn } from './approval-flow.js';
+import { parseApprovalResponse, dispatchAgentTurn, convKey } from './approval-flow.js';
 
 /**
  * DiscordAdapter — a REAL two-way Discord channel for StratosAgent (was a stub with a mock token).
@@ -92,7 +92,7 @@ export class DiscordAdapter {
     if (!decision.handle) { if (decision.refuse) await send(decision.reply); return decision; }
     await dispatchAgentTurn({
       // scope the pending approval to THIS conversation (user@channel), not just the user
-      pending: this.pending, key: `${norm.authorId}@${norm.channelId ?? 'dm'}`, text: decision.text,
+      pending: this.pending, key: convKey(norm.authorId, norm.channelId, norm.isDM), text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send, chunk: DiscordAdapter.chunk, typing,
     });
     return decision;

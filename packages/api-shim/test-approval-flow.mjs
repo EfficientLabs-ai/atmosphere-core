@@ -2,7 +2,7 @@
  * approval-flow tests (Gap 4, #36) — the pure channel-side cost-approval logic that every adapter shares.
  */
 import assert from 'node:assert';
-import { parseApprovalResponse, interpretReply, formatApprovalPrompt, replayHeaders, dispatchAgentTurn } from './src/omni-gateway/approval-flow.js';
+import { parseApprovalResponse, interpretReply, formatApprovalPrompt, replayHeaders, dispatchAgentTurn, convKey } from './src/omni-gateway/approval-flow.js';
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
 
@@ -84,6 +84,17 @@ const makeAskAgent = () => { const calls = []; return { calls, fn: async (text, 
   const pending = new Map(); const sent = [];
   await dispatchAgentTurn({ pending, key: 'u1@chanA', text: 'hi', askAgent: async () => 'hello there', send: (t) => sent.push(t), chunk: (s) => [s] });
   ok(sent.length === 1 && sent[0] === 'hello there' && !pending.has('u1@chanA'), 'a non-paid request answers directly, no approval prompt');
+}
+
+console.log('\n=== convKey: distinct conversations never collapse; missing non-DM id fails safe (Codex #36) ===');
+ok(convKey('u1', 'chanA') === 'u1@chanA' && convKey('u1', 'chanB') === 'u1@chanB', 'two channels → two distinct keys');
+ok(convKey('u1', 'chanA') !== convKey('u2', 'chanA'), 'two users in the same channel → distinct keys');
+ok(convKey('u1', null, true) === 'u1@dm', 'a DM with no channel id → user@dm (1:1, safe)');
+ok(convKey('u1', null, false) === '' && convKey('u2', null, false) === '', 'a NON-DM with no conversation id → EMPTY key (never a shared bucket)');
+{ // an empty key must NOT queue a pending (so a later approve can never replay it)
+  const pending = new Map(); const sent = []; const aa = makeAskAgent();
+  await dispatchAgentTurn({ pending, key: convKey('u1', undefined, false), text: 'paid', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
+  ok(pending.size === 0 && /paid model/.test(sent[0]), 'a 402 with no resolvable conversation → prompt shown but NOTHING queued (fail-safe)');
 }
 
 console.log('\n=== conversation isolation (Codex #36): a 402 in channel A is NOT consumable from channel B ===');

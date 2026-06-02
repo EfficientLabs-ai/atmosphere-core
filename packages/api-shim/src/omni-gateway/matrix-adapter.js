@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
-import { parseApprovalResponse, dispatchAgentTurn } from './approval-flow.js';
+import { parseApprovalResponse, dispatchAgentTurn, convKey } from './approval-flow.js';
 
 /**
  * MatrixAdapter — a REAL two-way Matrix channel for StratosAgent (new — Matrix had no adapter).
@@ -87,7 +87,7 @@ export class MatrixAdapter {
     if (!decision.handle) { if (decision.refuse) await send(decision.reply); return decision; }
     await dispatchAgentTurn({
       // scope the pending approval to THIS conversation (user@room), not just the user
-      pending: this.pending, key: `${norm.sender}@${norm.roomId ?? 'dm'}`, text: decision.text,
+      pending: this.pending, key: convKey(norm.sender, norm.roomId, false), text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send, chunk: MatrixAdapter.chunk,
     });
     return decision;

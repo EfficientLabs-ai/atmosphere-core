@@ -16,6 +16,19 @@
  * they all call these helpers so the behavior (and wording) is consistent across every channel.
  */
 
+/**
+ * Build the conversation-scope key for a pending approval. An approval raised in one conversation must
+ * NEVER be consumable from another. Returns `user@conversation` when the conversation id is known; for a
+ * DM (genuinely 1:1) `user@dm`; and an EMPTY string when a non-DM has no conversation id — the caller
+ * (dispatchAgentTurn) treats an empty key as "don't queue" rather than collapsing distinct conversations.
+ */
+export function convKey(user, conversationId, isDM = false) {
+  const u = String(user ?? '');
+  if (conversationId != null && conversationId !== '') return `${u}@${conversationId}`;
+  if (isDM) return `${u}@dm`;
+  return ''; // non-DM with no conversation id → fail safe (no shared key)
+}
+
 /** Detect + parse the gateway's 402 approval response. Returns { approvalRequired:false } otherwise. */
 export function parseApprovalResponse(status, body) {
   if (status !== 402 || !body || body.error !== 'approval_required') return { approvalRequired: false };
@@ -80,7 +93,12 @@ export function replayHeaders(decision, token) {
  * token for spend) or cancels. Deny-by-default: an unrecognized reply re-asks without spending.
  */
 export async function dispatchAgentTurn({ pending, key, text, askAgent, send, chunk, typing }) {
-  const pend = pending.get(key);
+  // A pending approval is queued ONLY when we have a real conversation-scope key. If the caller couldn't
+  // determine the conversation (e.g. a missing channel/room id on a non-DM), we FAIL SAFE: never store a
+  // pending (so a later "approve" elsewhere can't replay it) — we still show the prompt, but the human
+  // must re-send. Never collapse distinct conversations onto a shared key.
+  const canQueue = key != null && key !== '';
+  const pend = canQueue ? pending.get(key) : undefined;
 
   // (A) the user is answering a prior approval prompt (in THIS conversation)
   if (pend) {
@@ -101,7 +119,7 @@ export async function dispatchAgentTurn({ pending, key, text, askAgent, send, ch
   if (typing) await typing();
   const result = await askAgent(text);
   if (result && result.approval) {
-    pending.set(key, { text, token: result.approval.token });
+    if (canQueue) pending.set(key, { text, token: result.approval.token });
     await send(formatApprovalPrompt(result.approval));
     return;
   }

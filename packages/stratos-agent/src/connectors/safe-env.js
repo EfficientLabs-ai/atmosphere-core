@@ -20,23 +20,35 @@
 // parent env — NODE_OPTIONS preloads modules/repopulates secrets (`--require`/`--import`/`--env-file`),
 // NODE_PATH redirects module resolution to attacker-chosen dirs. A connector that genuinely needs either
 // must pass it EXPLICITLY via its declared `env` (the scoped `extra`), never inherit it by default.
+// PATH is UNAVOIDABLE (a child can't be spawned/run without it). Its "which binary launches" risk is
+// mitigated at the broker, which spawns connectors by their PINNED command — that command SHOULD be an
+// absolute path so spawn never resolves a bare name against a poisoned PATH (documented broker policy).
 const OS_ESSENTIAL = ['PATH', 'Path', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP',
   'TMP', 'SHELL', 'TERM', 'SystemRoot', 'WINDIR', 'COMSPEC',
   'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA'];
 
-// Standard NON-secret networking/TLS config a networked sidecar needs (proxies + CA bundles). These are
-// configuration, not credentials — omitting them silently breaks sidecars behind a proxy or custom CA.
-const NET_TLS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy',
-  'NO_PROXY', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', 'CURL_CA_BUNDLE'];
+// Standard NON-secret networking/TLS config a networked sidecar needs (CA bundles + no-proxy list). Paths
+// and host lists — never credentials.
+const NET_TLS = ['NO_PROXY', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', 'CURL_CA_BUNDLE'];
+
+// Proxy URLs are passed through too (sidecars behind a proxy need them) BUT a proxy URL can embed
+// credentials (scheme://user:pass@host) — those are secrets. We strip the userinfo before passing.
+const PROXY_VARS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'];
 
 // Non-secret Stratos config the broker/vault need to locate their on-disk files (paths, not credentials).
 const STRATOS_NONSECRET = ['STRATOS_VAULT_DIR', 'STRATOS_PROFILE_DIR'];
+
+/** Remove embedded credentials (scheme://USER:PASS@host → scheme://host) so proxy creds never leak. */
+export function stripProxyCreds(v) {
+  return String(v).replace(/^([a-z][a-z0-9+.\-]*:\/\/)[^/@]*@/i, '$1');
+}
 
 /** A minimal, secret-free base env + the caller's explicit additions. */
 export function safeChildEnv(extra = {}, env = process.env) {
   const out = {};
   for (const k of OS_ESSENTIAL) if (env[k] != null) out[k] = env[k];
   for (const k of NET_TLS) if (env[k] != null) out[k] = env[k];
+  for (const k of PROXY_VARS) if (env[k] != null) out[k] = stripProxyCreds(env[k]); // creds stripped
   for (const k of STRATOS_NONSECRET) if (env[k] != null) out[k] = env[k];
   // `extra` is the caller's explicit, scoped additions (connector-declared env, one injected auth var, the
   // broker registry path) — always applied last so an intentional value wins.

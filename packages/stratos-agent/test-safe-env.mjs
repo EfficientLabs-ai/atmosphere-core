@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { safeChildEnv } from './src/connectors/safe-env.js';
+import { safeChildEnv, stripProxyCreds } from './src/connectors/safe-env.js';
 
 let pass = 0; const ok = (c, m) => { assert.ok(c, m); console.log('  ✓ ' + m); pass++; };
 
@@ -40,6 +40,10 @@ ok(!('OPENAI_API_KEY' in e2), '…but still no inherited secrets');
 console.log('\n=== networking/TLS + cross-platform home vars pass through (real broker/sidecar needs them) ===');
 const e3 = safeChildEnv({}, { ...fakeEnv, HTTPS_PROXY: 'http://proxy:8080', NODE_EXTRA_CA_CERTS: '/ca.pem', USERPROFILE: 'C:\\\\Users\\\\neo' });
 ok(e3.HTTPS_PROXY === 'http://proxy:8080' && e3.NODE_EXTRA_CA_CERTS === '/ca.pem', 'proxy + custom CA bundle are kept (non-secret runtime config)');
+ok(stripProxyCreds('http://user:s3cr3t@proxy:8080') === 'http://proxy:8080', 'embedded proxy CREDENTIALS are stripped from a proxy URL');
+ok(stripProxyCreds('http://proxy:8080') === 'http://proxy:8080' && stripProxyCreds('proxy:8080') === 'proxy:8080', 'a proxy URL without creds is unchanged');
+const e4 = safeChildEnv({}, { ...fakeEnv, HTTP_PROXY: 'http://bob:hunter2@corp-proxy:3128' });
+ok(e4.HTTP_PROXY === 'http://corp-proxy:3128' && !JSON.stringify(e4).includes('hunter2'), 'safeChildEnv passes the proxy host but NOT the embedded password');
 ok(e3.USERPROFILE === 'C:\\\\Users\\\\neo', 'Windows USERPROFILE is kept (so os.homedir() / the default vault path still resolves)');
 
 console.log('\n=== REAL spawn boundary: a child spawned via createStdioTransport CANNOT see the secret ===');

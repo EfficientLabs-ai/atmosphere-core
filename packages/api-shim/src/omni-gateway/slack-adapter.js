@@ -85,9 +85,11 @@ export class SlackAdapter {
   async dispatch(norm, botUserId, say) {
     const decision = this.shouldHandle(norm, botUserId);
     if (!decision.handle) { if (decision.refuse) await say(decision.reply); return decision; }
+    // a Slack channel can host many THREADS; the conversation is the thread when threaded, else the
+    // channel — so an approval in thread A can't be consumed from thread B of the same channel.
+    const convId = norm.thread_ts ? `${norm.channel}:${norm.thread_ts}` : norm.channel;
     await dispatchAgentTurn({
-      // scope the pending approval to THIS conversation (user@channel), not just the user
-      pending: this.pending, key: convKey(norm.userId, norm.channel, norm.isDM), text: decision.text,
+      pending: this.pending, key: convKey(norm.userId, convId, norm.isDM), text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send: say, chunk: SlackAdapter.chunk,
     });
     return decision;
@@ -109,7 +111,7 @@ export class SlackAdapter {
       try {
         const norm = {
           userId: message.user, botId: message.bot_id, subtype: message.subtype, text: message.text,
-          channel: message.channel, isDM: message.channel_type === 'im',
+          channel: message.channel, thread_ts: message.thread_ts, isDM: message.channel_type === 'im',
           mentionedBot: botUserId ? String(message.text || '').includes(`<@${botUserId}>`) : false,
         };
         await this.dispatch(norm, botUserId, (t) => say(t));

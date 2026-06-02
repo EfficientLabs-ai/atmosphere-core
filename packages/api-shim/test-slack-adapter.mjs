@@ -65,4 +65,26 @@ console.log('\n=== signature verification (HTTP-mode fallback) is real HMAC + re
 const s = new SlackAdapter({ signingSecret: 'shh', verbose: false });
 ok(s.verifyRequestSignature('body', '1', 'v0=bad') === false, 'a stale/forged signature → rejected');
 
+console.log('\n=== ADAPTER-LEVEL 402 cost-approval is scoped to the THREAD, not the channel (Codex #36) ===');
+{
+  const mk402 = (tok) => async () => ({ status: 402, json: async () => ({ error: 'approval_required', approvalToken: tok, options: ['proceed-spend'], reason: 'would spend', wouldSpendOn: 'claude' }) });
+  const sent = [];
+  const msg = (thread, text) => ({ userId: 'U0OWNER1', channel: 'C1', thread_ts: thread, text, isDM: false, mentionedBot: true });
+  const adp = new SlackAdapter({ ownerId: 'U0OWNER1', verbose: false, fetch: mk402('tokA') });
+  // a paid request in thread A → 402 → pending keyed to the THREAD
+  await adp.dispatch(msg('A', '<@U0BOT> do paid'), 'U0BOT', (t) => sent.push(t));
+  ok([...adp.pending.keys()].some((k) => k.includes('C1:A')), 'the pending approval is keyed to channel+thread (C1:A)');
+  ok(!adp.pending.has('U0OWNER1@C1'), 'it is NOT keyed to the bare channel — threads never collapse');
+  // "approve" in thread B (same channel) must NOT replay thread A's token
+  let bReplay = 'unset';
+  adp._fetch = async (url, opts) => { bReplay = opts.headers?.['x-stratos-approval'] ?? null; return mk402('tokB')(); };
+  await adp.dispatch(msg('B', '<@U0BOT> approve'), 'U0BOT', (t) => sent.push(t));
+  ok(bReplay === null, 'an "approve" in thread B does NOT replay thread A\'s approval (no token sent)');
+  // "approve" in thread A DOES replay thread A's token
+  let aReplay = null;
+  adp._fetch = async (url, opts) => { aReplay = opts.headers?.['x-stratos-approval'] ?? null; return { status: 200, json: async () => ({ choices: [{ message: { content: 'done' } }] }) }; };
+  await adp.dispatch(msg('A', '<@U0BOT> approve'), 'U0BOT', (t) => sent.push(t));
+  ok(aReplay === 'tokA', 'an "approve" in thread A DOES replay thread A\'s single-use token');
+}
+
 console.log(`\n✅ ALL ${pass} slack-adapter checks passed.`);

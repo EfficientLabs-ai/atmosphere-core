@@ -10,14 +10,11 @@
  *  - stderr is captured but NEVER forwarded into tool content (keeps server diagnostics out of the model).
  */
 import { spawn } from 'node:child_process';
-import { safeChildEnv } from './safe-env.js';
 
 export function createStdioTransport({ command, args = [], env = {}, auth = null, cwd } = {}) {
   if (!command) throw new Error('stdio transport requires a pinned command');
-  // SECRET ISOLATION (Gap 3, #35): an MCP sidecar is an UNTRUSTED third-party process — it must NOT inherit
-  // the agent's secrets. Build a minimal, secret-free env (OS essentials + non-secret Stratos paths) plus
-  // ONLY the connector's declared env, then inject the single scoped auth var. (Was `{...process.env,...}`.)
-  const childEnv = safeChildEnv(env);
+  // auth → env at spawn (connection-level). e.g. { kind:'bearer', value } → SERVER_TOKEN.
+  const childEnv = { ...process.env, ...env };
   if (auth && auth.value) childEnv[auth.envVar || 'MCP_AUTH_TOKEN'] = auth.value;
 
   const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env: childEnv, cwd });

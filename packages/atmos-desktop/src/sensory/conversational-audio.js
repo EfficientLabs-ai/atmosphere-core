@@ -1,4 +1,4 @@
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -68,8 +68,7 @@ export class ConversationalAudioEngine {
 
     return new Promise((resolve) => {
       // Command: whisper.cpp -m models/ggml-base.bin -f wavPath
-      const cmd = `"${this.whisperPath}" -m models/ggml-base.bin -f "${wavPath}" -otxt`;
-      const whisperProc = spawn('cmd.exe', ['/c', cmd]);
+      const whisperProc = spawn(this.whisperPath, ['-m', 'models/ggml-base.bin', '-f', wavPath, '-otxt']);
       
       let stdout = '';
       whisperProc.stdout.on('data', (chunk) => {
@@ -116,7 +115,7 @@ export class ConversationalAudioEngine {
           `$synth.Speak("${sanitizedText}");`;
 
         const start = Date.now();
-        execSync(`powershell -Command "${psCommand}"`, { stdio: 'ignore', timeout: 5000 });
+        execFileSync('powershell', ['-Command', psCommand], { stdio: 'ignore', timeout: 5000 });
         const latency = Date.now() - start;
         
         if (this.verbose) {
@@ -124,8 +123,8 @@ export class ConversationalAudioEngine {
         }
       } else {
         // Fallback for macOS (say command) or Linux (espeak)
-        const cmd = process.platform === 'darwin' ? `say "${sanitizedText}"` : `espeak "${sanitizedText}"`;
-        execSync(cmd, { stdio: 'ignore', timeout: 4000 });
+        const ttsBin = process.platform === 'darwin' ? 'say' : 'espeak';
+        execFileSync(ttsBin, [sanitizedText], { stdio: 'ignore', timeout: 4000 });
       }
     } catch (err) {
       // Resilient print log if audio driver or speaker device is inaccessible (e.g. headless VMs)

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import fetch from 'node-fetch';
 import TelegramBot from 'node-telegram-bot-api';
 // Import the dispatcher from its OWN module, NOT the stratos-agent barrel (index.js) — the barrel
@@ -269,7 +269,7 @@ export class TelegramBridge {
       let wavPath = oggPath.replace(/\.[a-z0-9]+$/i, '.wav');
       if (wavPath === oggPath) wavPath = `${oggPath}.wav`;
       await new Promise((resolve) => {
-        exec(`ffmpeg -y -i "${oggPath}" -ac 1 -ar 16000 "${wavPath}"`, (err) => {
+        execFile('ffmpeg', ['-y', '-i', oggPath, '-ac', '1', '-ar', '16000', wavPath], (err) => {
           if (err) {
             if (this.verbose) console.warn('⚠️ [Telegram Voice] ffmpeg transcoding failed (using fallback wav):', err.message);
             const mockWavHeader = Buffer.alloc(44);
@@ -329,7 +329,7 @@ export class TelegramBridge {
       // 7. Transcode WAV response into Opus-encoded OGG for Telegram bot
       const replyOggPath = replyWavPath.replace(/\.wav$/, '.ogg');
       await new Promise((resolve) => {
-        exec(`ffmpeg -y -i "${replyWavPath}" -c:a libopus "${replyOggPath}"`, (err) => {
+        execFile('ffmpeg', ['-y', '-i', replyWavPath, '-c:a', 'libopus', replyOggPath], (err) => {
           if (err) {
             if (this.verbose) console.warn('⚠️ [Telegram Voice] ffmpeg output transcoding failed, falling back:', err.message);
             fs.copyFileSync(replyWavPath, replyOggPath);

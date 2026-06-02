@@ -91,7 +91,8 @@ export class DiscordAdapter {
     const decision = this.shouldHandle(norm, botUserId);
     if (!decision.handle) { if (decision.refuse) await send(decision.reply); return decision; }
     await dispatchAgentTurn({
-      pending: this.pending, sender: String(norm.authorId), text: decision.text,
+      // scope the pending approval to THIS conversation (user@channel), not just the user
+      pending: this.pending, key: `${norm.authorId}@${norm.channelId ?? 'dm'}`, text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send, chunk: DiscordAdapter.chunk, typing,
     });
     return decision;
@@ -115,7 +116,7 @@ export class DiscordAdapter {
     this.client.on('messageCreate', async (m) => {
       try {
         const norm = {
-          authorId: m.author.id, authorBot: m.author.bot, content: m.content,
+          authorId: m.author.id, authorBot: m.author.bot, content: m.content, channelId: m.channel?.id,
           isDM: !m.guild, mentionedBot: this.client.user ? m.mentions.has(this.client.user.id) : false,
         };
         await this.dispatch(norm, this.client.user?.id,

@@ -30,19 +30,19 @@ export function parseApprovalResponse(status, body) {
   };
 }
 
-// Reply intent — checked cancel → local → spend so an explicit "cancel"/"local" never reads as "spend".
-const REPLY = {
-  cancel: /^\s*(cancel|stop|abort|nvm|never\s?mind|no thanks)\b/i,
-  local: /^\s*(local|free|reroute|cheaper?|use local)\b/i,
-  spend: /^\s*(approve|approved|spend|yes\b|proceed|pay|confirm|go ahead|ok\b)/i,
-};
-
-/** Map a user's free-text reply to a decision. Returns 'spend' | 'local' | 'cancel' | null (unclear). */
+/**
+ * Map a user's free-text reply to a decision. DENY-BY-DEFAULT toward spend:
+ *   - a cancel/local signal ANYWHERE wins (so "ok cancel" cancels, "yes use local" reroutes free);
+ *   - 'spend' is returned ONLY for an UNAMBIGUOUS affirmation — the whole reply IS an approval token and
+ *     nothing else (so "ok thanks", "yes but wait", or an unrelated "ok …" never trigger a paid call).
+ * Returns 'spend' | 'local' | 'cancel' | null (unclear → the caller re-asks, never spends).
+ */
 export function interpretReply(text) {
-  const t = String(text || '');
-  if (REPLY.cancel.test(t)) return 'cancel';
-  if (REPLY.local.test(t)) return 'local';
-  if (REPLY.spend.test(t)) return 'spend';
+  const t = String(text || '').trim().toLowerCase();
+  if (!t) return null;
+  if (/\b(cancel|stop|abort|nvm|never\s?mind|no|don'?t)\b/.test(t)) return 'cancel';
+  if (/\b(local|free|reroute|cheaper?)\b/.test(t)) return 'local';
+  if (/^(approve|approved|spend|proceed|pay|confirm|yes|y|ok|okay|go ahead|do it|sure)$/.test(t)) return 'spend';
   return null;
 }
 
@@ -66,8 +66,11 @@ export function replayHeaders(decision, token) {
 
 /**
  * The shared, channel-agnostic agent turn with the cost-approval loop. Every adapter's dispatch() calls
- * this so the 402 handshake behaves identically everywhere. State (the per-sender pending approval) lives
- * in the caller's `pending` Map; everything else is injected so this stays pure + unit-testable:
+ * this so the 402 handshake behaves identically everywhere. State (the pending approval) lives in the
+ * caller's `pending` Map; everything else is injected so this stays pure + unit-testable:
+ *   - key   → the pending-scope key: MUST identify the conversation, not just the user (e.g.
+ *             "user@channel" / "user@room" / the DM number). A 402 raised in one channel must NOT be
+ *             consumable by the same user's next message in a DIFFERENT channel.
  *   - askAgent(text, headers?) → a reply string, OR { approval } when the gateway answered 402.
  *   - send(text) → deliver a message on the channel.   - chunk(text) → split a long reply.
  *   - typing?() → optional "typing…" indicator before a real answer.
@@ -76,16 +79,16 @@ export function replayHeaders(decision, token) {
  * message ("approve"/"local"/"cancel") replays the ORIGINAL request with the right header (single-use
  * token for spend) or cancels. Deny-by-default: an unrecognized reply re-asks without spending.
  */
-export async function dispatchAgentTurn({ pending, sender, text, askAgent, send, chunk, typing }) {
-  const pend = pending.get(sender);
+export async function dispatchAgentTurn({ pending, key, text, askAgent, send, chunk, typing }) {
+  const pend = pending.get(key);
 
-  // (A) the user is answering a prior approval prompt
+  // (A) the user is answering a prior approval prompt (in THIS conversation)
   if (pend) {
     const choice = interpretReply(text);
-    if (choice === 'cancel') { pending.delete(sender); await send('Okay — cancelled. Nothing was sent to a paid model.'); return; }
+    if (choice === 'cancel') { pending.delete(key); await send('Okay — cancelled. Nothing was sent to a paid model.'); return; }
     if (!choice) { await send('Please reply “approve” to spend, “local” for a free local model, or “cancel”.'); return; } // keep pending
     const headers = replayHeaders(choice, pend.token);
-    pending.delete(sender);
+    pending.delete(key);
     if (!headers) { await send('That approval expired — please send your request again.'); return; }
     if (typing) await typing();
     const result = await askAgent(pend.text, headers);
@@ -98,7 +101,7 @@ export async function dispatchAgentTurn({ pending, sender, text, askAgent, send,
   if (typing) await typing();
   const result = await askAgent(text);
   if (result && result.approval) {
-    pending.set(sender, { text, token: result.approval.token });
+    pending.set(key, { text, token: result.approval.token });
     await send(formatApprovalPrompt(result.approval));
     return;
   }

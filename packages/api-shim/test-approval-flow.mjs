@@ -19,14 +19,19 @@ ok(parseApprovalResponse(200, { choices: [{ message: { content: 'hi' } }] }).app
 ok(parseApprovalResponse(402, { error: 'something else' }).approvalRequired === false, 'a 402 that is not approval_required is ignored');
 ok(parseApprovalResponse(402, { error: 'approval_required' }).token === null, 'a missing token parses as null (caller must not replay spend without one)');
 
-console.log('\n=== interpretReply: cancel/local/spend, deny-by-default on unclear ===');
+console.log('\n=== interpretReply: DENY-BY-DEFAULT toward spend (Codex #36) ===');
 ok(interpretReply('approve') === 'spend', '“approve” → spend');
-ok(interpretReply('yes please') === 'spend', '“yes …” → spend');
+ok(interpretReply('ok') === 'spend' && interpretReply('yes') === 'spend', 'bare “ok”/“yes” → spend (exact affirmation)');
 ok(interpretReply('local') === 'local', '“local” → local');
 ok(interpretReply('use local model') === 'local', '“use local” → local');
 ok(interpretReply('cancel') === 'cancel', '“cancel” → cancel');
 ok(interpretReply('no thanks') === 'cancel', '“no thanks” → cancel');
-ok(interpretReply('what is the weather') === null, 'an unrelated reply → null (not treated as approval)');
+// the ambiguous/mixed replies that used to spend:
+ok(interpretReply('ok cancel') === 'cancel', '“ok cancel” → cancel (cancel wins, NEVER spends)');
+ok(interpretReply('yes use local') === 'local', '“yes use local” → local (local wins, no spend)');
+ok(interpretReply('ok thanks') === null, '“ok thanks” → null (not an exact affirmation → re-ask, no spend)');
+ok(interpretReply('yes but wait') === null, '“yes but wait” → null (re-ask, no spend)');
+ok(interpretReply('what is the weather') === null, 'an unrelated reply → null');
 ok(interpretReply('') === null, 'empty → null');
 
 console.log('\n=== formatApprovalPrompt: lists only the offered options, names cost + model ===');
@@ -48,37 +53,46 @@ const makeAskAgent = () => { const calls = []; return { calls, fn: async (text, 
 
 { // (1) fresh paid request → stores pending + asks the human (no spend yet)
   const pending = new Map(); const sent = []; const aa = makeAskAgent();
-  await dispatchAgentTurn({ pending, sender: 'u1', text: 'write a plan', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
+  await dispatchAgentTurn({ pending, key: 'u1@chanA', text: 'write a plan', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
   ok(aa.calls.length === 1 && !aa.calls[0].headers, 'fresh request calls the agent WITHOUT replay headers (no forced spend)');
-  ok(pending.has('u1') && pending.get('u1').token === 'tok-abc123', 'the pending approval (with its token) is stored for the user');
+  ok(pending.has('u1@chanA') && pending.get('u1@chanA').token === 'tok-abc123', 'the pending approval (with its token) is stored for the user');
   ok(sent.length === 1 && /paid model/.test(sent[0]), 'the user is asked to approve, not silently charged');
 }
 { // (2) user replies "approve" → replays with the spend token → gets the answer
-  const pending = new Map([['u1', { text: 'write a plan', token: 'tok-abc123' }]]); const sent = []; const aa = makeAskAgent();
-  await dispatchAgentTurn({ pending, sender: 'u1', text: 'approve', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
+  const pending = new Map([['u1@chanA', { text: 'write a plan', token: 'tok-abc123' }]]); const sent = []; const aa = makeAskAgent();
+  await dispatchAgentTurn({ pending, key: 'u1@chanA', text: 'approve', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
   ok(aa.calls.length === 1 && aa.calls[0].headers?.['x-stratos-approval'] === 'tok-abc123' && aa.calls[0].text === 'write a plan', 'approve → replays the ORIGINAL prompt with the single-use spend token');
-  ok(sent.length === 1 && sent[0] === 'answered: write a plan' && !pending.has('u1'), 'the real answer is delivered + pending cleared');
+  ok(sent.length === 1 && sent[0] === 'answered: write a plan' && !pending.has('u1@chanA'), 'the real answer is delivered + pending cleared');
 }
 { // (3) user replies "local" → reroutes to a free local model (no token needed)
-  const pending = new Map([['u1', { text: 'write a plan', token: 'tok-abc123' }]]); const sent = []; const aa = makeAskAgent();
-  await dispatchAgentTurn({ pending, sender: 'u1', text: 'local', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
+  const pending = new Map([['u1@chanA', { text: 'write a plan', token: 'tok-abc123' }]]); const sent = []; const aa = makeAskAgent();
+  await dispatchAgentTurn({ pending, key: 'u1@chanA', text: 'local', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
   ok(aa.calls[0].headers?.['x-stratos-route'] === 'reroute-local' && !aa.calls[0].headers?.['x-stratos-approval'], 'local → reroute-local header, no spend token');
-  ok(sent[0] === 'answered: write a plan' && !pending.has('u1'), 'answered via local + pending cleared');
+  ok(sent[0] === 'answered: write a plan' && !pending.has('u1@chanA'), 'answered via local + pending cleared');
 }
 { // (4) user replies "cancel" → nothing sent to the agent, pending cleared
-  const pending = new Map([['u1', { text: 'write a plan', token: 'tok-abc123' }]]); const sent = []; const aa = makeAskAgent();
-  await dispatchAgentTurn({ pending, sender: 'u1', text: 'cancel', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
-  ok(aa.calls.length === 0 && !pending.has('u1') && /cancel/i.test(sent[0]), 'cancel → agent NOT called, pending cleared, user told');
+  const pending = new Map([['u1@chanA', { text: 'write a plan', token: 'tok-abc123' }]]); const sent = []; const aa = makeAskAgent();
+  await dispatchAgentTurn({ pending, key: 'u1@chanA', text: 'cancel', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
+  ok(aa.calls.length === 0 && !pending.has('u1@chanA') && /cancel/i.test(sent[0]), 'cancel → agent NOT called, pending cleared, user told');
 }
 { // (5) unrecognized reply → re-asks, keeps pending (deny-by-default, no spend)
-  const pending = new Map([['u1', { text: 'write a plan', token: 'tok-abc123' }]]); const sent = []; const aa = makeAskAgent();
-  await dispatchAgentTurn({ pending, sender: 'u1', text: 'maybe?', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
-  ok(aa.calls.length === 0 && pending.has('u1') && /approve.*local.*cancel/is.test(sent[0]), 'an unclear reply → re-asks, keeps pending, never spends');
+  const pending = new Map([['u1@chanA', { text: 'write a plan', token: 'tok-abc123' }]]); const sent = []; const aa = makeAskAgent();
+  await dispatchAgentTurn({ pending, key: 'u1@chanA', text: 'maybe?', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
+  ok(aa.calls.length === 0 && pending.has('u1@chanA') && /approve.*local.*cancel/is.test(sent[0]), 'an unclear reply → re-asks, keeps pending, never spends');
 }
 { // (6) a normal (free/local) request just answers — no approval involved
   const pending = new Map(); const sent = [];
-  await dispatchAgentTurn({ pending, sender: 'u1', text: 'hi', askAgent: async () => 'hello there', send: (t) => sent.push(t), chunk: (s) => [s] });
-  ok(sent.length === 1 && sent[0] === 'hello there' && !pending.has('u1'), 'a non-paid request answers directly, no approval prompt');
+  await dispatchAgentTurn({ pending, key: 'u1@chanA', text: 'hi', askAgent: async () => 'hello there', send: (t) => sent.push(t), chunk: (s) => [s] });
+  ok(sent.length === 1 && sent[0] === 'hello there' && !pending.has('u1@chanA'), 'a non-paid request answers directly, no approval prompt');
+}
+
+console.log('\n=== conversation isolation (Codex #36): a 402 in channel A is NOT consumable from channel B ===');
+{ // same USER, two conversations. The pending approval belongs to chanA; an "approve" in chanB must NOT replay it.
+  const pending = new Map([['u1@chanA', { text: 'paid prompt in A', token: 'tok-A' }]]); const sent = []; const aa = makeAskAgent();
+  await dispatchAgentTurn({ pending, key: 'u1@chanB', text: 'approve', askAgent: aa.fn, send: (t) => sent.push(t), chunk: (s) => [s] });
+  ok(!aa.calls.some((c) => c.text === 'paid prompt in A'), 'the chanA paid prompt is NEVER replayed from chanB');
+  ok(pending.has('u1@chanA') && pending.get('u1@chanA').token === 'tok-A', 'the chanA pending approval is untouched by chanB activity');
+  ok(pending.has('u1@chanB'), 'chanB gets its OWN independent pending state (approve was a fresh request there)');
 }
 
 console.log(`\n✅ ALL ${pass} approval-flow checks passed.`);

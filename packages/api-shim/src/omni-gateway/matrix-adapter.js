@@ -86,7 +86,8 @@ export class MatrixAdapter {
     const decision = this.shouldHandle(norm, botUserId);
     if (!decision.handle) { if (decision.refuse) await send(decision.reply); return decision; }
     await dispatchAgentTurn({
-      pending: this.pending, sender: String(norm.sender), text: decision.text,
+      // scope the pending approval to THIS conversation (user@room), not just the user
+      pending: this.pending, key: `${norm.sender}@${norm.roomId ?? 'dm'}`, text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send, chunk: MatrixAdapter.chunk,
     });
     return decision;

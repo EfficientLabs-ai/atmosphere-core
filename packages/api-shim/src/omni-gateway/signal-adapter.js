@@ -87,7 +87,8 @@ export class SignalAdapter {
     const decision = this.shouldHandle(envelope);
     if (!decision.handle) { if (decision.refuse) await send(decision.sender, decision.reply); return decision; }
     await dispatchAgentTurn({
-      pending: this.pending, sender: String(decision.sender), text: decision.text,
+      // Signal is 1:1 DMs — the sender number IS the conversation, so it's already conversation-scoped.
+      pending: this.pending, key: String(decision.sender), text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send: (t) => send(decision.sender, t), chunk: SignalAdapter.chunk,
     });
     return decision;

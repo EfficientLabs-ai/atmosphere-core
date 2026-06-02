@@ -86,7 +86,8 @@ export class SlackAdapter {
     const decision = this.shouldHandle(norm, botUserId);
     if (!decision.handle) { if (decision.refuse) await say(decision.reply); return decision; }
     await dispatchAgentTurn({
-      pending: this.pending, sender: String(norm.userId), text: decision.text,
+      // scope the pending approval to THIS conversation (user@channel), not just the user
+      pending: this.pending, key: `${norm.userId}@${norm.channel ?? 'dm'}`, text: decision.text,
       askAgent: (t, h) => this.askAgent(t, h), send: say, chunk: SlackAdapter.chunk,
     });
     return decision;
@@ -108,7 +109,7 @@ export class SlackAdapter {
       try {
         const norm = {
           userId: message.user, botId: message.bot_id, subtype: message.subtype, text: message.text,
-          isDM: message.channel_type === 'im',
+          channel: message.channel, isDM: message.channel_type === 'im',
           mentionedBot: botUserId ? String(message.text || '').includes(`<@${botUserId}>`) : false,
         };
         await this.dispatch(norm, botUserId, (t) => say(t));

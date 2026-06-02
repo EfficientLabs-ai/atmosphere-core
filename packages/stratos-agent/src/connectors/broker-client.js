@@ -11,13 +11,17 @@ import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import url from 'node:url';
 import path from 'node:path';
+import { safeChildEnv } from './safe-env.js';
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 
 export function startBroker({ registryPath, nodeBin = process.execPath, idleMs = 0 } = {}) {
   const child = spawn(nodeBin, [path.join(HERE, 'broker-process.js')], {
     stdio: ['pipe', 'pipe', 'inherit'], // stderr inherited for diagnostics; never parsed into results
-    env: { ...process.env, STRATOS_BROKER_REGISTRY: registryPath || '' },
+    // SECRET ISOLATION (Gap 3, #35): the broker resolves credentials from the VAULT (via its master-key
+    // file), so it does NOT need — and must not inherit — the agent's secrets in env. Minimal, secret-free
+    // env + just the registry path. (Was `{ ...process.env, … }`.)
+    env: safeChildEnv({ STRATOS_BROKER_REGISTRY: registryPath || '' }),
   });
 
   let capToken = null;

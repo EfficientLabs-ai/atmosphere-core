@@ -1,6 +1,11 @@
 import crypto from 'node:crypto';
 import { queryCognitiveSkill, queryAmbientMemory } from '../../stratos-agent/src/memory/vector-bank.js';
 
+// Fast on-device default. A 2B model is ~2x faster than qwen2.5:7b on CPU-only
+// hosts (the common case); genuinely complex prompts still route to a frontier
+// model. Override with LOCAL_MODEL_DEFAULT (e.g. gemma2:9b / qwen2.5:7b on GPU boxes).
+const LOCAL_FAST_MODEL = process.env.LOCAL_MODEL_DEFAULT || 'gemma2:2b';
+
 /**
  * TaskClassifierRouter: Advanced context-aware intelligence classifier
  * that automatically categorizes incoming developer prompts into either
@@ -28,7 +33,7 @@ export class TaskClassifierRouter {
       return {
         decision: 'local',
         reason: 'Explicit manual route directive "/force-local" detected.',
-        targetModel: 'qwen2.5:7b'
+        targetModel: LOCAL_FAST_MODEL
       };
     }
     if (query.includes('/force-cloud') || query.includes('/cloud')) {
@@ -50,7 +55,7 @@ export class TaskClassifierRouter {
       return {
         decision: 'local',
         reason: `Explicit local model target "${model}" requested.`,
-        targetModel: 'qwen2.5:7b'
+        targetModel: LOCAL_FAST_MODEL
       };
     }
 
@@ -60,7 +65,7 @@ export class TaskClassifierRouter {
       return {
         decision: 'local',
         reason: 'Simple factual coding query, greeting, or sovereign system check detected.',
-        targetModel: 'qwen2.5:7b'
+        targetModel: LOCAL_FAST_MODEL
       };
     }
 
@@ -80,7 +85,7 @@ export class TaskClassifierRouter {
       return {
         decision: 'local',
         reason: 'High-confidence historical matches found inside LanceDB vector memory. Resolving via context-augmented RAG.',
-        targetModel: 'qwen2.5:7b'
+        targetModel: LOCAL_FAST_MODEL
       };
     }
 

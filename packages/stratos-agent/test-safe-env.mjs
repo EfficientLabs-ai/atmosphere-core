@@ -29,6 +29,7 @@ for (const k of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'S
   ok(!(k in e), `${k} is NOT inherited by the child`);
 }
 ok(!JSON.stringify(e).includes('SECRET'), 'no secret material at all in the child env');
+ok(!('NODE_OPTIONS' in safeChildEnv({}, { ...fakeEnv, NODE_OPTIONS: '--require /tmp/evil.js' })), 'NODE_OPTIONS is STRIPPED (a --require/--import code-exec + secret-repopulation vector)');
 
 console.log('\n=== explicit extras are applied (connector env + one scoped auth/registry var) ===');
 const e2 = safeChildEnv({ STRATOS_BROKER_REGISTRY: '/reg.json', MCP_AUTH_TOKEN: 'scoped-bearer' }, fakeEnv);

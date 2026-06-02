@@ -38,9 +38,16 @@ const PROXY_VARS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'A
 // Non-secret Stratos config the broker/vault need to locate their on-disk files (paths, not credentials).
 const STRATOS_NONSECRET = ['STRATOS_VAULT_DIR', 'STRATOS_PROFILE_DIR'];
 
-/** Remove embedded credentials (scheme://USER:PASS@host → scheme://host) so proxy creds never leak. */
+/**
+ * Remove embedded credentials from a proxy value so they never leak to a sidecar. Handles BOTH forms:
+ *   scheme://user:pass@host:port → scheme://host:port   (URL form)
+ *   user:pass@host:port          → host:port            (scheme-less form some tools accept)
+ */
 export function stripProxyCreds(v) {
-  return String(v).replace(/^([a-z][a-z0-9+.\-]*:\/\/)[^/@]*@/i, '$1');
+  const s = String(v);
+  const noSchemeCreds = s.replace(/^([a-z][a-z0-9+.\-]*:\/\/)[^/@]*@/i, '$1'); // scheme://userinfo@ → scheme://
+  if (noSchemeCreds !== s) return noSchemeCreds;
+  return s.replace(/^[^/@]*@/, ''); // scheme-less leading userinfo@ → (gone); no '@' before a path → unchanged
 }
 
 /** A minimal, secret-free base env + the caller's explicit additions. */

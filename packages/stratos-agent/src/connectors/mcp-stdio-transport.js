@@ -10,13 +10,21 @@
  *  - stderr is captured but NEVER forwarded into tool content (keeps server diagnostics out of the model).
  */
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { safeChildEnv } from './safe-env.js';
 
 export function createStdioTransport({ command, args = [], env = {}, auth = null, cwd } = {}) {
   if (!command) throw new Error('stdio transport requires a pinned command');
-  // SECRET ISOLATION (Gap 3, #35): an MCP sidecar is an UNTRUSTED third-party process — it must NOT inherit
-  // the agent's secrets. Build a minimal, secret-free env (OS essentials + non-secret Stratos paths) plus
-  // ONLY the connector's declared env, then inject the single scoped auth var. (Was `{...process.env,...}`.)
+  // SECRET ISOLATION (Gap 3, #35): the command MUST be an ABSOLUTE path. A bare name (e.g. `node`) is
+  // resolved against PATH at spawn time, so a poisoned PATH could swap in a different binary that captures
+  // the injected connector token. Requiring an absolute path makes the pinned command authoritative and
+  // PATH irrelevant to WHICH binary launches. (Pair with the minimal secret-free env below.)
+  if (!path.isAbsolute(command)) {
+    throw new Error(`stdio transport requires an ABSOLUTE command path (got "${command}") — pin the full path so PATH cannot redirect it`);
+  }
+  // An MCP sidecar is an UNTRUSTED third-party process — it must NOT inherit the agent's secrets. Build a
+  // minimal, secret-free env (OS essentials + non-secret Stratos paths) plus ONLY the connector's declared
+  // env, then inject the single scoped auth var. (Was `{...process.env,...}`.)
   const childEnv = safeChildEnv(env);
   if (auth && auth.value) childEnv[auth.envVar || 'MCP_AUTH_TOKEN'] = auth.value;
 

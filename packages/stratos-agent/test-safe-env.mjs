@@ -40,11 +40,24 @@ ok(!('OPENAI_API_KEY' in e2), '…but still no inherited secrets');
 console.log('\n=== networking/TLS + cross-platform home vars pass through (real broker/sidecar needs them) ===');
 const e3 = safeChildEnv({}, { ...fakeEnv, HTTPS_PROXY: 'http://proxy:8080', NODE_EXTRA_CA_CERTS: '/ca.pem', USERPROFILE: 'C:\\\\Users\\\\neo' });
 ok(e3.HTTPS_PROXY === 'http://proxy:8080' && e3.NODE_EXTRA_CA_CERTS === '/ca.pem', 'proxy + custom CA bundle are kept (non-secret runtime config)');
-ok(stripProxyCreds('http://user:s3cr3t@proxy:8080') === 'http://proxy:8080', 'embedded proxy CREDENTIALS are stripped from a proxy URL');
-ok(stripProxyCreds('http://proxy:8080') === 'http://proxy:8080' && stripProxyCreds('proxy:8080') === 'proxy:8080', 'a proxy URL without creds is unchanged');
+ok(stripProxyCreds('http://user:s3cr3t@proxy:8080') === 'http://proxy:8080', 'embedded proxy CREDENTIALS are stripped from a scheme://… proxy URL');
+ok(stripProxyCreds('user:pass@proxy:3128') === 'proxy:3128', 'embedded creds are stripped from a SCHEME-LESS proxy value too');
+ok(stripProxyCreds('http://proxy:8080') === 'http://proxy:8080' && stripProxyCreds('proxy:8080') === 'proxy:8080', 'a proxy value without creds is unchanged');
 const e4 = safeChildEnv({}, { ...fakeEnv, HTTP_PROXY: 'http://bob:hunter2@corp-proxy:3128' });
 ok(e4.HTTP_PROXY === 'http://corp-proxy:3128' && !JSON.stringify(e4).includes('hunter2'), 'safeChildEnv passes the proxy host but NOT the embedded password');
 ok(e3.USERPROFILE === 'C:\\\\Users\\\\neo', 'Windows USERPROFILE is kept (so os.homedir() / the default vault path still resolves)');
+
+console.log('\n=== a sidecar command MUST be an absolute path (so a poisoned PATH cannot swap the binary) ===');
+{
+  const { createStdioTransport } = await import('./src/connectors/mcp-stdio-transport.js');
+  let threw = false;
+  try { createStdioTransport({ command: 'node', args: [] }); } catch { threw = true; }
+  ok(threw, 'a BARE command (e.g. "node") is REJECTED — must be pinned to an absolute path');
+  // an absolute command is accepted (process.execPath); close it immediately so we don't leak a child
+  const tt = createStdioTransport({ command: process.execPath, args: ['-e', 'setInterval(()=>{},1e9)'] });
+  ok(typeof tt.close === 'function', 'an ABSOLUTE command path is accepted');
+  tt.close();
+}
 
 console.log('\n=== REAL spawn boundary: a child spawned via createStdioTransport CANNOT see the secret ===');
 {

@@ -244,7 +244,7 @@ async function connectWizard() {
   console.log(banner());
   console.log(box([`${C.bold}Onboard a connector / MCP server${C.x}`, `${C.d}credential → encrypted vault · only an opaque handle is stored${C.x}`]));
   const name = (await ask(`  ${C.b}→${C.x} Connector name ${C.d}(e.g. github)${C.x}: `)).trim();
-  const command = (await ask(`  ${C.b}→${C.x} Pinned MCP sidecar command ${C.d}(e.g. node)${C.x}: `)).trim();
+  const command = (await ask(`  ${C.b}→${C.x} Pinned MCP sidecar command ${C.d}(ABSOLUTE path, e.g. /usr/bin/node — a bare name is rejected so PATH can't redirect it)${C.x}: `)).trim();
   const argsRaw = (await ask(`  ${C.b}→${C.x} Sidecar args ${C.d}(space-separated, e.g. ./gh-mcp.js — optional)${C.x}: `)).trim();
   const authEnvVar = (await ask(`  ${C.b}→${C.x} Auth env var the sidecar reads ${C.d}[MCP_AUTH_TOKEN]${C.x}: `)).trim() || 'MCP_AUTH_TOKEN';
   const secret = (await askSecret(`  ${C.b}→${C.x} Credential/token ${C.d}(hidden — stored encrypted in the vault; leave blank for none)${C.x}: `)).trim();

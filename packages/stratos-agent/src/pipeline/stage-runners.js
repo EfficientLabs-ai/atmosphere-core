@@ -8,10 +8,15 @@ import fetch from 'node-fetch';
 
 /** Default model runner — calls the local OpenAI-compatible endpoint (identity + Tier-0 window apply). */
 export function defaultModelRunner({ endpoint = `http://127.0.0.1:${process.env.PORT || 4099}/v1/chat/completions`, fallbackModel = 'qwen2.5:7b' } = {}) {
+  // Only attach the gateway secret when the destination is the LOCAL shim — never leak it to a
+  // remote endpoint a caller may point this runner at (Codex review of F2).
+  let _loopback = false;
+  try { const _h = new URL(endpoint).hostname.replace(/^\[|\]$/g, ''); _loopback = _h === '127.0.0.1' || _h === 'localhost' || _h === '::1'; } catch { /* malformed endpoint → no secret */ }
+  const _auth = (_loopback && process.env.ATMOS_GATEWAY_SECRET) ? { 'x-atmos-gateway': process.env.ATMOS_GATEWAY_SECRET } : {};
   return async ({ system, user, model }) => {
     const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ..._auth },
       body: JSON.stringify({
         model: model && model !== 'default' ? model : fallbackModel,
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],

@@ -14,6 +14,7 @@ import { languageGate } from './src/language-gateway.js';
 import { complianceApprovalGate } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
+import { requireGatewaySecret } from './src/gateway-auth.js';
 
 const localInference = new LocalInferenceEngine();
 const taskRouter = new TaskClassifierRouter({ verbose: true });
@@ -84,7 +85,8 @@ const reasoningBank = new ReasoningBank({
 });
 
 // Middleware
-app.use(cors());
+// CORS scoped via ATMOS_GATEWAY_ORIGINS (comma-separated); defaults to reflect-origin.
+app.use(cors({ origin: process.env.ATMOS_GATEWAY_ORIGINS ? process.env.ATMOS_GATEWAY_ORIGINS.split(',').map((s) => s.trim()) : true }));
 app.use(bodyParser.json());
 
 // Fail-closed helper for when the compliance gate THROWS on the BYOK-capable route (/v1/chat/completions).
@@ -219,7 +221,7 @@ async function harvestTelemetry(prompt, responseText) {
 }
 
 // Router interceptor for OpenAI Chat Completions
-app.post('/v1/chat/completions', async (req, res) => {
+app.post('/v1/chat/completions', requireGatewaySecret, async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
   // Cost/ToS gate first — may answer a 402 and return (fail-CLOSED for spend on any gate error).
@@ -290,6 +292,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
   try {
     const proxyHeaders = { ...req.headers };
+    delete proxyHeaders['x-atmos-gateway']; // never forward the gateway secret upstream
     delete proxyHeaders.host;
     delete proxyHeaders['content-length'];
     proxyHeaders['content-type'] = 'application/json';
@@ -383,7 +386,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 });
 
 // Router interceptor for Anthropic Messages
-app.post('/v1/messages', async (req, res) => {
+app.post('/v1/messages', requireGatewaySecret, async (req, res) => {
   logRequest(req, STRATOS_AGENT_URL);
 
   // NO cost/ToS gate here — by design. Unlike /v1/chat/completions, this route NEVER performs a paid BYOK
@@ -431,6 +434,7 @@ app.post('/v1/messages', async (req, res) => {
 
   try {
     const proxyHeaders = { ...req.headers };
+    delete proxyHeaders['x-atmos-gateway']; // never forward the gateway secret upstream
     delete proxyHeaders.host;
     delete proxyHeaders['content-length'];
     proxyHeaders['content-type'] = 'application/json';
@@ -521,7 +525,7 @@ app.post('/v1/messages', async (req, res) => {
 });
 
 // Anthropic's Model Context Protocol (MCP) JSON-RPC 2.0 Endpoint
-app.post('/mcp', async (req, res) => {
+app.post('/mcp', requireGatewaySecret, async (req, res) => {
   const { jsonrpc, method, params, id } = req.body;
 
   // SECURITY (Gap 2, #34): the MCP surface drives powerful local tools — defense-in-depth, reject any

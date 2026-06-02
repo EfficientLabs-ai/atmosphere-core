@@ -15,7 +15,7 @@
 - **Signal adapter `spawn(cliPath, [args])`** — array args, no shell. Safe.
 
 ## ⚠️ Findings to fix
-### F1 — Shell-string `exec()` for ffmpeg (shell-injection class) · LOW–MED
+### F1 — Shell-string `exec()` for ffmpeg (shell-injection class) · LOW–MED · ✅ FIXED (PR #52)
 `packages/api-shim/src/telegram-bridge.js:272` (and pattern at `:332`):
 ```js
 exec(`ffmpeg -y -i "${oggPath}" -ac 1 -ar 16000 "${wavPath}"`, ...)
@@ -27,12 +27,17 @@ exec(`ffmpeg -y -i "${oggPath}" -ac 1 -ar 16000 "${wavPath}"`, ...)
 - **Fix:** replace both with `execFile('ffmpeg', ['-y','-i',oggPath,'-ac','1','-ar','16000',wavPath], cb)`.
   Eliminates the entire shell-injection class. Trivial, no behavior change.
 
-### F2 — Gateway has no per-request auth; relies on network perimeter · MED (defense-in-depth)
-`server.js`: `app.use(cors())` (all origins) and the `/v1/chat/completions` + `/v1/messages` routes
-have no bearer/owner check — the gateway trusts that it's only reachable over Tailscale/localhost.
-- If *anything* on the Tailnet is compromised, the spend-capable gateway is open.
-- **Fix options:** bind explicitly to 127.0.0.1/Tailscale iface only (verify), add a shared-secret
-  header check on spend routes, and scope CORS to known origins. Confirm the listen address.
+### F2 — Gateway had no per-request auth · LOW–MED (local defense-in-depth) · ✅ FIXED
+**Severity corrected:** the gateway already binds to `127.0.0.1` (`app.listen(PORT, '127.0.0.1')`) —
+it is **not** exposed on the Tailnet. So the real risk is another local process/user on the host
+driving spend or the `/mcp` browser, not a Tailnet-wide exposure.
+- **Fix (this PR):** opt-in shared-secret auth (`gateway-auth.js`). When `ATMOS_GATEWAY_SECRET` is
+  set, `/v1/chat/completions`, `/v1/messages`, and `/mcp` require a matching `x-atmos-gateway`
+  header (timing-safe). All first-party callers (Telegram bridge ×3, the 4 omni-gateway adapters,
+  the pipeline model-runner) attach it automatically. Unset = prior behavior + a one-time warning,
+  so enabling it is non-breaking. CORS is now scoped via `ATMOS_GATEWAY_ORIGINS`.
+- **Operator action:** set `ATMOS_GATEWAY_SECRET` in the daemon env (and the same value is read by
+  the in-process callers) to turn enforcement on.
 
 ### F3 — `atmos-desktop` `spawn('cmd.exe', ['/c', cmd])` · UNREVIEWED (Windows)
 `sensory-ingestion.js:95`, `sensory/conversational-audio.js:72` pass a built `cmd` string to
@@ -41,11 +46,37 @@ have no bearer/owner check — the gateway trusts that it's only reachable over 
 
 ## Pass-2 backlog (not yet audited)
 - `/mcp` endpoint post-patch (confirm it rejects untrusted actions, not just the old path)
-- WASI sandbox boundaries (`wasi-sandbox.js`) — env passthrough, preopens, network stub
-- Vault memory hygiene (`vault-host.js`) — decrypted-seed wipe, IV/tag zeroing
-- Cross-channel context bleed (`vector-bank.js`) — isolatedContextTag actually filtered on retrieval
 - Broker → live gateway path; the 402 write-approval loop integrity
 - Telegram markdown→HTML entity escaping (injection into `parse_mode:HTML`)
+
+## Pass 2 results (2026-06-03) — most prior gaps already remediated ✅
+- **`/mcp` RCE — confirmed remediated.** `action` now runs through a safe instruction DSL
+  (navigate/click/type/wait, no code compiled/evaluated). ✅ *But* `/mcp` is still
+  **unauthenticated** and drives a browser harness → folds into **F2** (auth + SSRF-guard it).
+- **Context-bleed (`vector-bank.js`) — remediated.** `queryAmbientMemory` filters
+  `where tags = '<tag>'` (quote-escaped) for hard channel isolation. **Residual (LOW):** the tag
+  param defaults to `null` → an omitting call-site silently disables isolation. *Action: audit
+  call-sites; consider making the tag required.*
+- **WASI sandbox (`wasi-sandbox.js`) — solid.** env is deny-by-default allowlist (no secret
+  passthrough), preopens deny-by-default (mapping bug fixed), network deny-by-default, guest memory
+  zeroed post-run. **Residual:** verify `job-policy.js` sanitizes `allowedPaths` against `..`/abs
+  escapes before they reach the sandbox.
+- **Vault (`vault-host.js`) — solid.** Decrypted seed wiped in `finally`; passcode forced to mutable
+  Buffer (no V8 string-table leak); `encryptedData.fill(0)` covers IV/tag/ciphertext views; enclave
+  CapSet=∅; real ML-DSA-65. **Note (correctness, not security):** no-WASM fallback generates a
+  *random* identity instead of deriving from the seed → identity not reproducible in fallback mode.
+
+### Standing priority = F2 (gateway/`/mcp` per-request auth)
+The one real hardening item left from this audit: the spend-capable gateway + `/mcp` rely on the
+Tailscale perimeter, no per-request auth. Recommend: confirm bind address (localhost/Tailscale iface
+only), add a shared-secret header on spend + `/mcp` routes, scope CORS. Needs care not to break the
+local Telegram bridge / desktop clients that call it.
+
+## Still not audited (pass 3)
+- F3 `atmos-desktop` `cmd.exe /c` string construction (Windows)
+- Broker → live gateway 402 write-approval loop integrity
+- Telegram markdown→HTML entity escaping (`parse_mode:HTML`)
+- `job-policy.js` path sanitizer (the upstream guard for WASI preopens)
 
 ## Method note
 Codex review works here only via **inline-context** (`codex exec` hangs trying to walk the FS).

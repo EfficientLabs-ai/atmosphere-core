@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fetch from 'node-fetch';
 import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
+import { parseApprovalResponse, dispatchAgentTurn, convKey } from './approval-flow.js';
 
 /**
  * DiscordAdapter — a REAL two-way Discord channel for StratosAgent (was a stub with a mock token).
@@ -27,6 +28,7 @@ export class DiscordAdapter {
     this.model = options.model || process.env.STRATOS_MODEL || 'local';
     this._fetch = options.fetch || fetch; // injectable for tests
     this.client = null;
+    this.pending = new Map(); // sender → { text, token } : a cost-approval awaiting the user's reply
   }
 
   /**
@@ -49,14 +51,20 @@ export class DiscordAdapter {
     return { handle: true, text };
   }
 
-  /** Route a prompt to the local gateway and return the reply text. */
-  async askAgent(text) {
+  /**
+   * Route a prompt to the local gateway. Returns the reply string, OR { approval } when the gateway
+   * answers a 402 cost-approval gate (so dispatch can run the human-in-the-loop handshake). `extraHeaders`
+   * carries the replay headers (x-stratos-route / x-stratos-approval) when the user has approved.
+   */
+  async askAgent(text, extraHeaders = {}) {
     const res = await this._fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...extraHeaders },
       body: JSON.stringify({ model: this.model, messages: [{ role: 'user', content: text }] }),
     });
     const data = await res.json().catch(() => ({}));
+    const approval = parseApprovalResponse(res.status, data);
+    if (approval.approvalRequired) return { approval };
     return data?.choices?.[0]?.message?.content || '(no response from the agent)';
   }
 
@@ -82,9 +90,11 @@ export class DiscordAdapter {
   async dispatch(norm, botUserId, send, { typing } = {}) {
     const decision = this.shouldHandle(norm, botUserId);
     if (!decision.handle) { if (decision.refuse) await send(decision.reply); return decision; }
-    if (typing) await typing();
-    const reply = await this.askAgent(decision.text);
-    for (const part of DiscordAdapter.chunk(reply)) await send(part);
+    await dispatchAgentTurn({
+      // scope the pending approval to THIS conversation (user@channel), not just the user
+      pending: this.pending, key: convKey(norm.authorId, norm.channelId, norm.isDM), text: decision.text,
+      askAgent: (t, h) => this.askAgent(t, h), send, chunk: DiscordAdapter.chunk, typing,
+    });
     return decision;
   }
 
@@ -106,7 +116,7 @@ export class DiscordAdapter {
     this.client.on('messageCreate', async (m) => {
       try {
         const norm = {
-          authorId: m.author.id, authorBot: m.author.bot, content: m.content,
+          authorId: m.author.id, authorBot: m.author.bot, content: m.content, channelId: m.channel?.id,
           isDM: !m.guild, mentionedBot: this.client.user ? m.mentions.has(this.client.user.id) : false,
         };
         await this.dispatch(norm, this.client.user?.id,

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fetch from 'node-fetch';
 import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
+import { parseApprovalResponse, dispatchAgentTurn, convKey } from './approval-flow.js';
 
 /**
  * SlackAdapter — a REAL two-way Slack channel for StratosAgent (was a signature-verifier stub).
@@ -30,6 +31,7 @@ export class SlackAdapter {
     this._fetch = options.fetch || fetch; // injectable for tests
     this.app = null;
     this.botUserId = null;
+    this.pending = new Map(); // sender → { text, token } : a cost-approval awaiting the user's reply
   }
 
   /**
@@ -49,14 +51,16 @@ export class SlackAdapter {
     return { handle: true, text };
   }
 
-  /** Route a prompt to the local gateway and return the reply text. */
-  async askAgent(text) {
+  /** Route a prompt to the local gateway. Returns the reply string, OR { approval } on a 402 cost gate. */
+  async askAgent(text, extraHeaders = {}) {
     const res = await this._fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...extraHeaders },
       body: JSON.stringify({ model: this.model, messages: [{ role: 'user', content: text }] }),
     });
     const data = await res.json().catch(() => ({}));
+    const approval = parseApprovalResponse(res.status, data);
+    if (approval.approvalRequired) return { approval };
     return data?.choices?.[0]?.message?.content || '(no response from the agent)';
   }
 
@@ -81,8 +85,13 @@ export class SlackAdapter {
   async dispatch(norm, botUserId, say) {
     const decision = this.shouldHandle(norm, botUserId);
     if (!decision.handle) { if (decision.refuse) await say(decision.reply); return decision; }
-    const reply = await this.askAgent(decision.text);
-    for (const part of SlackAdapter.chunk(reply)) await say(part);
+    // a Slack channel can host many THREADS; the conversation is the thread when threaded, else the
+    // channel — so an approval in thread A can't be consumed from thread B of the same channel.
+    const convId = norm.thread_ts ? `${norm.channel}:${norm.thread_ts}` : norm.channel;
+    await dispatchAgentTurn({
+      pending: this.pending, key: convKey(norm.userId, convId, norm.isDM), text: decision.text,
+      askAgent: (t, h) => this.askAgent(t, h), send: say, chunk: SlackAdapter.chunk,
+    });
     return decision;
   }
 
@@ -102,7 +111,7 @@ export class SlackAdapter {
       try {
         const norm = {
           userId: message.user, botId: message.bot_id, subtype: message.subtype, text: message.text,
-          isDM: message.channel_type === 'im',
+          channel: message.channel, thread_ts: message.thread_ts, isDM: message.channel_type === 'im',
           mentionedBot: botUserId ? String(message.text || '').includes(`<@${botUserId}>`) : false,
         };
         await this.dispatch(norm, botUserId, (t) => say(t));

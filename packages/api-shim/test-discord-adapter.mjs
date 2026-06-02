@@ -65,4 +65,22 @@ ok((await empty.askAgent('x')) === '(no response from the agent)', 'a malformed 
 console.log('\n=== no token → start() is a safe no-op (dry-run) ===');
 ok((await new DiscordAdapter({ token: null, verbose: false }).start()) === false, 'start() with no token returns false, never throws');
 
+console.log('\n=== ADAPTER-LEVEL 402 cost-approval is scoped per CHANNEL (Codex #36) ===');
+{
+  const mk402 = (tok) => async () => ({ status: 402, json: async () => ({ error: 'approval_required', approvalToken: tok, options: ['proceed-spend'], reason: 'spend', wouldSpendOn: 'claude' }) });
+  const sent = [];
+  const msg = (chan, content) => ({ authorId: 'owner-1', channelId: chan, content, isDM: false, mentionedBot: true, authorBot: false });
+  const adp = new DiscordAdapter({ ownerId: 'owner-1', verbose: false, fetch: mk402('tokA') });
+  await adp.dispatch(msg('chanA', '<@999> do paid'), BOT, (t) => sent.push(t));
+  ok([...adp.pending.keys()].some((k) => k.includes('chanA')), 'pending is keyed to the channel (owner-1@chanA)');
+  let bReplay = 'unset';
+  adp._fetch = async (url, opts) => { bReplay = opts.headers?.['x-stratos-approval'] ?? null; return mk402('tokB')(); };
+  await adp.dispatch(msg('chanB', '<@999> approve'), BOT, (t) => sent.push(t));
+  ok(bReplay === null, 'an "approve" in channel B does NOT replay channel A\'s approval');
+  let aReplay = null;
+  adp._fetch = async (url, opts) => { aReplay = opts.headers?.['x-stratos-approval'] ?? null; return { status: 200, json: async () => ({ choices: [{ message: { content: 'done' } }] }) }; };
+  await adp.dispatch(msg('chanA', '<@999> approve'), BOT, (t) => sent.push(t));
+  ok(aReplay === 'tokA', 'an "approve" in channel A DOES replay channel A\'s token');
+}
+
 console.log(`\n✅ ALL ${pass} discord-adapter checks passed.`);

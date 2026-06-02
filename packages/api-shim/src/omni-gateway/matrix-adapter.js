@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { scanForSecrets, SECRET_REFUSAL } from '../secret-guard.js';
+import { parseApprovalResponse, dispatchAgentTurn, convKey } from './approval-flow.js';
 
 /**
  * MatrixAdapter — a REAL two-way Matrix channel for StratosAgent (new — Matrix had no adapter).
@@ -31,6 +32,7 @@ export class MatrixAdapter {
     this._fetch = options.fetch || fetch; // injectable for tests
     this.client = null;
     this.botUserId = null;
+    this.pending = new Map(); // sender → { text, token } : a cost-approval awaiting the user's reply
   }
 
   /**
@@ -49,14 +51,16 @@ export class MatrixAdapter {
     return { handle: true, text };
   }
 
-  /** Route a prompt to the local gateway and return the reply text. */
-  async askAgent(text) {
+  /** Route a prompt to the local gateway. Returns the reply string, OR { approval } on a 402 cost gate. */
+  async askAgent(text, extraHeaders = {}) {
     const res = await this._fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...extraHeaders },
       body: JSON.stringify({ model: this.model, messages: [{ role: 'user', content: text }] }),
     });
     const data = await res.json().catch(() => ({}));
+    const approval = parseApprovalResponse(res.status, data);
+    if (approval.approvalRequired) return { approval };
     return data?.choices?.[0]?.message?.content || '(no response from the agent)';
   }
 
@@ -81,8 +85,11 @@ export class MatrixAdapter {
   async dispatch(norm, botUserId, send) {
     const decision = this.shouldHandle(norm, botUserId);
     if (!decision.handle) { if (decision.refuse) await send(decision.reply); return decision; }
-    const reply = await this.askAgent(decision.text);
-    for (const part of MatrixAdapter.chunk(reply)) await send(part);
+    await dispatchAgentTurn({
+      // scope the pending approval to THIS conversation (user@room), not just the user
+      pending: this.pending, key: convKey(norm.sender, norm.roomId, false), text: decision.text,
+      askAgent: (t, h) => this.askAgent(t, h), send, chunk: MatrixAdapter.chunk,
+    });
     return decision;
   }
 

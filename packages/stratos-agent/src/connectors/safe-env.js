@@ -16,10 +16,12 @@
 // OS essentials a child genuinely needs to find/run its binary + resolve $HOME on every platform. NONE
 // of these are secrets. Windows home is USERPROFILE / HOMEDRIVE+HOMEPATH (os.homedir() reads them), so
 // the broker's default vault path keeps working there when STRATOS_VAULT_DIR is unset.
-// DELIBERATELY EXCLUDED: NODE_OPTIONS — it's a code-execution vector (`--require`/`--import`/`--env-file`)
-// that could preload code or repopulate secrets in an untrusted sidecar, so it must not be inherited.
+// DELIBERATELY EXCLUDED: NODE_OPTIONS and NODE_PATH. Both are code-loading vectors under a poisoned
+// parent env — NODE_OPTIONS preloads modules/repopulates secrets (`--require`/`--import`/`--env-file`),
+// NODE_PATH redirects module resolution to attacker-chosen dirs. A connector that genuinely needs either
+// must pass it EXPLICITLY via its declared `env` (the scoped `extra`), never inherit it by default.
 const OS_ESSENTIAL = ['PATH', 'Path', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP',
-  'TMP', 'SHELL', 'TERM', 'SystemRoot', 'WINDIR', 'COMSPEC', 'NODE_PATH',
+  'TMP', 'SHELL', 'TERM', 'SystemRoot', 'WINDIR', 'COMSPEC',
   'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA'];
 
 // Standard NON-secret networking/TLS config a networked sidecar needs (proxies + CA bundles). These are

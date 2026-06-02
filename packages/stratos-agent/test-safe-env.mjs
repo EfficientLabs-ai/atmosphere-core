@@ -21,7 +21,8 @@ const fakeEnv = {
 
 console.log('=== OS essentials + non-secret Stratos paths pass through ===');
 const e = safeChildEnv({}, fakeEnv);
-ok(e.PATH === '/usr/bin:/bin' && e.HOME === '/home/neo' && e.LANG === 'en_US.UTF-8' && e.NODE_PATH === '/x', 'PATH/HOME/LANG/NODE_PATH are kept (a child needs these to run)');
+ok(e.PATH === '/usr/bin:/bin' && e.HOME === '/home/neo' && e.LANG === 'en_US.UTF-8', 'PATH/HOME/LANG are kept (a child needs these to run)');
+ok(!('NODE_PATH' in e), 'NODE_PATH is STRIPPED (a module-resolution / code-loading vector — pass it per-connector if truly needed)');
 ok(e.STRATOS_VAULT_DIR === '/vault' && e.STRATOS_PROFILE_DIR === '/profile', 'non-secret Stratos path vars are kept (vault/profile locations)');
 
 console.log('\n=== every secret-shaped parent var is STRIPPED ===');

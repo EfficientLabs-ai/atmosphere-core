@@ -19,6 +19,7 @@ import * as realConfig from '../core/agent-config.js';
 import * as realConnectors from '../connectors/connector-registry.js';
 import { languageName } from '../core/languages.js';
 import { realProbes } from './probes.js';
+import { scaffoldWorkspace, validateWorkspace, ICM_LAYERS } from '../context/icm-workspace.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -71,11 +72,41 @@ function helpText() {
     `  ${C.g}connect${C.x}         Onboard a connector/MCP server (credential → vault, sidecar pinned)`,
     `  ${C.g}connectors${C.x}      List onboarded connectors (metadata only; secrets stay in the vault)`,
     `  ${C.g}mesh${C.x}            The Atmosphere mesh — status + how to join (optional)`,
+    `  ${C.g}icm${C.x}             Context workspace contract (folders over agents): init · validate`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
     `${C.d}Mesh (The Atmosphere) is an optional add-on — never required to use your agent.${C.x}`,
   ];
+}
+
+function cmdIcm(rest) {
+  const sub = (rest[0] || 'help').toLowerCase();
+  const dir = path.resolve(rest[1] || process.cwd());
+  if (sub === 'init') {
+    let r;
+    try { r = scaffoldWorkspace(dir); } catch (e) { return { code: 1, lines: [`${C.r}icm init failed: ${e.message}${C.x}`] }; }
+    const lines = [
+      `${C.B}ICM workspace${C.x} ${C.d}${dir}${C.x}  ${C.d}— folders over agents${C.x}`,
+      ...ICM_LAYERS.map((l) => `  ${C.b}${l.layer}${C.x} ${l.dir.padEnd(11)} ${C.d}${l.purpose}${l.live ? '' : C.y + ' (new)' + C.x}${C.x}`),
+      '',
+      r.created.length ? `${C.g}✓ created${C.x} ${r.created.join(', ')}` : `${C.d}nothing to create${C.x}`,
+      r.existed.length ? `${C.d}• kept   ${r.existed.join(', ')}${C.x}` : '',
+      '',
+      `${C.d}The folders are the contract — edit files, not the agent.${C.x}`,
+    ].filter(Boolean);
+    return { code: 0, lines };
+  }
+  if (sub === 'validate' || sub === 'check') {
+    const v = validateWorkspace(dir);
+    if (v.ok) return { code: 0, lines: [`${C.g}✓ valid ICM workspace${C.x} ${C.d}${dir}${C.x}`] };
+    return { code: 1, lines: [`${C.r}✗ incomplete ICM workspace${C.x} ${C.d}${dir}${C.x}`, ...v.missing.map((m) => `  ${C.y}missing${C.x} ${m}`), '', `${C.d}scaffold it with ${C.x}${C.g}stratos icm init${C.x}`] };
+  }
+  return { code: 0, lines: [
+    `${C.B}stratos icm${C.x} ${C.d}— the folders-over-agents context contract${C.x}`,
+    `  ${C.g}init${C.x} [dir]      Scaffold a 5-layer ICM workspace (idempotent; never overwrites)`,
+    `  ${C.g}validate${C.x} [dir]  Check a workspace is complete`,
+  ] };
 }
 
 function cmdConnectors(deps) {
@@ -249,7 +280,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'service', 'version', 'help'];
 
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
@@ -283,6 +314,7 @@ export async function run(argv = [], deps = {}) {
     case 'bind': return cmdBind(rest, d);
     case 'connectors': return cmdConnectors(d);
     case 'mesh': return cmdMesh(d);
+    case 'icm': return cmdIcm(rest);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

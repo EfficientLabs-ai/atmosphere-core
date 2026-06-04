@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { GsiCompiler, parseCustomSection } from '../../gsi-compiler.js';
+import { parseCapabilities, assertComputeAllowed, assertStepAllowed } from '../security/capability-gate.js';
 
 /**
  * SkillExecutor: loads a compiled .wasm skill, VERIFIES its post-quantum seal before
@@ -23,6 +24,10 @@ export class SkillExecutor {
     this.actionExecutor = options.actionExecutor || null; // async (step) => result
     this.verbose = options.verbose !== false;
     this.requireSignature = options.requireSignature !== false;
+    // Least-privilege: when on, a signed skill may do ONLY what its (sealed) manifest declares.
+    // Default off for now so existing skills (no declared caps) keep running; flip on once the
+    // compiler stamps capabilities into manifests. The gate itself is deny-by-default.
+    this.enforceCapabilities = options.enforceCapabilities === true;
   }
 
   /** Reads the signed pathway manifest out of a wasm skill. */
@@ -52,9 +57,11 @@ export class SkillExecutor {
     }
 
     const manifest = this.loadManifest(wasm);
+    const caps = parseCapabilities(manifest);
 
     // 2a. Computational skill: run the real wasm compute().
     if (manifest.kind === 'computational' || manifest.computation) {
+      if (this.enforceCapabilities) assertComputeAllowed(caps);
       const wm = await WebAssembly.instantiate(wasm, {});
       const result = wm.instance.exports.compute((input | 0));
       if (this.verbose) console.log(`▶️  [SkillExecutor] computational "${manifest.id}" compute(${input}) = ${result}`);
@@ -65,6 +72,7 @@ export class SkillExecutor {
     const steps = Array.isArray(manifest.steps) ? manifest.steps : [];
     const trace = [];
     for (const step of steps) {
+      if (this.enforceCapabilities) assertStepAllowed(caps, step);
       if (this.actionExecutor) {
         const r = await this.actionExecutor(step);
         trace.push({ step, result: r });

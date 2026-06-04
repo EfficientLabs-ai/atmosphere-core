@@ -22,6 +22,7 @@ import { realProbes } from './probes.js';
 import { scaffoldWorkspace, validateWorkspace, ICM_LAYERS } from '../context/icm-workspace.js';
 import { AttributionLedger } from '../ledger/attribution-ledger.js';
 import { originId } from '../memory/skill-seal.js';
+import { route as routeDecision, difficulty } from '../routing/model-router.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -77,6 +78,7 @@ function helpText() {
     `  ${C.g}icm${C.x}             Context workspace contract (folders over agents): init · validate`,
     `  ${C.g}ledger${C.x}          Attribution: who contributed what — summary · verify · list (measured, not priced)`,
     `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
+    `  ${C.g}route${C.x} <prompt>   Preview the sovereign router: local by default, cloud only on opt-in`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
@@ -250,6 +252,62 @@ function cmdId(rest) {
   } catch (e) { return { code: 1, lines: [`${C.r}could not read node identity: ${e.message}${C.x}`] }; }
 }
 
+// `stratos route <prompt>` — preview the sovereign router's decision (the third observability
+// surface: id · ledger · route). Mirrors the live classify() path: /force-* + /private directives,
+// and a configured BYOK key is the standing opt-in to escalate hard prompts to cloud.
+const _FRONTIER_KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'GROQ_API_KEY'];
+const _envHasKey = () => _FRONTIER_KEYS.some((k) => !!process.env[k]);
+
+function cmdRoute(rest) {
+  const flags = new Set(rest.filter((a) => a.startsWith('--')));
+  const mi = rest.indexOf('--model');
+  const model = mi >= 0 ? rest[mi + 1] || null : null;
+  const prompt = rest.filter((a, i) => !a.startsWith('--') && !(mi >= 0 && i === mi + 1)).join(' ').trim();
+
+  if (!prompt && !model) {
+    return { code: 1, lines: [
+      `${C.r}usage: stratos route <prompt> [--private] [--model <m>] [--mesh] [--key]${C.x}`,
+      `${C.d}Preview the sovereign router's decision. --key simulates a configured BYOK key;${C.x}`,
+      `${C.d}--mesh simulates the mesh being available. /force-local · /force-cloud · /private work inline.${C.x}`,
+    ] };
+  }
+
+  const q = prompt.toLowerCase();
+  const priv = flags.has('--private') || q.includes('/private');
+  const keyed = flags.has('--key') || _envHasKey();
+  const mesh = flags.has('--mesh');
+
+  let d;
+  if (q.includes('/force-local') || q.includes('/local')) {
+    d = { tier: 'local-strong', cloud: false, difficulty: difficulty(prompt), reason: 'explicit /force-local directive' };
+  } else if (q.includes('/force-cloud') || q.includes('/cloud')) {
+    d = { tier: 'frontier', cloud: true, difficulty: difficulty(prompt), reason: 'explicit /force-cloud directive (opt-in)' };
+  } else {
+    d = routeDecision({ prompt, model, private: priv, escalate: keyed }, { hasFrontierKey: keyed, meshAvailable: mesh });
+  }
+
+  const tierLabel = d.cloud
+    ? `${C.y}☁  CLOUD${C.x} ${C.d}(frontier, opt-in)${C.x}`
+    : d.tier === 'mesh'
+      ? `${C.b}⬡  MESH${C.x} ${C.d}(your hardware)${C.x}`
+      : `${C.g}🛡  LOCAL${C.x} ${C.d}(${d.tier})${C.x}`;
+  const shown = prompt.length > 60 ? prompt.slice(0, 57) + '…' : prompt;
+  const lines = [
+    `${C.B}stratos route${C.x} ${C.d}— what the one sovereign router would do (preview)${C.x}`,
+    `  ${C.d}prompt    ${C.x}"${shown}" ${C.d}(${prompt.length} chars)${C.x}`,
+    model ? `  ${C.d}model     ${C.x}${model}` : '',
+    `  ${C.d}difficulty${C.x} ${d.difficulty}/5`,
+    `  ${C.d}decision  ${C.x}${tierLabel}`,
+    `  ${C.d}reason    ${C.x}${d.reason}`,
+    `  ${C.d}context   ${C.x}key:${keyed ? `${C.g}set${C.x}` : `${C.d}none${C.x}`}  mesh:${mesh ? 'on' : 'off'}  private:${priv ? `${C.b}on${C.x}` : 'off'}`,
+    '',
+    d.cloud
+      ? `${C.d}Cloud only because a key is configured (standing opt-in). ${C.x}/force-local${C.d} or ${C.x}--private${C.d} pins it local.${C.x}`
+      : `${C.d}Stays on your hardware — the sovereign default. Cloud needs a configured key AND a hard prompt, never silently.${C.x}`,
+  ].filter(Boolean);
+  return { code: 0, lines };
+}
+
 function cmdConnectors(deps) {
   let list;
   try { list = deps.connectors.listConnectors(); } catch (e) { return { code: 1, lines: [`${C.r}connector registry error: ${e.message}${C.x}`] }; }
@@ -421,7 +479,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'service', 'version', 'help'];
 
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
@@ -458,6 +516,7 @@ export async function run(argv = [], deps = {}) {
     case 'icm': return cmdIcm(rest);
     case 'ledger': return cmdLedger(rest);
     case 'id': return cmdId(rest);
+    case 'route': return cmdRoute(rest);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

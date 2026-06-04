@@ -24,6 +24,9 @@ const SUITES = {
     'test-anthropic-adapter.mjs', 'test-model-manager.mjs', 'test-memory-window.mjs', 'test-config-intents.mjs',
     'test-content-orchestrator.mjs', 'test-standalone-graph.mjs',
     'test-acp.mjs', 'test-mcp-rce.mjs', 'test-v1-messages-route.mjs', 'test-gate-failclosed.mjs', 'test-approval-flow.mjs',
+    // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG
+    // probe that needed a live vector store was removed in the consolidation):
+    'test-task-router.js', 'test-classify-live.mjs',
     // EXCLUDED (not hermetic): test-evolution-seam.mjs depends on ambient Ollama — it passes locally
     // only because this dev box runs Ollama, and fails in the clean CI runner (no inference service).
     // test-chat-memory.mjs likewise fails in the clean GitHub runner. Both are integration tests; make
@@ -36,6 +39,10 @@ const SUITES = {
     'test-write-approval.mjs', 'test-chaos-pqc.js', 'test-gsi-compiler.js', 'test-quantum-ingestion.js',
     'test-superintelligence-depin.js', 'test-vector-sensory.js', 'test-exec-sandbox-contract.mjs',
     'test-p2p-skill-ingest.mjs', 'test-safe-env.mjs',
+    // trust substrate (this session) — all hermetic: pure crypto/logic/file, no live services:
+    'test-model-router.mjs', 'test-mesh-signal.mjs', 'test-stratos-route.mjs', 'test-stratos-id-ledger.mjs',
+    'test-capability-gate.mjs', 'test-capability-enforcement.mjs', 'test-attribution-ledger.mjs',
+    'test-identity-broker.mjs', 'test-trifecta-live.mjs', 'test-icm-workspace.mjs',
   ],
 };
 

@@ -23,6 +23,7 @@ import { scaffoldWorkspace, validateWorkspace, ICM_LAYERS } from '../context/icm
 import { AttributionLedger } from '../ledger/attribution-ledger.js';
 import { originId } from '../memory/skill-seal.js';
 import { route as routeDecision, difficulty } from '../routing/model-router.js';
+import { meshAvailable } from '../routing/mesh-signal.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -275,7 +276,8 @@ function cmdRoute(rest) {
   const q = prompt.toLowerCase();
   const priv = flags.has('--private') || q.includes('/private');
   const keyed = flags.has('--key') || _envHasKey();
-  const mesh = flags.has('--mesh');
+  const meshReal = meshAvailable();                 // the real, file-backed fleet signal
+  const mesh = flags.has('--mesh') || meshReal;     // --mesh forces a preview even with no fleet
 
   let d;
   if (q.includes('/force-local') || q.includes('/local')) {
@@ -299,7 +301,7 @@ function cmdRoute(rest) {
     `  ${C.d}difficulty${C.x} ${d.difficulty}/5`,
     `  ${C.d}decision  ${C.x}${tierLabel}`,
     `  ${C.d}reason    ${C.x}${d.reason}`,
-    `  ${C.d}context   ${C.x}key:${keyed ? `${C.g}set${C.x}` : `${C.d}none${C.x}`}  mesh:${mesh ? 'on' : 'off'}  private:${priv ? `${C.b}on${C.x}` : 'off'}`,
+    `  ${C.d}context   ${C.x}key:${keyed ? `${C.g}set${C.x}` : `${C.d}none${C.x}`}  mesh:${mesh ? (meshReal ? `${C.b}live${C.x}` : `${C.y}simulated${C.x}`) : 'off'}  private:${priv ? `${C.b}on${C.x}` : 'off'}`,
     '',
     d.cloud
       ? `${C.d}Cloud only because a key is configured (standing opt-in). ${C.x}/force-local${C.d} or ${C.x}--private${C.d} pins it local.${C.x}`

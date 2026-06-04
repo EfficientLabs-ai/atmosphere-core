@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { queryCognitiveSkill, queryAmbientMemory } from '../../stratos-agent/src/memory/vector-bank.js';
 import { route } from '../../stratos-agent/src/routing/model-router.js';
+import { meshAvailable } from '../../stratos-agent/src/routing/mesh-signal.js';
 
 // Frontier escalation is OPT-IN: only if the operator configured a BYOK key does a hard prompt get
 // to leave the machine. With no key, EVERYTHING stays local — the sovereign default.
@@ -49,7 +50,7 @@ export class TaskClassifierRouter {
     const keyed = hasFrontierKey();
     const decision = route(
       { prompt, model, private: priv, escalate: keyed },
-      { hasFrontierKey: keyed, meshAvailable: false },
+      { hasFrontierKey: keyed, meshAvailable: meshAvailable() },
     );
 
     if (decision.cloud) {

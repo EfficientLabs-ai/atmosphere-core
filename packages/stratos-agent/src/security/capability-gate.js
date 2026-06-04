@@ -77,4 +77,30 @@ export function assertStepAllowed(caps, step) {
   return true;
 }
 
+/**
+ * Derive the MINIMAL capabilities a manifest needs (least-privilege) — for the compiler to stamp
+ * into the manifest BEFORE it is sealed. Computational ⇒ {compute}. Automation ⇒ exactly the
+ * actions/hosts/paths/secrets its steps use, nothing more. An author-set `capabilities` block
+ * should be respected by the caller (the compiler) rather than overwritten.
+ */
+export function deriveCapabilities(manifest) {
+  const m = manifest || {};
+  if (m.kind === 'computational' || m.computation) return { compute: true };
+  const steps = Array.isArray(m.steps) ? m.steps : [];
+  const actions = new Set(), net = new Set(), fsp = new Set(), secrets = new Set();
+  for (const s of steps) {
+    if (!s || typeof s !== 'object') continue;
+    const a = s.action || s.type; if (typeof a === 'string' && a) actions.add(a);
+    const h = s.host || (s.url ? hostOf(s.url) : null); if (h) net.add(h);
+    if (typeof s.path === 'string' && s.path) fsp.add(s.path);
+    if (typeof s.secret === 'string' && s.secret) secrets.add(s.secret);
+  }
+  const caps = {};
+  if (actions.size) caps.actions = [...actions];
+  if (net.size) caps.net = [...net];
+  if (fsp.size) caps.fs = [...fsp];
+  if (secrets.size) caps.secrets = [...secrets];
+  return caps;
+}
+
 export { CapabilityError };

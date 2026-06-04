@@ -71,7 +71,9 @@ export class SelfEvolutionEngine {
 
     this.compiler = new GsiCompiler({ distSkillsDir: this.distSkillsDir, verbose: this.verbose });
     this.inducer = new SkillInductionEngine({ verbose: this.verbose });
-    this.executor = new SkillExecutor({ publicKeyBundle: this.keyBundle.publicKey, verbose: this.verbose });
+    // enforceCapabilities ON: the compiler now stamps least-privilege caps into every skill's
+    // sealed manifest, so the gate is live end-to-end — a skill may do ONLY what it declared.
+    this.executor = new SkillExecutor({ publicKeyBundle: this.keyBundle.publicKey, verbose: this.verbose, enforceCapabilities: true });
   }
 
   // ---- OBSERVE -----------------------------------------------------------------

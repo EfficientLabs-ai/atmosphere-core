@@ -7,6 +7,7 @@ import { getDatabase, queryCognitiveSkill } from './src/memory/vector-bank.js';
 import { signPayload, verifyPayload } from './src/security/quantum-crypto.js';
 import { TraceAnalyzer } from './src/evolution/trace-analyzer.js';
 import { parseCustomSection, findCustomSectionRange } from './src/core/wasm-sections.js';
+import { deriveCapabilities } from './src/security/capability-gate.js';
 import wabtFactory from 'wabt';
 
 // Re-export the section parsers (moved to a dependency-free module so light verifiers — e.g.
@@ -207,10 +208,14 @@ export class GsiCompiler {
    * Fuses post-quantum signature directly into the WebAssembly custom binary section.
    */
   async compile(astGraph, privateKeyBundle) {
+    // Stamp the MINIMAL least-privilege capabilities into the manifest BEFORE sealing, so the
+    // declaration is covered by the PQC seal (tamper ⇒ verification fails) and the executor can
+    // enforce deny-by-default. An author-set `capabilities` block is respected, not overwritten.
+    const manifest = astGraph?.capabilities ? astGraph : { ...astGraph, capabilities: deriveCapabilities(astGraph) };
     // Serialize the pathway, build the real executable module, then sign the WHOLE
     // module (code bytes + manifest) — see _generateWasmBinary for the integrity model.
-    const pathwayPayload = JSON.stringify(astGraph);
-    return this._generateWasmBinary(pathwayPayload, privateKeyBundle, astGraph.computation);
+    const pathwayPayload = JSON.stringify(manifest);
+    return this._generateWasmBinary(pathwayPayload, privateKeyBundle, manifest.computation);
   }
 
   /**

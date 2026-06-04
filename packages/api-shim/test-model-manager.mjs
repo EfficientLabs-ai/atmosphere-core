@@ -50,7 +50,11 @@ console.log('\n=== selectLocalModel (install-gated, hardware-aware, honest concr
 let s = await selectLocalModel({ requested: 'default', probe: { cap: { gb: 6, kind: 'ram' }, installed: ['qwen2.5:7b'] } });
 ok(s.model === 'qwen2.5:7b', `6GB RAM, only qwen installed → ${s.model} (CPU-only reality)`);
 s = await selectLocalModel({ requested: 'default', probe: { cap: { gb: 20, kind: 'vram' }, installed: ['qwen2.5:7b', 'gemma2:9b', 'gemma2:27b'] } });
-ok(s.model === 'gemma2:27b', `20GB VRAM + 27b installed → ${s.model} (top tier)`);
+ok(s.model === 'gemma2:27b', `20GB VRAM + 27b installed (no gemma4) → ${s.model} (legacy top tier)`);
+s = await selectLocalModel({ requested: 'default', probe: { cap: { gb: 16, kind: 'vram' }, installed: ['qwen2.5:7b', 'gemma2:9b', 'gemma4:12b'] } });
+ok(s.model === 'gemma4:12b', `16GB + gemma4 installed → ${s.model} (Gemma 4 preferred over Gemma 2)`);
+s = await selectLocalModel({ requested: 'default', probe: { cap: { gb: 8, kind: 'ram' }, installed: ['qwen2.5:7b', 'gemma4:12b'] } });
+ok(s.model === 'gemma4:12b', `8GB RAM + gemma4 4-bit pulled → ${s.model} (multimodal on consumer RAM)`);
 s = await selectLocalModel({ requested: 'default', probe: { cap: { gb: 10, kind: 'vram' }, installed: ['qwen2.5:7b'] } });
 ok(s.model === 'qwen2.5:7b', `10GB but gemma2:9b NOT pulled → falls back to installed ${s.model} (install-gated, no pretending)`);
 s = await selectLocalModel({ requested: 'gemma2:9b', probe: { cap: { gb: 12, kind: 'vram' }, installed: ['qwen2.5:7b', 'gemma2:9b'] } });

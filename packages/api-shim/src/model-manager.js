@@ -87,10 +87,19 @@ async function installedModels(ollamaHost) {
   } catch { return []; }
 }
 
+// Local-model preference ladder: first tier whose minGB fits the probed capacity AND is
+// installed wins. Gemma 4 (Apache-2.0, encoder-free multimodal text+image+audio, 256K ctx;
+// Unsloth Dynamic GGUFs run 12B on ~8GB@4-bit / ~13-14GB@8-bit; lighter E2B/E4B variants) is
+// preferred over Gemma 2 when present. Ollama tags depend on how the GGUF is imported
+// (huggingface.co/unsloth/gemma-4-12b-it-GGUF) — an absent/mismatched tag simply falls through
+// (selection is installed-gated), so this is safe and auto-falls-back to the proven Gemma 2 / Qwen floor.
 const TIERS = [
-  { minGB: 18, model: 'gemma2:27b' },
-  { minGB: 8, model: 'gemma2:9b' },
-  { minGB: 0, model: 'qwen2.5:7b' },
+  { minGB: 13, model: 'gemma4:12b' },  // Gemma 4 12B, 8-bit/quality tier
+  { minGB: 18, model: 'gemma2:27b' },  // legacy top tier (until a larger Gemma 4 lands)
+  { minGB: 7,  model: 'gemma4:12b' },  // Gemma 4 12B, 4-bit Dynamic GGUF (~7-8GB) — the new mid default
+  { minGB: 8,  model: 'gemma2:9b' },   // fallback if Gemma 4 isn't pulled
+  { minGB: 4,  model: 'gemma4:e4b' },  // Gemma 4 E4B — lighter effective variant for ~4-8GB
+  { minGB: 0,  model: 'qwen2.5:7b' },  // CPU-only floor
 ];
 
 /**

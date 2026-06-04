@@ -6,6 +6,8 @@ import { SkillExecutor } from './skill-executor.js';
 import { SkillInductionEngine } from './skill-induction.js';
 import { generateHybridKeyPair } from '../security/quantum-crypto.js';
 import { insertCognitiveSkill, queryCognitiveSkill, getCognitiveSkillById } from '../memory/vector-bank.js';
+import { originId } from '../memory/skill-seal.js';
+import { AttributionLedger } from '../ledger/attribution-ledger.js';
 
 /**
  * SelfEvolutionEngine — the integration layer that wires the five components built
@@ -71,9 +73,16 @@ export class SelfEvolutionEngine {
 
     this.compiler = new GsiCompiler({ distSkillsDir: this.distSkillsDir, verbose: this.verbose });
     this.inducer = new SkillInductionEngine({ verbose: this.verbose });
-    // enforceCapabilities ON: the compiler now stamps least-privilege caps into every skill's
-    // sealed manifest, so the gate is live end-to-end — a skill may do ONLY what it declared.
-    this.executor = new SkillExecutor({ publicKeyBundle: this.keyBundle.publicKey, verbose: this.verbose, enforceCapabilities: true });
+    // Attribution ledger (measurement→attribution, before rewards): record each run, attributed to
+    // THIS node's content-addressed did. If the bundle isn't in did form, attribution is skipped.
+    let contributorId = null;
+    try { contributorId = originId(this.keyBundle.publicKey); } catch { /* not a did bundle — skip */ }
+    this.contributorId = contributorId;
+    this.ledger = opts.ledger || new AttributionLedger({ path: path.join(this.distSkillsDir, 'attribution.jsonl') });
+    // enforceCapabilities ON: the compiler stamps least-privilege caps into every skill's sealed
+    // manifest, so the gate is live end-to-end. ledger + contributorId wire the trifecta live:
+    // every verified run is attributed + recorded (deny-by-default capability enforcement throughout).
+    this.executor = new SkillExecutor({ publicKeyBundle: this.keyBundle.publicKey, verbose: this.verbose, enforceCapabilities: true, ledger: this.ledger, contributorId: this.contributorId });
   }
 
   // ---- OBSERVE -----------------------------------------------------------------

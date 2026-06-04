@@ -28,6 +28,20 @@ export class SkillExecutor {
     // Default off for now so existing skills (no declared caps) keep running; flip on once the
     // compiler stamps capabilities into manifests. The gate itself is deny-by-default.
     this.enforceCapabilities = options.enforceCapabilities === true;
+    // Trifecta wiring (all optional, backward-compatible):
+    //  - ledger: record each verified run as a 'skill-executed' attribution entry.
+    //  - broker: mint a SHORT-LIVED brokered token for a credentialed step (host+scope) so the
+    //    skill never holds a raw credential — and only for hosts its capabilities declared.
+    //  - contributorId: this node's did:atmos identity, the attributed contributor.
+    this.ledger = options.ledger || null;
+    this.broker = options.broker || null;
+    this.contributorId = options.contributorId || null;
+  }
+
+  _record(kind, manifest, units, meta) {
+    if (!this.ledger || !this.contributorId) return;
+    try { this.ledger.append({ kind, contributor: this.contributorId, subject: manifest?.id ?? null, units, meta }); }
+    catch (e) { if (this.verbose) console.warn(`⚠️  [SkillExecutor] ledger record failed: ${e.message}`); }
   }
 
   /** Reads the signed pathway manifest out of a wasm skill. */
@@ -65,6 +79,7 @@ export class SkillExecutor {
       const wm = await WebAssembly.instantiate(wasm, {});
       const result = wm.instance.exports.compute((input | 0));
       if (this.verbose) console.log(`▶️  [SkillExecutor] computational "${manifest.id}" compute(${input}) = ${result}`);
+      this._record('skill-executed', manifest, 1, { kind: 'computational', verified });
       return { id: manifest.id, kind: 'computational', verified, input, result };
     }
 
@@ -73,8 +88,15 @@ export class SkillExecutor {
     const trace = [];
     for (const step of steps) {
       if (this.enforceCapabilities) assertStepAllowed(caps, step);
+      // Brokered credentials: a step targeting a host+scope gets a SHORT-LIVED brokered token,
+      // never a raw credential — and only for hosts the skill's caps declared (deny-by-default).
+      let dispatched = step;
+      if (this.broker && step && step.host && step.scope) {
+        const token = this.broker.issue({ subject: this.contributorId, audience: step.host, scope: step.scope, capabilities: caps });
+        dispatched = { ...step, brokeredToken: token };
+      }
       if (this.actionExecutor) {
-        const r = await this.actionExecutor(step);
+        const r = await this.actionExecutor(dispatched);
         trace.push({ step, result: r });
       } else {
         trace.push({ step, result: 'planned' }); // honest: verified plan, not a live effect
@@ -84,6 +106,7 @@ export class SkillExecutor {
       const mode = this.actionExecutor ? 'executed' : 'planned (no driver bound)';
       console.log(`▶️  [SkillExecutor] automation "${manifest.id}" — ${steps.length} step(s) ${mode}`);
     }
+    this._record('skill-executed', manifest, steps.length || 1, { kind: 'automation', executed: !!this.actionExecutor });
     return { id: manifest.id, kind: 'automation', verified, executed: !!this.actionExecutor, steps: steps.length, trace };
   }
 }

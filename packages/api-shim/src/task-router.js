@@ -6,6 +6,11 @@ import { meshAvailable } from '../../stratos-agent/src/routing/mesh-signal.js';
 const FRONTIER_KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'GROQ_API_KEY'];
 const hasFrontierKey = () => FRONTIER_KEYS.some((k) => !!process.env[k]);
 
+// Fast on-device default (forward-ported from #55): a 2B model is ~2x faster than qwen2.5:7b on
+// CPU-only hosts (the common case). This is just the fallback `targetModel`; server.js calls
+// selectLocalModel() next to pick the concrete installed tag. Override with LOCAL_MODEL_DEFAULT.
+const LOCAL_FAST_MODEL = process.env.LOCAL_MODEL_DEFAULT || 'gemma2:2b';
+
 /**
  * TaskClassifierRouter: a thin adapter over the single sovereign model router (model-router.js).
  * It maps inbound chat messages + manual directives to the router's request shape, then maps the
@@ -35,7 +40,7 @@ export class TaskClassifierRouter {
 
     // 1. Manual directives are explicit user intent — honor them verbatim (override the policy).
     if (query.includes('/force-local') || query.includes('/local')) {
-      return { decision: 'local', reason: 'Explicit /force-local directive.', targetModel: 'qwen2.5:7b' };
+      return { decision: 'local', reason: 'Explicit /force-local directive.', targetModel: LOCAL_FAST_MODEL };
     }
     if (query.includes('/force-cloud') || query.includes('/cloud')) {
       return { decision: 'cloud', reason: 'Explicit /force-cloud directive (user opt-in).', targetModel: model || 'gpt-4o' };
@@ -67,8 +72,8 @@ export class TaskClassifierRouter {
       return { decision: 'cloud', reason: decision.reason, targetModel: model || 'gpt-4o' };
     }
     // Local tiers (local-fast / local-strong / mesh): server.js calls selectLocalModel() next to pick
-    // the concrete Ollama tag, so targetModel here is just a safe default.
-    return { decision: 'local', reason: `${decision.reason} [${decision.tier}]`, targetModel: 'qwen2.5:7b' };
+    // the concrete Ollama tag, so targetModel here is just the fast-default fallback (#55).
+    return { decision: 'local', reason: `${decision.reason} [${decision.tier}]`, targetModel: LOCAL_FAST_MODEL };
   }
 
   /** Extract the text of the last user message from the message log. */

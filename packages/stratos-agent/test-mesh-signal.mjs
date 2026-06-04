@@ -25,6 +25,17 @@ write({ nodes: 2, cores: 12 });
 ok(meshAvailable({ path: fleet }) === true, 'fleet with 2 nodes / 12 cores → available');
 ok(readFleetState({ path: fleet }).cores === 12, 'readFleetState surfaces the real self-reported cores');
 
+// canonical schema: counts under `totals`, `nodes` is the node ARRAY (the real fleet.json shape)
+write({ totals: { nodes: 3, cores: 24 }, nodes: [{ a: 1 }, { b: 2 }, { c: 3 }] });
+ok(readFleetState({ path: fleet }).cores === 24, 'reads counts from totals (not Number(nodes-array)=NaN)');
+ok(meshAvailable({ path: fleet }) === true, 'canonical totals fleet → available (was a silent bug: read as 0)');
+
+// LIVENESS: a stale file (old mtime) must NOT read as a live mesh
+const old = Date.now() / 1000 - 3600; // 1 hour ago
+fs.utimesSync(fleet, old, old);
+ok(meshAvailable({ path: fleet }) === false, 'stale fleet.json (1h old, > default 10m) → NOT available');
+ok(meshAvailable({ path: fleet, maxAgeMs: 0 }) === true, 'maxAgeMs:0 disables the liveness gate (stale reads available again)');
+
 ok(meshAvailable({ path: fleet, optIn: false }) === false, 'optIn:false forces NOT available even with a fleet');
 
 fs.writeFileSync(fleet, '{ this is not json');

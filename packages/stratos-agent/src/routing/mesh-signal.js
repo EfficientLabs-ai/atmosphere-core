@@ -9,6 +9,11 @@
  * nodes, or zero cores ⇒ NOT available. As of this writing no device has ever actually connected,
  * so this returns false — correctly — until a real fleet.json is written by a live ghost-node.
  *
+ * HONEST LIMIT (flagged in review): this is *file*-honest, not *liveness*-honest — it trusts the
+ * fleet.json's self-report and does NOT confirm those nodes are reachable right now. A stale file
+ * could route heavy work to a dead node (→ timeout, then the caller falls back). A heartbeat /
+ * liveness gate is follow-up work for when the mesh actually runs (needs ≥1 live peer to test).
+ *
  *   STRATOS_FLEET            override the fleet.json path
  *   STRATOS_MESH_AVAILABLE   hard override ('true'/'false') — for tests + explicit opt-out
  */

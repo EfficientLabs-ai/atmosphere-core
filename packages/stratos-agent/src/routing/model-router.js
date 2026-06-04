@@ -48,7 +48,11 @@ export function route(request = {}, ctx = {}) {
   const { hasFrontierKey = false, meshAvailable = false } = ctx;
   const d = difficulty(prompt);
 
-  // 1. Explicit model — honor the user's choice (choosing a cloud model IS the opt-in).
+  // 1. Explicit model — honor a DELIBERATE model choice (choosing a cloud model IS the opt-in).
+  //    NOTE: this is for callers who pass a model on purpose (e.g. `stratos route --model`, or a
+  //    future explicit BYOK channel). The live OpenAI-compatible shim (task-router.js) intentionally
+  //    does NOT pass the wire `model` here — clients auto-send one (often a library default like
+  //    "gpt-4o"), so treating that as opt-in would silently break sovereignty. See task-router.js §2.
   if (model) {
     if (isCloudModel(model)) {
       if (priv) return { tier: 'local-strong', cloud: false, difficulty: d, reason: `privacy overrides explicit cloud model "${model}" — kept local` };

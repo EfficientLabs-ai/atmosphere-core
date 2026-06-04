@@ -22,7 +22,9 @@ r = await run(['route', HARD], deps);
 ok(/LOCAL/.test(text(r)), 'hard prompt with NO key → still LOCAL');
 
 r = await run(['route', '--key', HARD], deps);
-ok(/CLOUD/.test(text(r)), 'hard prompt WITH --key → CLOUD (opt-in escalation)');
+ok(/LOCAL/.test(text(r)), 'hard + --key but auto-escalate OFF (default) → LOCAL (secure-by-default)');
+r = await run(['route', '--key', '--auto-escalate', HARD], deps);
+ok(/CLOUD/.test(text(r)), 'hard + --key + --auto-escalate → CLOUD (deploy opt-in)');
 ok(/4\/5|5\/5/.test(text(r)), 'difficulty shown (>=4) for the hard prompt');
 
 r = await run(['route', '--key', '--private', HARD], deps);

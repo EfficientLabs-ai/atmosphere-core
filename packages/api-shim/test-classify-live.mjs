@@ -20,7 +20,10 @@ ok('casual prompt → local (NOT silent cloud — the old default-to-cloud bug)'
 ok('hard prompt with NO key → still local (sovereign)', (await r.classify(msg(HARD))).decision === 'local');
 
 process.env.OPENAI_API_KEY = 'sk-test';
-ok('hard prompt WITH a key configured → opt-in cloud escalation', (await r.classify(msg(HARD))).decision === 'cloud');
+ok('hard + key but auto-escalate OFF (default) → LOCAL (secure-by-default)', (await r.classify(msg(HARD))).decision === 'local');
+process.env.STRATOS_CLOUD_AUTO_ESCALATE = 'true';
+ok('hard + key + STRATOS_CLOUD_AUTO_ESCALATE=true → cloud (deploy opt-in)', (await r.classify(msg(HARD))).decision === 'cloud');
+delete process.env.STRATOS_CLOUD_AUTO_ESCALATE;
 delete process.env.OPENAI_API_KEY;
 
 ok('/force-local directive honored', (await r.classify(msg('/force-local do this'))).decision === 'local');

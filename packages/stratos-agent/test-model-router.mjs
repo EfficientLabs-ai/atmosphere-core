@@ -1,6 +1,6 @@
 // test-model-router.mjs — one simple router: local default, privacy-forced-local, cloud opt-in only.
 import assert from 'node:assert';
-import { route, difficulty, TIERS } from './src/routing/model-router.js';
+import { route, difficulty, TIERS, autoEscalateEnabled } from './src/routing/model-router.js';
 
 let pass = 0;
 const ok = (name, fn) => { fn(); console.log(`  ✓ ${name}`); pass++; };
@@ -49,6 +49,12 @@ ok('heavy work routes to the mesh (your hardware) when available', () => {
   const r = route({ prompt: 'optimize this huge algorithm '.repeat(60) }, { meshAvailable: true });
   assert.strictEqual(r.tier, 'mesh');
   assert.strictEqual(r.cloud, false);
+});
+
+ok('autoEscalateEnabled is the deploy-time opt-in (default OFF / secure-by-default)', () => {
+  assert.strictEqual(autoEscalateEnabled({}), false);
+  assert.strictEqual(autoEscalateEnabled({ STRATOS_CLOUD_AUTO_ESCALATE: 'false' }), false);
+  assert.strictEqual(autoEscalateEnabled({ STRATOS_CLOUD_AUTO_ESCALATE: 'true' }), true);
 });
 
 ok('every route is one of the declared tiers + carries an honest reason', () => {

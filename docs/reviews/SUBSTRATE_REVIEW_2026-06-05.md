@@ -23,12 +23,15 @@ shim intentionally omits the wire model. No behavior change.
 A long (≥1200 char) keyword-stuffed prompt hits `difficulty ≥ 4`; with a BYOK key set, that escalates
 to cloud without `/force-cloud`. Low risk in today's single-user (operator-is-the-input) deployment,
 but a real vector for a **multi-tenant / untrusted-input** agent: a hostile prompt could force cloud
-spend + data egress without the operator's per-request consent. → **FLAGGED FOR OPERATOR — design
-decision, NOT changed autonomously.** Recommended hardening: make difficulty-based auto-escalation
-opt-in at config (e.g. `STRATOS_CLOUD_AUTO_ESCALATE`, default **off** = secure-by-default), so cloud
-requires an explicit per-request `/force-cloud` even with a key. This is the more sovereign default but
-changes the approved "key = standing opt-in for hard prompts" UX, so it's the operator's call.
-(Mitigating today: no frontier key is configured by default ⇒ everything stays local regardless.)
+spend + data egress without the operator's per-request consent. → **RESOLVED 2026-06-05 (operator
+approved):** difficulty-based auto-escalation is now opt-in at deploy time via
+**`STRATOS_CLOUD_AUTO_ESCALATE`, default OFF (secure-by-default).** With the flag off, a hard prompt
+stays local even with a configured key — cloud then requires an explicit per-request `/force-cloud`.
+Implemented as `autoEscalateEnabled()` in `model-router.js`, applied by both the live `classify()`
+(`escalate = keyed && autoEscalateEnabled()`) and `stratos route` (with a `--auto-escalate` preview
+flag + the policy shown in the context line). Tests: model-router flag unit, classify-live + task-router
+both assert hard+key+flag-off → LOCAL and hard+key+flag-on → CLOUD; route preview likewise. The
+injection vector is closed by default. (Also: no frontier key is configured by default ⇒ local anyway.)
 
 **3. [LOW] Mesh signal is file-honest, not liveness-honest.**
 `mesh-signal.js` trusts `fleet.json`'s self-report; it does not confirm the listed nodes are reachable

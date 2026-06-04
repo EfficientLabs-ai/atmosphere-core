@@ -22,7 +22,7 @@ import { realProbes } from './probes.js';
 import { scaffoldWorkspace, validateWorkspace, ICM_LAYERS } from '../context/icm-workspace.js';
 import { AttributionLedger } from '../ledger/attribution-ledger.js';
 import { originId } from '../memory/skill-seal.js';
-import { route as routeDecision, difficulty } from '../routing/model-router.js';
+import { route as routeDecision, difficulty, autoEscalateEnabled } from '../routing/model-router.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
@@ -267,15 +267,18 @@ function cmdRoute(rest) {
 
   if (!prompt && !model) {
     return { code: 1, lines: [
-      `${C.r}usage: stratos route <prompt> [--private] [--model <m>] [--mesh] [--key]${C.x}`,
-      `${C.d}Preview the sovereign router's decision. --key simulates a configured BYOK key;${C.x}`,
-      `${C.d}--mesh simulates the mesh being available. /force-local · /force-cloud · /private work inline.${C.x}`,
+      `${C.r}usage: stratos route <prompt> [--private] [--model <m>] [--mesh] [--key] [--auto-escalate]${C.x}`,
+      `${C.d}Preview the sovereign router's decision. --key simulates a configured BYOK key; --mesh${C.x}`,
+      `${C.d}simulates a live fleet; --auto-escalate simulates STRATOS_CLOUD_AUTO_ESCALATE=true.${C.x}`,
+      `${C.d}/force-local · /force-cloud · /private work inline.${C.x}`,
     ] };
   }
 
   const q = prompt.toLowerCase();
   const priv = flags.has('--private') || q.includes('/private');
   const keyed = flags.has('--key') || _envHasKey();
+  const autoEsc = flags.has('--auto-escalate') || autoEscalateEnabled();  // deploy-time opt-in
+  const escalate = keyed && autoEsc;                // both needed for difficulty-based escalation
   const meshReal = meshAvailable();                 // the real, file-backed fleet signal
   const mesh = flags.has('--mesh') || meshReal;     // --mesh forces a preview even with no fleet
 
@@ -285,7 +288,7 @@ function cmdRoute(rest) {
   } else if (q.includes('/force-cloud') || q.includes('/cloud')) {
     d = { tier: 'frontier', cloud: true, difficulty: difficulty(prompt), reason: 'explicit /force-cloud directive (opt-in)' };
   } else {
-    d = routeDecision({ prompt, model, private: priv, escalate: keyed }, { hasFrontierKey: keyed, meshAvailable: mesh });
+    d = routeDecision({ prompt, model, private: priv, escalate }, { hasFrontierKey: keyed, meshAvailable: mesh });
   }
 
   const tierLabel = d.cloud
@@ -301,7 +304,7 @@ function cmdRoute(rest) {
     `  ${C.d}difficulty${C.x} ${d.difficulty}/5`,
     `  ${C.d}decision  ${C.x}${tierLabel}`,
     `  ${C.d}reason    ${C.x}${d.reason}`,
-    `  ${C.d}context   ${C.x}key:${keyed ? `${C.g}set${C.x}` : `${C.d}none${C.x}`}  mesh:${mesh ? (meshReal ? `${C.b}live${C.x}` : `${C.y}simulated${C.x}`) : 'off'}  private:${priv ? `${C.b}on${C.x}` : 'off'}`,
+    `  ${C.d}context   ${C.x}key:${keyed ? `${C.g}set${C.x}` : `${C.d}none${C.x}`}  auto-escalate:${autoEsc ? `${C.y}on${C.x}` : `${C.g}off${C.x}`}  mesh:${mesh ? (meshReal ? `${C.b}live${C.x}` : `${C.y}simulated${C.x}`) : 'off'}  private:${priv ? `${C.b}on${C.x}` : 'off'}`,
     '',
     d.cloud
       ? `${C.d}Cloud only because a key is configured (standing opt-in). ${C.x}/force-local${C.d} or ${C.x}--private${C.d} pins it local.${C.x}`

@@ -55,14 +55,20 @@ async function runTaskRouterTests() {
   console.log(`   complex, /force-cloud -> [${forced.decision.toUpperCase()}] ${forced.reason}`);
   assert.strictEqual(forced.decision, 'cloud'); // explicit opt-in honored
 
-  // genuinely hard (difficulty >=4) + a configured key (standing opt-in) -> cloud
+  // genuinely hard (difficulty >=4) + a configured key. SECURE-BY-DEFAULT: still LOCAL unless the
+  // deploy also opts in via STRATOS_CLOUD_AUTO_ESCALATE (closes the difficulty-injection vector).
   const hard = 'Architect, refactor and prove the optimal multi-threaded distributed sorting algorithm; optimize it and reason through every step in detail. '.repeat(10) + ' ```rust\nfn main(){}\n``` ';
   process.env.OPENAI_API_KEY = 'sk-test';
-  const keyed = await ask(hard, 'gpt-4o');
-  console.log(`   hard, key configured  -> [${keyed.decision.toUpperCase()}] ${keyed.reason}`);
-  assert.strictEqual(keyed.decision, 'cloud'); // opt-in via configured BYOK key on a hard prompt
+  const keyedOff = await ask(hard, 'gpt-4o');
+  console.log(`   hard, key, auto-escalate OFF -> [${keyedOff.decision.toUpperCase()}] ${keyedOff.reason}`);
+  assert.strictEqual(keyedOff.decision, 'local'); // secure default — no auto-escalation from a key alone
+  process.env.STRATOS_CLOUD_AUTO_ESCALATE = 'true';
+  const keyedOn = await ask(hard, 'gpt-4o');
+  console.log(`   hard, key, auto-escalate ON  -> [${keyedOn.decision.toUpperCase()}] ${keyedOn.reason}`);
+  assert.strictEqual(keyedOn.decision, 'cloud'); // explicit deploy opt-in
+  delete process.env.STRATOS_CLOUD_AUTO_ESCALATE;
   clearKeys();
-  console.log('✅ [Test 3] Complex stays local by default; cloud only on explicit/key opt-in.\n');
+  console.log('✅ [Test 3] Complex stays local by default; cloud only on /force-cloud or deploy opt-in.\n');
 
   // --- TEST 4: MANUAL DIRECTIVES (EXPECT: EXACT OVERRIDE) ---
   console.log('🔄 [Test 4] Manual override directives...');

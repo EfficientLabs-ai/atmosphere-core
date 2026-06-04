@@ -38,6 +38,17 @@ export function difficulty(prompt) {
 }
 
 /**
+ * Difficulty-based auto-escalation to cloud is OPT-IN AT DEPLOY TIME (secure-by-default). Even with a
+ * configured BYOK key, a hard prompt does NOT silently escalate unless STRATOS_CLOUD_AUTO_ESCALATE=true.
+ * This closes the heuristic-injection vector (untrusted input inflating difficulty to force cloud spend
+ * + data egress). A `/force-cloud` directive and a deliberate explicit cloud model are unaffected —
+ * those are explicit per-request opt-ins, not an automated threshold.
+ */
+export function autoEscalateEnabled(env = process.env) {
+  return env.STRATOS_CLOUD_AUTO_ESCALATE === 'true';
+}
+
+/**
  * @param {object} request { prompt?, model?, private?, escalate? }
  * @param {object} ctx     { hasFrontierKey?, meshAvailable? }
  * @returns {{tier:string, cloud:boolean, model?:string, difficulty:number, reason:string}}

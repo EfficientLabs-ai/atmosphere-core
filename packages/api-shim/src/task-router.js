@@ -1,4 +1,4 @@
-import { route } from '../../stratos-agent/src/routing/model-router.js';
+import { route, autoEscalateEnabled } from '../../stratos-agent/src/routing/model-router.js';
 import { meshAvailable } from '../../stratos-agent/src/routing/mesh-signal.js';
 
 // Frontier escalation is OPT-IN: only if the operator configured a BYOK key does a hard prompt get
@@ -50,13 +50,16 @@ export class TaskClassifierRouter {
       return { decision: 'local', reason: `Explicit local model "${model}".`, targetModel: model };
     }
 
-    // 3. Everything else → the ONE sovereign router, decided from the PROMPT. `/private` pins local;
-    //    cloud escalation requires a configured BYOK key (a standing opt-in) — which is also the only
-    //    way a cloud call could even succeed. No key ⇒ every request stays local.
+    // 3. Everything else → the ONE sovereign router, decided from the PROMPT. `/private` pins local.
+    //    Cloud escalation needs a configured BYOK key (the only way a cloud call could succeed) AND
+    //    deploy-time opt-in (STRATOS_CLOUD_AUTO_ESCALATE=true). Secure-by-default: with the flag off,
+    //    a hard prompt stays local — cloud then requires an explicit /force-cloud per request. This
+    //    blocks untrusted input from inflating difficulty to force cloud spend/egress.
     const priv = query.includes('/private');
     const keyed = hasFrontierKey();
+    const escalate = keyed && autoEscalateEnabled();
     const decision = route(
-      { prompt, private: priv, escalate: keyed },        // model intentionally NOT passed (see above)
+      { prompt, private: priv, escalate },               // model intentionally NOT passed (see above)
       { hasFrontierKey: keyed, meshAvailable: meshAvailable() },
     );
 

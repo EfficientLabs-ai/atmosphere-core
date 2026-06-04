@@ -1,11 +1,22 @@
 import crypto from 'node:crypto';
 import { queryCognitiveSkill, queryAmbientMemory } from '../../stratos-agent/src/memory/vector-bank.js';
+import { route } from '../../stratos-agent/src/routing/model-router.js';
+
+// Frontier escalation is OPT-IN: only if the operator configured a BYOK key does a hard prompt get
+// to leave the machine. With no key, EVERYTHING stays local — the sovereign default.
+const FRONTIER_KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'GROQ_API_KEY'];
+const hasFrontierKey = () => FRONTIER_KEYS.some((k) => !!process.env[k]);
 
 /**
- * TaskClassifierRouter: Advanced context-aware intelligence classifier
- * that automatically categorizes incoming developer prompts into either
- * "local" (on-device Ollama) or "cloud" (frontier APIs) routing targets
- * based on syntax density, semantic complexity, and LanceDB RAG matching.
+ * TaskClassifierRouter: a thin adapter over the single sovereign model router (model-router.js).
+ * It maps inbound chat messages + manual directives to the router's request shape, then maps the
+ * router's tier decision back to this module's {decision, reason, targetModel} contract that the
+ * live server depends on. ONE router decides policy; this class just adapts the I/O.
+ *
+ * The router's law (so it can never silently exfiltrate): LOCAL is the default, PRIVACY forces
+ * local, and CLOUD is opt-in only (needs a configured key AND real difficulty). This replaces the
+ * old "default to cloud for max intelligence" fallback, which sent general prompts to frontier APIs
+ * by default — the opposite of the sovereignty promise.
  */
 export class TaskClassifierRouter {
   constructor(options = {}) {
@@ -20,77 +31,33 @@ export class TaskClassifierRouter {
    *  - targetModel: Mapped model identifier
    */
   async classify(messages, model = '') {
-    const lastUserMsg = this.extractLastUserMessage(messages);
-    const query = lastUserMsg.toLowerCase().trim();
+    const prompt = this.extractLastUserMessage(messages);
+    const query = prompt.toLowerCase().trim();
 
-    // 1. Respect Explicit Manual Force Directives
+    // 1. Manual directives are explicit user intent — honor them verbatim (override the policy).
     if (query.includes('/force-local') || query.includes('/local')) {
-      return {
-        decision: 'local',
-        reason: 'Explicit manual route directive "/force-local" detected.',
-        targetModel: 'qwen2.5:7b'
-      };
+      return { decision: 'local', reason: 'Explicit /force-local directive.', targetModel: 'qwen2.5:7b' };
     }
     if (query.includes('/force-cloud') || query.includes('/cloud')) {
-      return {
-        decision: 'cloud',
-        reason: 'Explicit manual route directive "/force-cloud" detected.',
-        targetModel: model || 'gpt-4o'
-      };
+      return { decision: 'cloud', reason: 'Explicit /force-cloud directive (user opt-in).', targetModel: model || 'gpt-4o' };
     }
 
-    // 2. Route Explicit Local Model targets
-    const isExplicitLocalModel = model && (
-      model.includes('local') ||
-      model.includes('quantized') ||
-      model.includes('qwen') ||
-      model.includes('llama')
+    // 2. Everything else goes through the ONE sovereign router. `/private` pins it to this machine;
+    //    escalation is allowed only when a BYOK key is configured (a standing opt-in to use cloud
+    //    for genuinely hard prompts). No key ⇒ the router keeps every request local.
+    const priv = query.includes('/private');
+    const keyed = hasFrontierKey();
+    const decision = route(
+      { prompt, model, private: priv, escalate: keyed },
+      { hasFrontierKey: keyed, meshAvailable: false },
     );
-    if (isExplicitLocalModel) {
-      return {
-        decision: 'local',
-        reason: `Explicit local model target "${model}" requested.`,
-        targetModel: 'qwen2.5:7b'
-      };
-    }
 
-    // 3. Simple Factual, Syntactic, or System Check Filtering
-    const isSystemOrSimple = this.checkSimpleTriggers(query);
-    if (isSystemOrSimple) {
-      return {
-        decision: 'local',
-        reason: 'Simple factual coding query, greeting, or sovereign system check detected.',
-        targetModel: 'qwen2.5:7b'
-      };
+    if (decision.cloud) {
+      return { decision: 'cloud', reason: decision.reason, targetModel: decision.model || model || 'gpt-4o' };
     }
-
-    // 4. Advanced Logical Reasoning & Code Complexity Detection (Frontier Required)
-    const complexityScore = this.evaluateComplexityScore(query);
-    if (complexityScore >= 5) {
-      return {
-        decision: 'cloud',
-        reason: `High complexity density detected (Complexity Score: ${complexityScore}/10). Requiring frontier reasoning core.`,
-        targetModel: model || 'gpt-4o'
-      };
-    }
-
-    // 5. LanceDB RAG Match Score Synergy (Sovereign Context matching)
-    const hasLocalRAGSynergy = await this.probeLocalRAGSynergy(query);
-    if (hasLocalRAGSynergy) {
-      return {
-        decision: 'local',
-        reason: 'High-confidence historical matches found inside LanceDB vector memory. Resolving via context-augmented RAG.',
-        targetModel: 'qwen2.5:7b'
-      };
-    }
-
-    // Default Fallback Routing: For general conversational topics or medium tasks,
-    // we default to Cloud to ensure maximum intelligence unless explicitly toggling save cost.
-    return {
-      decision: 'cloud',
-      reason: 'General conversational or medium-complexity prompt. Routing to frontier model for high-fidelity response.',
-      targetModel: model || 'gpt-4o'
-    };
+    // Local tiers (local-fast / local-strong / mesh): server.js calls selectLocalModel() next to pick
+    // the concrete Ollama tag, so targetModel here is just a safe default.
+    return { decision: 'local', reason: `${decision.reason} [${decision.tier}]`, targetModel: decision.model || 'qwen2.5:7b' };
   }
 
   /**

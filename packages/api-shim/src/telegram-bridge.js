@@ -286,10 +286,19 @@ export class TelegramBridge {
         });
       });
 
-      // 3. Transcribe speech using Local Whisper module
+      // 3. Transcribe speech using the LOCAL sensory engine (gemma-class audio via Ollama, with an
+      //    optional whisper.cpp fallback). FAIL-OPEN: if no local STT path works we never throw into
+      //    the message path — we tell the user plainly and stop (no fabricated transcript).
       const { AudioIngestionEngine } = await import('../../stratos-agent/src/sensory/audio-ingestion.js');
       const ingestion = new AudioIngestionEngine({ verbose: this.verbose });
-      const transcribedText = await ingestion.transcribeSpeech(wavPath);
+      let transcribedText;
+      try {
+        transcribedText = await ingestion.transcribeSpeech(wavPath);
+      } catch (sttErr) {
+        if (this.verbose) console.warn('⚠️ [Telegram Voice] STT degrade (fail-open):', sttErr.message);
+        await this.bot.sendMessage(chatId, "🎙️ I couldn't transcribe that voice note locally right now — please send it as text and I'll respond.").catch(() => {});
+        return;
+      }
 
       // 🔒 SECRET GUARD on the transcript too — refuse before logging/persisting/inferring.
       if (scanForSecrets(transcribedText)) {
@@ -325,11 +334,19 @@ export class TelegramBridge {
       // 5. Clean thoughts and formatting elements for TTS voice synthesizing
       const cleanVoiceText = this.dispatcher.cleanTextForVoice(aiResponseText);
 
-      // 6. Convert response to spoken .wav output via Local TTS Synthesis Engine
+      // 6. Convert response to spoken .wav output via the local Piper TTS engine.
+      //    FAIL-OPEN: if Piper is unavailable (returns null), send the answer as TEXT instead of a
+      //    voice note — the user always gets the reply.
       const { AudioSynthesisEngine } = await import('../../stratos-agent/src/sensory/audio-synthesis.js');
       const synthesis = new AudioSynthesisEngine({ verbose: this.verbose });
       const replyWavPath = path.join(tempDir, `reply_${Date.now()}.wav`);
-      await synthesis.speakToBuffer(cleanVoiceText, replyWavPath);
+      const synthOk = await synthesis.speakToBuffer(cleanVoiceText, replyWavPath);
+
+      if (!synthOk) {
+        if (this.verbose) console.warn('⚠️ [Telegram Voice] TTS unavailable — replying with text (fail-open).');
+        await this.sendFormattedMessage(chatId, aiResponseText);
+        return;
+      }
 
       // 7. Transcode WAV response into Opus-encoded OGG for Telegram bot
       const replyOggPath = replyWavPath.replace(/\.wav$/, '.ogg');
@@ -343,8 +360,11 @@ export class TelegramBridge {
         });
       });
 
-      // 8. Send the synthesized voice note back to the user
-      await this.bot.sendVoice(chatId, replyOggPath);
+      // 8. Send the synthesized voice note back to the user. If even that fails, fall back to text.
+      await this.bot.sendVoice(chatId, replyOggPath).catch(async (sendErr) => {
+        if (this.verbose) console.warn('⚠️ [Telegram Voice] sendVoice failed, replying with text:', sendErr.message);
+        await this.sendFormattedMessage(chatId, aiResponseText);
+      });
 
       // Clean up temporary voice files safely
       setTimeout(() => {

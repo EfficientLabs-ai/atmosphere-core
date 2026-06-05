@@ -26,6 +26,7 @@ import { route as routeDecision, difficulty, autoEscalateEnabled } from '../rout
 import { meshAvailable } from '../routing/mesh-signal.js';
 import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
 import * as fts from '../memory/fts-memory.js';
+import * as voiceEngine from '../sensory/voice-engine.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -83,6 +84,7 @@ function helpText() {
     `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
     `  ${C.g}route${C.x} <prompt>   Preview the sovereign router: local by default, cloud only on opt-in`,
     `  ${C.g}memory${C.x}          Full-text recall over past conversations (local FTS5): search · recall`,
+    `  ${C.g}voice${C.x}           Native local talk/hear/see (Piper TTS · gemma audio/vision): say · hear · see · status`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
@@ -487,7 +489,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'memory', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'memory', 'voice', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -551,6 +553,83 @@ async function cmdMemory(rest, d = {}) {
   return { code: 0, lines };
 }
 
+// The `voice` surface is local-only (Piper on disk + localhost Ollama) — no network egress beyond
+// 127.0.0.1, no secrets, no filesystem writes outside the user-named output path. We declare the
+// minimal sensory actions and gate deny-by-default through the SAME capability-gate skills use.
+const VOICE_CAPS = parseCapabilities({ capabilities: { actions: ['voice.say', 'voice.hear', 'voice.see', 'voice.status'] } });
+
+/**
+ * `stratos voice say|hear|see|status` — the turnkey, open-source, local, zero-cost sensory surface.
+ *   say "<text>"     → Piper TTS, prints the wav path it produced
+ *   hear <audiofile> → local STT (gemma audio via Ollama, whisper.cpp fallback), prints transcript
+ *   see <imagefile>  → gemma vision via Ollama, prints the description
+ *   status           → HONEST report of which engines are available on this box
+ * Every sub honestly degrades (clear reason, non-zero exit) — never fabricates output.
+ * Engine surface is injectable (d.voice) so it's unit-tested without real binaries / a live Ollama.
+ */
+async function cmdVoice(rest, d = {}) {
+  const sub = (rest[0] || '').toLowerCase();
+  const ve = d.voice || voiceEngine;
+
+  if (!sub || sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: sub ? 0 : 0, lines: [
+      `${C.B}stratos voice${C.x} — native local talk / hear / see (open-source, 100% local, zero-cost)`,
+      `  ${C.g}stratos voice say "<text>"${C.x}      Piper TTS → a .wav you can play`,
+      `  ${C.g}stratos voice hear <audiofile>${C.x}  local speech-to-text → transcript`,
+      `  ${C.g}stratos voice see <imagefile>${C.x}   local vision → image description`,
+      `  ${C.g}stratos voice status${C.x}            which engines are available (honest ✓/✗)`,
+      `  ${C.d}No cloud, no API keys, no cost. Cloud phone voice is a separate optional add-on.${C.x}`,
+    ] };
+  }
+
+  const actionFor = { say: 'voice.say', hear: 'voice.hear', see: 'voice.see', status: 'voice.status' }[sub];
+  if (!actionFor) return { code: 1, lines: [`${C.r}Unknown voice subcommand: ${sub}${C.x}`, `${C.d}Try: say · hear · see · status${C.x}`] };
+
+  // Capability gate: deny-by-default. A test/caller can inject denied caps to prove enforcement.
+  const caps = d.voiceCaps || VOICE_CAPS;
+  try { assertStepAllowed(caps, { action: actionFor }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  if (sub === 'status') {
+    const st = await ve.voiceStatus({ ollamaHost: typeof d.ollamaHost === 'string' ? d.ollamaHost : undefined });
+    const mark = (ok) => (ok ? `${C.g}✓${C.x}` : `${C.r}✗${C.x}`);
+    const why = (o) => (o.ok ? '' : `  ${C.d}${o.reason}${C.x}`);
+    return { code: 0, lines: [
+      `${C.B}stratos voice — engine status${C.x} ${C.d}(local-only, honest)${C.x}`,
+      `  ${mark(st.piper.ok)} ${C.B}Piper TTS${C.x} (talk)${why(st.piper)}`,
+      `  ${mark(st.gemmaAudio.ok)} ${C.B}${st.model} audio${C.x} (hear)${why(st.gemmaAudio)}`,
+      `  ${mark(st.gemmaVision.ok)} ${C.B}${st.model} vision${C.x} (see)${why(st.gemmaVision)}`,
+      `  ${mark(st.whisper.ok)} ${C.B}whisper.cpp${C.x} (hear, fallback)${why(st.whisper)}`,
+      '',
+      `  ${C.d}Effective:${C.x} talk ${mark(st.canTalk)}  ·  hear ${mark(st.canHear)}  ·  see ${mark(st.canSee)}`,
+    ] };
+  }
+
+  const arg = rest.slice(1).join(' ').trim();
+  if (!arg) return { code: 1, lines: [`${C.r}Usage: stratos voice ${sub} ${sub === 'say' ? '"<text>"' : '<file>'}${C.x}`] };
+
+  if (sub === 'say') {
+    const out = d.sayOutPath || path.join(process.cwd(), `stratos-voice-${Date.now()}.wav`);
+    const res = await ve.say(arg, out, { verbose: false, silent: true });
+    if (!res.ok) return { code: 1, lines: [`${C.y}TTS unavailable:${C.x} ${res.reason}`, `${C.d}(Honest degrade — no audio fabricated.)${C.x}`] };
+    return { code: 0, lines: [`${C.g}🔊 Spoke ${arg.length} chars → ${C.x}${res.path}`] };
+  }
+
+  // Generous timeout for the one-shot CLI: a cold multimodal load (audio/vision) can take a while.
+  const CLI_TIMEOUT_MS = 240_000;
+
+  if (sub === 'hear') {
+    const res = await ve.hear(arg, { verbose: false, silent: true, timeoutMs: CLI_TIMEOUT_MS, ollamaHost: typeof d.ollamaHost === 'string' ? d.ollamaHost : undefined });
+    if (!res.ok) return { code: 1, lines: [`${C.y}STT unavailable:${C.x} ${res.reason}`, `${C.d}(Honest degrade — no transcript fabricated.)${C.x}`] };
+    return { code: 0, lines: [`${C.b}📝 (${res.engine})${C.x} ${res.text}`] };
+  }
+
+  // see
+  const res = await ve.see(arg, null, { verbose: false, silent: true, timeoutMs: CLI_TIMEOUT_MS, ollamaHost: typeof d.ollamaHost === 'string' ? d.ollamaHost : undefined });
+  if (!res.ok) return { code: 1, lines: [`${C.y}Vision unavailable:${C.x} ${res.reason}`, `${C.d}(Honest degrade — no description fabricated.)${C.x}`] };
+  return { code: 0, lines: [`${C.b}👁️${C.x} ${res.text}`] };
+}
+
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
   return {
@@ -577,6 +656,11 @@ export async function run(argv = [], deps = {}) {
     memory: deps.memory,
     memoryCaps: deps.memoryCaps,
     summarize: deps.summarize,
+    // Injectable sensory surface (tests pass a stub; production uses the real voice-engine).
+    voice: deps.voice,
+    voiceCaps: deps.voiceCaps,
+    ollamaHost: deps.ollamaHost,
+    sayOutPath: deps.sayOutPath,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -593,6 +677,7 @@ export async function run(argv = [], deps = {}) {
     case 'id': return cmdId(rest);
     case 'route': return cmdRoute(rest);
     case 'memory': return cmdMemory(rest, d);
+    case 'voice': return cmdVoice(rest, d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

@@ -47,6 +47,10 @@ const SUITES = {
     // FTS5 cross-session memory (this session) — hermetic: in-memory SQLite, injected summarizer,
     // no network/Ollama; tests the search path, conversation filter, injection-safety, degrade, gate.
     'test-fts-memory.mjs',
+    // native local sensory surface (this session) — hermetic: all Piper/Ollama/whisper I/O is
+    // injected, so it tests the talk/hear/see honesty contract + `stratos voice` gate with no
+    // binaries, no network, no live Ollama.
+    'test-voice-engine.mjs',
   ],
 };
 

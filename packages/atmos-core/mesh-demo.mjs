@@ -100,6 +100,9 @@ async function runBroadcast() {
   const SIGNED_SKILL = (args['signed-skill'] && args['signed-skill'] !== true) ? args['signed-skill'] : null;
 
   let wasm, keyBundle = null, pinnedB64 = null;
+  // The signed skill's affine params + id — set in key-holder mode below so the origin can
+  // re-verify each returned result slice and bind the receipt to the exact skill that ran.
+  let SKILL_A = Number(args.a ?? 3), SKILL_B = Number(args.b ?? 0), SKILL_ID = 'mesh_affine';
   if (SIGNED_SKILL) {
     // KEYLESS RELAY: serve a pre-signed artifact — NO private key lives on this machine.
     // This is the heart of true multi-machine HA: availability without key duplication.
@@ -113,7 +116,9 @@ async function runBroadcast() {
     keyBundle = loadOrCreateNodeKeys(NODE_KEYS);
     const a = Number(args.a ?? 3), b = Number(args.b ?? 0);
     const compiler = new GsiCompiler({ distSkillsDir: path.join(ROOT, 'packages', 'stratos-agent', 'dist', 'skills'), verbose: false });
+    SKILL_A = a; SKILL_B = b; // remembered so the origin can re-verify each returned result slice
     const manifest = { id: 'mesh_affine', kind: 'computational', triggerIntent: `apply ${a}x+${b}`, computation: { type: 'affine', a, b } };
+    SKILL_ID = manifest.id;
     wasm = await compiler.compile(manifest, keyBundle.privateKey);
     pinnedB64 = b4a.toString(b4a.from(JSON.stringify(encB(keyBundle.publicKey))), 'base64');
     if (args['export-skill'] && args['export-skill'] !== true) {
@@ -124,6 +129,29 @@ async function runBroadcast() {
     console.log(`   ad-hoc join test: node packages/atmos-core/mesh-demo.mjs join --topic ${TOPIC_NAME} --input 9 --pubkey ${pinnedB64}`);
   }
   console.log(`   topic: ${TOPIC_NAME}  ·  relay-id: ${RELAY_ID}`);
+
+  // ---- Capability Receipts: the cross-machine PROOF rail -----------------------------
+  // For every JOB result a worker returns AND the origin re-verifies (correct compute over the
+  // assigned slice), the origin appends a hybrid-PQC-signed, hash-chained `skill-run` receipt:
+  // WHO ran WHAT (actor=origin did, ref=skill id), on WHOSE node (node_id = the worker's
+  // cryptographic peer key), over WHICH input/output (sha256 hashes only — never content), at
+  // WHAT measured cost (cost_units = inputs computed). Verifiable by any third party holding ONLY
+  // the origin's PUBLIC key. Key-holder mode only (a keyless relay has no signing key).
+  let receiptLog = null, originDid = null;
+  if (keyBundle) {
+    const { ReceiptLog, makeReceiptSigner, makeReceiptVerifier, hashContent } = await import('../stratos-agent/src/ledger/capability-receipt.js');
+    const { originId } = await import('../stratos-agent/src/memory/skill-seal.js');
+    originDid = originId(keyBundle.publicKey);
+    const receiptsPath = (args['receipts-out'] && args['receipts-out'] !== true) ? args['receipts-out'] : null;
+    receiptLog = new ReceiptLog({
+      path: receiptsPath, nodeId: originDid,
+      signer: makeReceiptSigner(keyBundle.privateKey),
+      verifier: makeReceiptVerifier(keyBundle.publicKey), // lets the in-process self-verify check sigs too
+    });
+    receiptLog._hashContent = hashContent;
+    receiptLog._publicKeyBundle = keyBundle.publicKey;
+    console.log(`🧾 [ORIGIN ${RELAY_ID}] capability-receipt log armed (origin did ${originDid})${receiptsPath ? ` -> ${receiptsPath}` : ' (in-memory)'}.`);
+  }
 
   // 4. Join the global DHT, serve the signed skill, and aggregate self-reported capacity,
   //    keyed on the peer's cryptographic pubkey with bounds + rate-limits (see below).
@@ -175,6 +203,17 @@ async function runBroadcast() {
     console.log(`     sample: ${sample}${outputs.size > 5 ? ', …' : ''}`);
     if (args['jobs-out'] && args['jobs-out'] !== true) {
       try { fs.writeFileSync(args['jobs-out'], JSON.stringify({ jobId, maxInput, wallMs, workers: perNode, completed: done }, null, 2)); } catch {}
+    }
+    // Self-verify + export a third-party-verifiable receipt bundle (public key embedded, no secret).
+    if (receiptLog && receiptLog.length) {
+      const v = receiptLog.verify({ requireSig: true });
+      console.log(`🧾 [RECEIPT] chain self-verify: ${v.ok ? `✅ ${receiptLog.length} signed receipt(s)` : '❌ ' + v.reason}`);
+      if (args['receipts-bundle'] && args['receipts-bundle'] !== true) {
+        try {
+          const bundle = receiptLog.exportBundle({ publicKeyBundle: receiptLog._publicKeyBundle });
+          fs.writeFileSync(args['receipts-bundle'], JSON.stringify(bundle, null, 2));
+        } catch (e) { console.warn('[receipts-bundle] write failed:', e.message); }
+      }
     }
     return { jobId, wallMs, done };
   }
@@ -324,6 +363,28 @@ async function runBroadcast() {
         if (Array.isArray(msg.results) && msg.results.length === job.slice.length) {
           job.slice.forEach((input, i) => job.outputs.set(input, msg.results[i]));
           job.perNode.push({ node: job.node?.nodeLabel || peer, count: msg.results.length, computeMs: msg.computeMs });
+          // PROOF rail: re-verify the worker actually computed the signed skill (a*x+b) over its
+          // assigned slice, then record a signed Capability Receipt naming the worker's peer key as
+          // the compute node. A wrong/forged result fails this check and earns NO receipt.
+          if (receiptLog) {
+            const correct = job.slice.every((x, i) => msg.results[i] === (SKILL_A * x + SKILL_B));
+            if (correct) {
+              const inputHash = receiptLog._hashContent(job.slice);
+              const outputHash = receiptLog._hashContent(msg.results);
+              const r = receiptLog.append({
+                actor_id: originDid,                       // who orchestrated the work (this origin)
+                action: 'skill-run',
+                ref: SKILL_ID,                             // the exact signed skill that ran
+                node_id: 'did:hyper:' + peerKey.slice(0, 40), // the worker node (its DHT identity)
+                input_hash: inputHash,
+                output_hash: outputHash,
+                cost_units: job.slice.length,              // measured: inputs computed (never a price)
+              });
+              console.log(`🧾 [RECEIPT] skill-run ${r.receipt_id.slice(0,8)} — node ${peer}… ran ${SKILL_ID} over ${job.slice.length} inputs (chain head ${r.hash.slice(0,12)}…).`);
+            } else {
+              console.warn(`🚫 [RECEIPT] result from ${peer}… did NOT match a*x+b — no receipt issued.`);
+            }
+          }
         } else {
           job.perNode.push({ node: job.node?.nodeLabel || peer, count: 0, timedOut: true });
         }

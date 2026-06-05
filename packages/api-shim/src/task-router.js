@@ -1,5 +1,6 @@
 import { route, autoEscalateEnabled } from '../../stratos-agent/src/routing/model-router.js';
 import { meshAvailable } from '../../stratos-agent/src/routing/mesh-signal.js';
+import { observe } from '../../stratos-agent/src/operating/operating-tap.js';
 
 // Frontier escalation is OPT-IN: only if the operator configured a BYOK key does a hard prompt get
 // to leave the machine. With no key, EVERYTHING stays local — the sovereign default.
@@ -35,6 +36,18 @@ export class TaskClassifierRouter {
    *  - targetModel: Mapped model identifier
    */
   async classify(messages, model = '') {
+    // OPERATING-CORE TAP (Increment 5) — FLAG-GATED, DEFAULT-OFF, FAIL-OPEN observational wrap. When
+    // STRATOS_OPERATING_CORE !== '1' (the default), observe() does `return await exec()` and nothing
+    // else: this line is a no-op and the request path is byte-identical to today. When the flag is on,
+    // the tap observes (capture+trace+receipt) WITHOUT ever altering the result or a thrown error.
+    return observe({
+      meta: { route: 'classify', source: 'api', model, prompt: this.extractLastUserMessage(messages) },
+      exec: () => this._classify(messages, model),
+    });
+  }
+
+  /** The unchanged routing logic — the real execution the tap wraps. */
+  async _classify(messages, model = '') {
     const prompt = this.extractLastUserMessage(messages);
     const query = prompt.toLowerCase().trim();
 

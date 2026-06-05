@@ -146,6 +146,15 @@ const SUITES = {
     // chain fails honestly with the full hop log), and a user-provided model plugs into the SAME
     // interface + precedence with no special path. Policy docs: /opt/efficient-labs/models/routing/.
     'test-model-adapter.mjs',
+    // OPERATING-CORE TAP (Increment 5, final) — the flag-gated, DEFAULT-OFF, FAIL-OPEN observational
+    // wrap that wires the operating core into the live request path. Hermetic: pure fs/crypto in an
+    // isolated tmp dir, in-process injected keypair (no on-disk keys), no network/Ollama/daemon. Covers
+    // the disabled path being a byte-identical no-op (exact result returned, thrown error unchanged,
+    // ZERO fs writes, operating core never touched), the enabled path writing a capture + a receipt-
+    // chained trace (verifying with the public key only) for a success AND a result:"error" trace for a
+    // thrown exec while the error still propagates unchanged, FAIL-OPEN (an injected capture that throws
+    // still returns exec()'s result), exec()-called-exactly-once, input validation, and determinism.
+    'test-operating-tap.mjs',
   ],
 };
 

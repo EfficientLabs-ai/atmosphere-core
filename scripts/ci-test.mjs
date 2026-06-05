@@ -74,6 +74,13 @@ const SUITES = {
     // and a real SkillExecutor skill-run receipt. The CLI test covers `stratos receipt export|verify|
     // summary` incl. the capability gate (deny-by-default) and non-zero exit on a broken bundle.
     'test-capability-receipt.mjs', 'test-stratos-receipt.mjs',
+    // WALLET-AWARE MESH ATTRIBUTION (this session) — "measurement before rewards": every node's compute
+    // is attributed to its owner's PUBLIC Solana wallet. Hermetic: pure crypto/regex/logic, no network/
+    // Ollama/keys-on-disk. Covers Solana base58 validation (accept valid, reject malformed/injection),
+    // the runtime flag>config>unattributed resolution contract, owner_wallet carried IN the signed +
+    // hash-chained receipt body (signs/verifies/tamper-detects via both hash and PQC sig), per-wallet
+    // summarize aggregation (measurement only, no price/payout), and two wallets attributed separately.
+    'test-wallet-attribution.mjs',
     // "$0 bill" WIRED VERTICAL-SLICE demo (this session) — hermetic: the gateway fetch is MOCKED and the
     // node keypair is INJECTED, so it tests the end-to-end slice (real-response contract, sovereign-local
     // decision, signed receipt verified with the public key only, honest $0-vs-illustrative-cloud bill,

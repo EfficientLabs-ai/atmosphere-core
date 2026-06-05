@@ -242,8 +242,8 @@ function recomputeHash(r, crypto) {
     return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
   };
   const body = { receipt_id: r.receipt_id, ts: r.ts, actor_id: r.actor_id, action: r.action, ref: r.ref,
-    node_id: r.node_id, input_hash: r.input_hash, output_hash: r.output_hash, cost_units: r.cost_units,
-    caller_id: r.caller_id ?? null, prev_hash: r.prev_hash };
+    node_id: r.node_id, owner_wallet: r.owner_wallet ?? null, input_hash: r.input_hash, output_hash: r.output_hash,
+    cost_units: r.cost_units, caller_id: r.caller_id ?? null, prev_hash: r.prev_hash };
   return crypto.createHash('sha256').update(canonical(body)).digest('hex');
 }
 

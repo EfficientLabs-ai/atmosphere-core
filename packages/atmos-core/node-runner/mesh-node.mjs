@@ -30,6 +30,26 @@ const ONCE = argv.includes('--once');
 const INPUT = Number(getArg('input', cfg.defaultInput ?? 9));
 const TOPIC_NAME = getArg('topic', cfg.topic);
 
+// OWNER WALLET (Solana) — attributes this node's compute to its owner so the day a reward layer lands,
+// every node is ALREADY attributed (measurement before rewards). A wallet ADDRESS is PUBLIC and safe to
+// bake; this never touches a private key. Precedence: --wallet flag > config.walletAddress. Validated as
+// base58, 32-44 chars (no 0/O/I/l): invalid → refuse to start; absent → join unattributed.
+const SOLANA_BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const isValidSolanaAddress = (a) => typeof a === 'string' && SOLANA_BASE58.test(a);
+function resolveWallet() {
+  const raw = getArg('wallet', cfg.walletAddress);
+  if (raw == null || raw === true) return null;          // absent → unattributed (graceful)
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (!isValidSolanaAddress(s)) {
+    console.error('✗ invalid --wallet / config.walletAddress: must be a valid Solana address (base58, 32-44 chars, no 0/O/I/l).');
+    console.error('  Fix the address or omit it to join unattributed. Refusing to start.');
+    process.exit(2);
+  }
+  return s;
+}
+const OWNER_WALLET = resolveWallet();
+
 import crypto from 'node:crypto';
 const topicKey = crypto.createHash('sha256').update(TOPIC_NAME).digest();
 
@@ -85,6 +105,7 @@ function getCapabilityOnce() {
     type: 'CAPABILITY',
     version: NODE_VERSION,
     nodeLabel: String(cfg.nodeLabel || 'node').slice(0, 64),
+    walletAddress: OWNER_WALLET, // PUBLIC Solana address or null — the origin attributes contribution to it
     platform: process.platform,
     arch: process.arch,
     cpuModel: (cpus[0]?.model?.trim() || 'unknown').slice(0, 128),
@@ -127,6 +148,9 @@ console.log('🛰️  Atmosphere Mesh Node starting…');
 console.log(`   node id  : ${cfg.nodeLabel || 'node'}  (v${NODE_VERSION})`);
 console.log(`   topic    : ${TOPIC_NAME}`);
 console.log('   transport: public Hyperswarm DHT, NAT hole-punch, no open ports');
+console.log(OWNER_WALLET
+  ? `   wallet   : ${OWNER_WALLET.slice(0, 4)}…${OWNER_WALLET.slice(-4)} — compute attributed to this Solana owner`
+  : '   wallet   : unattributed (no wallet) — add --wallet <SOL_ADDRESS> to attribute your contribution');
 
 const swarm = new Hyperswarm();
 let executed = 0;

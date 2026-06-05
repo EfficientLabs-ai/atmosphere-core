@@ -245,6 +245,13 @@ async function runBroadcast() {
     cores: os.cpus().length,
     ramGB: Math.round(os.totalmem() / 1e9 * 10) / 10
   };
+  // A node's self-reported owner wallet is UNTRUSTED input — validate as a Solana address (base58,
+  // 32-44 chars, no 0/O/I/l) before storing/attributing. Invalid/absent → null (unattributed). This is
+  // a PUBLIC address only (never a key) and is never interpolated into logs/SQL/shell raw — the regex
+  // alphabet alone rejects any injection payload.
+  const SOLANA_BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+  const sanitizeWallet = (v) => (typeof v === 'string' && SOLANA_BASE58.test(v.trim()) ? v.trim() : null);
+
   // Validate + clamp an untrusted capability frame. Returns a clean object or null.
   function sanitizeCapability(m) {
     if (!m || m.type !== 'CAPABILITY') return null;
@@ -254,6 +261,7 @@ async function runBroadcast() {
     return {
       version: str(m.version, 16) || '?',
       nodeLabel: str(m.nodeLabel, 64) || 'node',
+      walletAddress: sanitizeWallet(m.walletAddress), // owner attribution — validated Solana address or null
       platform: str(m.platform, 32), arch: str(m.arch, 16),
       cpuModel: str(m.cpuModel, 128) || 'unknown',
       cores: Math.round(num(m.cores, 0, 4096)),
@@ -273,7 +281,10 @@ async function runBroadcast() {
     for (const n of nodes) {
       const benched = n.bench?.singleThreadMopsPerSec ? n.bench.singleThreadMopsPerSec + ' Mops/s' : '(origin)';
       const seal = n.proven ? `🔐≥${(n.proven.hashesPerSec/1e6).toFixed(2)}M H/s` : (n === self ? '' : '⏳unproven');
-      console.log(`  • ${(n.nodeLabel || 'node').padEnd(12)} ${String(n.cores || '?')+'c'} ${String(n.ramGB||'?')+'GB'}  ${benched}  ${seal}  ${n.cpuModel || ''}`);
+      // Owner wallet (truncated) — attribution at a glance. Origin row has no wallet; nodes that sent
+      // no wallet show "unattributed" (never fabricated). Truncation is display-only.
+      const wallet = n === self ? '' : (n.walletAddress ? `💰${n.walletAddress.slice(0, 4)}…${n.walletAddress.slice(-4)}` : '○unattributed');
+      console.log(`  • ${(n.nodeLabel || 'node').padEnd(12)} ${String(n.cores || '?')+'c'} ${String(n.ramGB||'?')+'GB'}  ${benched}  ${seal}  ${wallet}  ${n.cpuModel || ''}`);
     }
     console.log(`  SELF-REPORTED: ${nodes.length} nodes · ${cores} cores · ${ram} GB · ~${Math.round(mops)} aggregate Mops/s`);
     console.log(`  PROVEN (challenge-verified): ${provenNodes.length} node(s) · ≥ ${(provenHps/1e6).toFixed(2)}M H/s combined`);
@@ -371,16 +382,22 @@ async function runBroadcast() {
             if (correct) {
               const inputHash = receiptLog._hashContent(job.slice);
               const outputHash = receiptLog._hashContent(msg.results);
+              // Attribute to the worker's OWNER WALLET if it sent a valid one (captured on the fleet
+              // entry from its capacity report). No wallet → owner_wallet stays null (unattributed) —
+              // never fabricated. The wallet is part of the SIGNED + hash-chained receipt body.
+              const ownerWallet = job.node?.walletAddress ?? null;
               const r = receiptLog.append({
                 actor_id: originDid,                       // who orchestrated the work (this origin)
                 action: 'skill-run',
                 ref: SKILL_ID,                             // the exact signed skill that ran
                 node_id: 'did:hyper:' + peerKey.slice(0, 40), // the worker node (its DHT identity)
+                owner_wallet: ownerWallet,                 // the worker's owner (Solana addr) or null
                 input_hash: inputHash,
                 output_hash: outputHash,
                 cost_units: job.slice.length,              // measured: inputs computed (never a price)
               });
-              console.log(`🧾 [RECEIPT] skill-run ${r.receipt_id.slice(0,8)} — node ${peer}… ran ${SKILL_ID} over ${job.slice.length} inputs (chain head ${r.hash.slice(0,12)}…).`);
+              const attr = ownerWallet ? `→ owner ${ownerWallet.slice(0,4)}…${ownerWallet.slice(-4)}` : '(unattributed)';
+              console.log(`🧾 [RECEIPT] skill-run ${r.receipt_id.slice(0,8)} — node ${peer}… ran ${SKILL_ID} over ${job.slice.length} inputs ${attr} (chain head ${r.hash.slice(0,12)}…).`);
             } else {
               console.warn(`🚫 [RECEIPT] result from ${peer}… did NOT match a*x+b — no receipt issued.`);
             }

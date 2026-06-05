@@ -32,6 +32,30 @@ export const RECEIPT_ACTIONS = Object.freeze(['inference', 'skill-run']);
 
 const GENESIS = '0'.repeat(64);
 
+/**
+ * Solana base58 address validator — the OWNER WALLET that a node's compute is attributed to.
+ * A wallet ADDRESS is PUBLIC and safe to store/advertise; this never touches a private key.
+ * Solana addresses are base58-encoded 32-byte public keys: 32–44 chars from the Bitcoin/Solana
+ * base58 alphabet (NO 0, O, I, l). We validate shape only (length + alphabet) — strict enough to
+ * reject typos and any injection attempt (no whitespace, no shell/SQL metachars survive), and we
+ * never interpolate the raw value into logs/SQL/shell. Returns true/false; never throws.
+ */
+const SOLANA_BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+export function isValidSolanaAddress(addr) {
+  return typeof addr === 'string' && SOLANA_BASE58.test(addr);
+}
+/**
+ * Normalize a caller-supplied wallet to a clean attribution value: a valid address, or null
+ * (unattributed). Trims surrounding whitespace, then validates. An invalid non-empty string is
+ * a CALLER error here (createReceipt rejects it); absent/empty → null (graceful "unattributed").
+ */
+export function normalizeWallet(addr) {
+  if (addr == null) return null;
+  const s = String(addr).trim();
+  if (!s) return null;
+  return isValidSolanaAddress(s) ? s : false; // false = present-but-invalid (caller decides)
+}
+
 function canonical(v) {
   if (v === null || typeof v !== 'object') return JSON.stringify(v);
   if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
@@ -59,6 +83,7 @@ const receiptBody = (r) => ({
   action: r.action,
   ref: r.ref,
   node_id: r.node_id,
+  owner_wallet: r.owner_wallet ?? null,
   input_hash: r.input_hash,
   output_hash: r.output_hash,
   cost_units: r.cost_units,
@@ -80,6 +105,9 @@ const hashReceipt = (r) => sha256(canonicalBody(r));
  * @param {string} f.output_hash sha256 of the output (HASH, not content).
  * @param {number} f.cost_units  MEASURED non-negative cost (tokens / length / count) — never a price.
  * @param {string|null} [f.caller_id]  optional did:atmos of a distinct caller/relayer.
+ * @param {string|null} [f.owner_wallet]  optional Solana address of the node OWNER this contribution
+ *   is attributed to. PUBLIC address only (never a key). Absent/empty → null (unattributed); a present-
+ *   but-invalid address is REJECTED (never fabricated, never silently dropped). Part of the SIGNED body.
  * @param {object} [opts] { prevHash, now, jti }
  */
 export function createReceipt(f = {}, opts = {}) {
@@ -89,6 +117,8 @@ export function createReceipt(f = {}, opts = {}) {
   if (typeof f.cost_units !== 'number' || !Number.isFinite(f.cost_units) || f.cost_units < 0) {
     throw new Error('cost_units must be a non-negative measured number (never a price)');
   }
+  const wallet = normalizeWallet(f.owner_wallet);
+  if (wallet === false) throw new Error('owner_wallet must be a valid Solana address (base58, 32-44 chars) or absent');
   const now = opts.now ? opts.now() : Date.now();
   const jti = opts.jti ? opts.jti() : (crypto.randomUUID ? crypto.randomUUID() : sha256(String(now) + Math.random()).slice(0, 32));
   const r = {
@@ -98,6 +128,7 @@ export function createReceipt(f = {}, opts = {}) {
     action: f.action,
     ref: f.ref == null ? null : String(f.ref),
     node_id: f.node_id,
+    owner_wallet: wallet, // valid Solana address or null (unattributed) — signed + hash-chained
     input_hash: String(f.input_hash ?? hashContent('')),
     output_hash: String(f.output_hash ?? hashContent('')),
     cost_units: f.cost_units,
@@ -208,12 +239,19 @@ export class ReceiptLog {
   }
 
   /**
-   * The ATTRIBUTION VIEW: measured cost + count per ACTOR and per NODE. This is who-ran-what-and-how-
-   * much across machines — the input a future, separate reward layer would read. It is NOT a payout
-   * and carries NO price field. Honest by construction (same discipline as the attribution ledger).
+   * The ATTRIBUTION VIEW: measured cost + count per ACTOR, per NODE, and per OWNER WALLET. This is
+   * who-ran-what-and-how-much across machines — the input a future, separate reward layer would read.
+   * It is NOT a payout and carries NO price field. Honest by construction (same discipline as the
+   * attribution ledger).
+   *
+   * byWallet is the REWARD-ATTRIBUTION view: total measured cost_units per owner_wallet — so the day a
+   * reward layer lands, every contributing node is ALREADY attributed and rewardable, on the basis of
+   * measured contribution alone. Receipts with no owner_wallet (null) are summed under the explicit
+   * UNATTRIBUTED bucket — never invented, never dropped.
    */
   summarize() {
-    const byActor = {}, byNode = {};
+    const byActor = {}, byNode = {}, byWallet = {};
+    const UNATTRIBUTED = '(unattributed)';
     for (const r of this.chain) {
       const a = (byActor[r.actor_id] ||= { actor_id: r.actor_id, count: 0, cost_units: 0, byAction: {} });
       a.count += 1; a.cost_units += r.cost_units;
@@ -221,9 +259,13 @@ export class ReceiptLog {
       const n = (byNode[r.node_id] ||= { node_id: r.node_id, count: 0, cost_units: 0, byAction: {} });
       n.count += 1; n.cost_units += r.cost_units;
       n.byAction[r.action] = (n.byAction[r.action] || 0) + r.cost_units;
+      const wkey = r.owner_wallet || UNATTRIBUTED;
+      const w = (byWallet[wkey] ||= { owner_wallet: r.owner_wallet ?? null, attributed: !!r.owner_wallet, count: 0, cost_units: 0, byAction: {} });
+      w.count += 1; w.cost_units += r.cost_units;
+      w.byAction[r.action] = (w.byAction[r.action] || 0) + r.cost_units;
     }
     const sortByCost = (o) => Object.values(o).sort((x, y) => y.cost_units - x.cost_units);
-    return { byActor: sortByCost(byActor), byNode: sortByCost(byNode), total: this.chain.length };
+    return { byActor: sortByCost(byActor), byNode: sortByCost(byNode), byWallet: sortByCost(byWallet), total: this.chain.length };
   }
 
   /**

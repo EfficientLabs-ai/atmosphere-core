@@ -220,13 +220,13 @@ Answer the user's actual message directly and conversationally. Only use the ref
       // Local inference runs on the installed open-weights model. Any cloud/alias
       // name that reaches the local path (e.g. 'qwen-2.5-vlm-telegram-local', which
       // Ollama 404s on) is normalized to the installed model so we never silently
-      // fall back to a mock. Only qwen2.5:7b is installed on this host.
-      let targetModel = model || 'qwen2.5:7b';
+      // fall back to a mock. Only gemma2:2b is installed on this host.
+      let targetModel = model || 'gemma2:2b';
       const t = targetModel.toLowerCase();
       if (!(t.includes('qwen') || t.includes('local') || t.includes('llama'))) {
-        if (this.verbose) console.warn(`⚠️ [Local Model] "${targetModel}" is not a local model; normalizing to installed qwen2.5:7b.`);
+        if (this.verbose) console.warn(`⚠️ [Local Model] "${targetModel}" is not a local model; normalizing to installed gemma2:2b.`);
       }
-      targetModel = 'qwen2.5:7b';
+      targetModel = 'gemma2:2b';
       if (this.verbose) {
         console.log(`🤖 [Local Model] Querying real Ollama model [${targetModel}] at ${ollamaEndpoint}...`);
       }

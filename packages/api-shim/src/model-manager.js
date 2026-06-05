@@ -99,7 +99,7 @@ const TIERS = [
   { minGB: 7,  model: 'gemma4:12b' },  // Gemma 4 12B, 4-bit Dynamic GGUF (~7-8GB) — the new mid default
   { minGB: 8,  model: 'gemma2:9b' },   // fallback if Gemma 4 isn't pulled
   { minGB: 4,  model: 'gemma4:e4b' },  // Gemma 4 E4B — lighter effective variant for ~4-8GB
-  { minGB: 0,  model: 'qwen2.5:7b' },  // CPU-only floor
+  { minGB: 0,  model: 'gemma2:2b' },  // CPU-only floor
 ];
 
 /**
@@ -107,7 +107,7 @@ const TIERS = [
  * tier that fits capacity AND is actually pulled; else any installed model; else the default.
  * Returns the ACTUAL concrete model (never an alias), so logs/clients are honest.
  */
-export async function selectLocalModel({ ollamaHost = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434', requested = '', defaultModel = process.env.LOCAL_MODEL_DEFAULT || 'qwen2.5:7b', probe = null } = {}) {
+export async function selectLocalModel({ ollamaHost = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434', requested = '', defaultModel = process.env.LOCAL_MODEL_DEFAULT || 'gemma2:2b', probe = null } = {}) {
   const req = String(requested || '').replace(/^local:/i, '').trim();
   const now = Date.now();
   if (probe) { _probe = probe; } // tests inject
@@ -120,6 +120,11 @@ export async function selectLocalModel({ ollamaHost = process.env.OLLAMA_HOST ||
   const has = (m) => installed.some((i) => i === m || base(i) === base(m));
 
   if (req && req !== 'default' && has(req)) return { model: req, capacityGB: cap.gb, capacityKind: cap.kind, installed: installed.length };
+  // FAST BY DEFAULT on CPU-ONLY hosts: a big model is RAM-fittable but SLOW on CPU, so with no
+  // explicit model serve the fast default (gemma2:2b ~4s) rather than the biggest-fitting tier
+  // (gemma4:e4b is 9.6GB / ~20-40s on CPU — reserve it for an explicit request, e.g. multimodal
+  // "see"). GPU hosts (kind='vram') fall through to the capacity ladder to exploit the hardware.
+  if (cap.kind !== 'vram' && has(defaultModel)) return { model: defaultModel, capacityGB: cap.gb, capacityKind: cap.kind, installed: installed.length };
   for (const t of TIERS) if (cap.gb >= t.minGB && has(t.model)) return { model: t.model, capacityGB: cap.gb, capacityKind: cap.kind, installed: installed.length };
   return { model: installed[0] || defaultModel, capacityGB: cap.gb, capacityKind: cap.kind, installed: installed.length };
 }

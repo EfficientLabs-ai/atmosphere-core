@@ -24,11 +24,11 @@ const DEFAULTS = () => ({
   rev: 0,
   agentName: 'StratosAgent',
   language: 'en',                                                 // the agent replies in this language
-  model: { provider: 'local', name: 'qwen2.5:7b' },               // the default brain (provider switch = CLI-only)
+  model: { provider: 'local', name: 'gemma2:2b' },               // the default brain (provider switch = CLI-only)
   // the model sources the user enabled in setup. local = Ollama open-weights; providers hold ONLY a vault
   // handle to the API key (the key itself lives encrypted in the vault, never here). The compliance router
   // reads this to know which backends exist.
-  modelSources: { local: { enabled: true, name: 'qwen2.5:7b' }, providers: {} },
+  modelSources: { local: { enabled: true, name: 'gemma2:2b' }, providers: {} },
   // messaging channels you talk to the agent through. Each holds ONLY a vault handle to its bot token
   // (the token itself is encrypted in the vault). telegram is live; others are reserved for their adapters.
   messaging: {},
@@ -150,7 +150,7 @@ const PROVIDER_RE = /^[a-z0-9_-]+$/i;
 export function setLocalSource({ enabled = true, name } = {}) {
   return updateConfig((c) => {
     c.modelSources = { ...DEFAULTS().modelSources, ...c.modelSources };
-    c.modelSources.local = { enabled: !!enabled, name: name || c.modelSources.local?.name || 'qwen2.5:7b' };
+    c.modelSources.local = { enabled: !!enabled, name: name || c.modelSources.local?.name || 'gemma2:2b' };
   });
 }
 /** Enable a provider with the VAULT HANDLE to its key (never the key itself). */

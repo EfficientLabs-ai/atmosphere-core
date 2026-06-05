@@ -43,7 +43,7 @@ export function getAgentName() {
  */
 export function capabilitiesSummary(forPrompt = false) {
   const real = [
-    'Answer using a local open-weights model (qwen2.5:7b via Ollama) running on YOUR hardware — no cloud, no API keys required, your data stays on your device.',
+    'Answer using a local open-weights model (gemma2:2b via Ollama) running on YOUR hardware — no cloud, no API keys required, your data stays on your device.',
     'Recall from a local semantic memory (LanceDB vector store) over your own files and past conversations.',
     'Run verified skills that are post-quantum-signed (ML-DSA-65 + Ed25519) inside a deny-by-default WASI sandbox — no network or file access unless you explicitly grant it.',
     'Reach you over Telegram and a local OpenAI-compatible HTTP endpoint (127.0.0.1).',

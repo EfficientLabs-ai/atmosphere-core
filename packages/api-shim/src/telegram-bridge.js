@@ -142,7 +142,7 @@ export class TelegramBridge {
               }
               const statusReply = `📡 <b>${getAgentName()} — status</b>:
 • <b>Gateway:</b> <code>127.0.0.1:${this.port}</code> (local)
-• <b>Local model:</b> <code>qwen2.5:7b via Ollama</code>
+• <b>Local model:</b> <code>gemma2:2b via Ollama</code>
 • <b>Mesh:</b> ${meshLine}
 • <b>This host:</b> <code>${cpus.length} cores, ${(loadAvg).toFixed(2)} load, ${freeMemGB}/${totalMemGB} GB free</code>
 • <b>Crypto:</b> <code>X25519+ML-KEM-768 / Ed25519+ML-DSA-65 (real)</code>`;

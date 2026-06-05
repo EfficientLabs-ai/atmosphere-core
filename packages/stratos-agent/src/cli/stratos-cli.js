@@ -441,7 +441,7 @@ async function cmdModels(deps) {
   lines.push(`  Providers: ${provs.length ? provs.map((p) => `${p}${ms.providers[p].keyHandle ? C.g + ' ✓' + C.x : C.y + ' (no key)' + C.x}`).join(', ') : C.d + 'none' + C.x}`);
   lines.push('');
   if (!reachable) lines.push(`  ${C.y}Ollama not reachable — no local models to list.${C.x}`);
-  else if (!models.length) lines.push(`  ${C.d}(no local models installed — run: ollama pull qwen2.5:7b)${C.x}`);
+  else if (!models.length) lines.push(`  ${C.d}(no local models installed — run: ollama pull gemma2:2b)${C.x}`);
   else { lines.push('  Installed locally:'); for (const m of models) lines.push(`    - ${m}`); }
   return { code: 0, lines };
 }

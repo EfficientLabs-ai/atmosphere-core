@@ -60,6 +60,6 @@ ok(s.model === 'qwen2.5:7b', `10GB but gemma2:9b NOT pulled → falls back to in
 s = await selectLocalModel({ requested: 'gemma2:9b', probe: { cap: { gb: 12, kind: 'vram' }, installed: ['qwen2.5:7b', 'gemma2:9b'] } });
 ok(s.model === 'gemma2:9b', `explicitly-requested installed model honored → ${s.model}`);
 s = await selectLocalModel({ requested: 'default', probe: { cap: { gb: 4, kind: 'ram' }, installed: [] } });
-ok(s.model === 'qwen2.5:7b' && s.capacityKind === 'ram', 'nothing installed → configured default (honest fallback)');
+ok(s.model === 'gemma2:2b' && s.capacityKind === 'ram', 'nothing installed → configured default (honest fallback)');
 
 console.log(`\n✅ ALL ${pass} model-manager checks passed.`);

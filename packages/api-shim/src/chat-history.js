@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as fts from '../../stratos-agent/src/memory/fts-memory.js';
+import * as userModel from '../../stratos-agent/src/memory/user-model.js';
 
 const DIR = path.join(process.cwd(), '.stratos-profile', 'chat-memory');
 
@@ -28,6 +29,20 @@ function ensureFtsInit() {
   }
   return _ftsInit;
 }
+
+// DIALECTIC USER-MODEL accrual — COMPLEMENTARY to the FTS5 recall above: FTS5 indexes *what was said*;
+// the user-model accrues lightweight observations and periodically SYNTHESIZES a coherent theory of
+// *who the user is* (preferences/goals/style/topics), injected into the system prompt to personalize.
+// Flag-gated (STRATOS_USER_MODEL; default ON) + fail-open + never awaited in the chat path — a memory
+// hiccup or a slow local-model synthesis can never block or break serving. Synthesis runs only every
+// N user turns (shouldSynthesize) so it costs at most one local-model call per cadence, off the hot path.
+const USER_MODEL_ENABLED = process.env.STRATOS_USER_MODEL !== '0' && process.env.STRATOS_USER_MODEL !== 'false';
+let _umInit = null; // memoized init promise
+function ensureUserModelInit() {
+  if (!_umInit) _umInit = userModel.initUserModel().catch(() => ({ available: false }));
+  return _umInit;
+}
+
 const MAX_RING = Math.max(8, parseInt(process.env.CHAT_RING_MAX || '60', 10) || 60); // bounded working set
 const cache = new Map(); // chatId -> { seq, messages, nextSeq }
 
@@ -71,6 +86,24 @@ function append(chatId, role, content) {
       .then(() => fts.indexTurn({ conversationId: cid, role, content: text, ts }))
       .catch(() => { /* best-effort: memory accrual never blocks serving */ });
   } catch { /* best-effort */ }
+  // DIALECTIC user-model: accrue this turn as an observation, then (sparingly, per cadence) re-synthesize
+  // the theory of the user via the LOCAL gateway. Strictly per-conversation (keyed by cid). Fail-open +
+  // non-awaited: never blocks or breaks serving. Only the user's own turns shape the model (observe()
+  // skips assistant turns internally). Synthesis fires at most once every N user turns.
+  if (USER_MODEL_ENABLED) {
+    try {
+      const cid = conversationId(chatId);
+      const ts = Date.now();
+      ensureUserModelInit()
+        .then(() => {
+          userModel.observe(cid, { role, content: text, ts });
+          if (userModel.shouldSynthesize(cid)) {
+            return userModel.synthesize(cid, { summarizer: userModel.localGatewaySummarizer() });
+          }
+        })
+        .catch(() => { /* best-effort: the theory of the user never blocks serving */ });
+    } catch { /* best-effort */ }
+  }
   return state;
 }
 
@@ -89,6 +122,11 @@ export function conversationId(chatId) { return 'tg:' + safeId(chatId); }
 export function clear(chatId) {
   cache.delete(String(chatId));
   try { fs.unlinkSync(file(chatId)); } catch { /* already gone */ }
+  // Forget the synthesized theory of the user too — /forget must leave nothing behind. Fail-open.
+  try {
+    const cid = conversationId(chatId);
+    ensureUserModelInit().then(() => userModel.forget(cid)).catch(() => {});
+  } catch { /* best-effort */ }
 }
 
 export function ringStats(chatId) {

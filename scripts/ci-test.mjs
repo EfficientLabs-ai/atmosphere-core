@@ -47,6 +47,12 @@ const SUITES = {
     // FTS5 cross-session memory (this session) — hermetic: in-memory SQLite, injected summarizer,
     // no network/Ollama; tests the search path, conversation filter, injection-safety, degrade, gate.
     'test-fts-memory.mjs',
+    // DIALECTIC USER-MODELING (this session) — "the agent that grows with you". Hermetic: in-memory
+    // SQLite + an INJECTED summarizer (no Ollama/network). Covers observe-accrual (assistant turns
+    // skipped), synthesis that SUPERSEDES the prior model (dialectic, not a fact-pile), capped
+    // prompt-injection context, STRICT per-conversation isolation (no context bleed), fail-open on a
+    // broken store/throwing summarizer, forget, and the capability-gated `stratos user show|forget` CLI.
+    'test-user-model.mjs',
     // native local sensory surface (this session) — hermetic: all Piper/Ollama/whisper I/O is
     // injected, so it tests the talk/hear/see honesty contract + `stratos voice` gate with no
     // binaries, no network, no live Ollama.

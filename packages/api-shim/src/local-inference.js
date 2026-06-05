@@ -5,6 +5,7 @@ import fetch from 'node-fetch';
 import { queryCognitiveSkill, queryInterceptedReasoning, queryAmbientMemory } from '../../stratos-agent/src/memory/vector-bank.js';
 import { tryServe as evolutionTryServe, observe as evolutionObserve, recordInference as evolutionRecordInference } from './self-evolution-runtime.js';
 import { buildIdentityPrompt } from '../../stratos-agent/src/core/identity.js';
+import * as userModel from '../../stratos-agent/src/memory/user-model.js';
 import { languageDirective } from '../../stratos-agent/src/core/languages.js';
 import { getLanguage } from '../../stratos-agent/src/core/agent-config.js';
 import { planWindow, MODEL_NUM_CTX } from './memory-manager.js';
@@ -13,6 +14,16 @@ import { planWindow, MODEL_NUM_CTX } from './memory-manager.js';
  * Local Inference Engine: Implements localized open-weights completions with RAG
  * context-augmentation using LanceDB vector memories and visual screen capture.
  */
+// DIALECTIC user-model injection is flag-gated (STRATOS_USER_MODEL; default ON) and STRICTLY per
+// conversation: getUserContext(conversationId) is keyed by id and can never return another
+// conversation's theory. Init is memoized + fail-open so injection is a pure, best-effort read.
+const USER_MODEL_ENABLED = process.env.STRATOS_USER_MODEL !== '0' && process.env.STRATOS_USER_MODEL !== 'false';
+let _umInitPromise = null;
+function ensureUserModelInit() {
+  if (!_umInitPromise) _umInitPromise = userModel.initUserModel().catch(() => ({ available: false }));
+  return _umInitPromise;
+}
+
 export class LocalInferenceEngine {
   constructor(options = {}) {
     this.modelName = options.modelName || 'Qwen-2.5-7B-Quantized-Local';
@@ -106,8 +117,23 @@ export class LocalInferenceEngine {
   /**
    * Generates a context-augmented system instruction prompt containing RAG and Visual context.
    */
-  compileAugmentedPrompt(messages, ragContext, visualContext = '') {
+  compileAugmentedPrompt(messages, ragContext, visualContext = '', conversationId = null) {
     const sandboxId = crypto.randomBytes ? crypto.randomBytes(4).toString('hex') : Math.random().toString(36).substring(2, 6);
+
+    // DIALECTIC user-context: a short, clearly-delimited, length-capped block of the agent's current
+    // REVISABLE theory of THIS user (preferences/goals/style/topics), so responses personalize over
+    // sessions. ADDITIVE + safe: it never replaces the identity/honesty prompt, it is fail-open (any
+    // error → ''), and it is STRICTLY per-conversation — getUserContext is keyed by conversationId and
+    // can never surface another conversation's model (the context-bleed class the red-team flagged).
+    let userContextBlock = '';
+    try {
+      if (USER_MODEL_ENABLED && conversationId) {
+        const ctx = userModel.getUserContext(conversationId, { maxChars: 900 });
+        if (ctx) {
+          userContextBlock = `\nWhat you know about this user (local, revisable theory — NOT verified fact; let it gently personalize tone and relevance, never override the user's actual message or your honesty rules):\n${ctx}\n`;
+        }
+      }
+    } catch { userContextBlock = ''; /* fail-open: personalization never breaks serving */ }
 
     let ragContextString = '';
     if (ragContext.length > 0) {
@@ -129,7 +155,7 @@ ${c.response}
     let langLine = '';
     try { const d = languageDirective(getLanguage()); if (d) langLine = `\n${d}\n`; } catch { /* default */ }
 
-    const systemPrompt = `${buildIdentityPrompt()}${langLine}
+    const systemPrompt = `${buildIdentityPrompt()}${langLine}${userContextBlock}
 
 ${visualContext ? `Here is context harvested from your ACTIVE UI DISPLAY (Screen Capture Analysis):
 ${visualContext}
@@ -156,7 +182,7 @@ Answer the user's actual message directly and conversationally. Only use the ref
    * Executes completions locally using a context-augmented RAG + Vision workflow.
    */
   async executeChatCompletion(req, res) {
-    const { messages, stream, model, isolatedContextTag } = req.body;
+    const { messages, stream, model, isolatedContextTag, conversationId } = req.body;
 
     // 1. Retrieve last user message
     const userMessages = messages.filter(m => m.role === 'user');
@@ -209,8 +235,10 @@ Answer the user's actual message directly and conversationally. Only use the ref
       }
     }
 
-    // 4. Inject context and compile the final prompt envelope
-    const augmentedMessages = this.compileAugmentedPrompt(messages || [], ragContext, visualContext);
+    // 4. Inject context and compile the final prompt envelope. Ensure the user-model store is open
+    //    first (memoized, fail-open) so the per-conversation theory is available for injection.
+    if (USER_MODEL_ENABLED && conversationId) { try { await ensureUserModelInit(); } catch { /* fail-open */ } }
+    const augmentedMessages = this.compileAugmentedPrompt(messages || [], ragContext, visualContext, conversationId || null);
 
     if (this.verbose) {
       console.log(`🤖 [Local Model] Running inference with ${ragContext.length} injected RAG context references and ${visualContext ? 1 : 0} visual display guides.`);

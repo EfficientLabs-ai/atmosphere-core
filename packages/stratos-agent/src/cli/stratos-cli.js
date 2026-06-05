@@ -29,6 +29,7 @@ import { meshAvailable } from '../routing/mesh-signal.js';
 import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
 import { EgressPolicy, checkEgress, connectorHostsToRules } from '../security/egress-policy.js';
 import * as fts from '../memory/fts-memory.js';
+import * as userModelMem from '../memory/user-model.js';
 import * as voiceEngine from '../sensory/voice-engine.js';
 import { parseSkillMd, importSkillMd, exportSkillMd } from '../skills/skill-md.js';
 import { SkillStore } from '../skills/skill-store.js';
@@ -91,6 +92,7 @@ function helpText() {
     `  ${C.g}route${C.x} <prompt>   Preview the sovereign router: local by default, cloud only on opt-in`,
     `  ${C.g}demo${C.x}            The "$0 bill" proof: one local call · sovereign-routed · signed receipt · $0 vs cloud`,
     `  ${C.g}memory${C.x}          Full-text recall over past conversations (local FTS5): search · recall`,
+    `  ${C.g}user${C.x}            The dialectic theory of you — grows across sessions, personalizes: show · forget`,
     `  ${C.g}voice${C.x}           Native local talk/hear/see (Piper TTS · gemma audio/vision): say · hear · see · status`,
     `  ${C.g}skill${C.x}           SKILL.md portability (agentskills.io-compatible): import · export · list`,
     `  ${C.g}egress${C.x}          Policy-as-code egress firewall (default-DENY, anti-exfiltration): show · check`,
@@ -738,7 +740,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -800,6 +802,76 @@ async function cmdMemory(rest, d = {}) {
   lines.push(`${C.d}Based on ${out.hits.length} excerpt(s):${C.x}`);
   for (const h of out.hits) lines.push(`  ${C.b}${h.role}${C.x} ${h.snippet || h.content}`);
   return { code: 0, lines };
+}
+
+// Reading/forgetting the synthesized theory of the user is a capability — declared minimally and gated
+// deny-by-default through the SAME capability-gate the skill runtime uses. `user.read` shows the model;
+// `user.forget` wipes it. Neither touches network, extra fs, or secrets.
+const USER_CAPS = parseCapabilities({ capabilities: { actions: ['user.read', 'user.forget'] } });
+
+/**
+ * `stratos user show|forget [conversationId]` — inspect / erase the DIALECTIC theory of the user.
+ *   show   [cid]  print the current synthesized user-model (a revisable theory, not asserted fact)
+ *   forget [cid]  clear that conversation's observations + synthesized model (fully forgettable)
+ * Capability-gated (deny-by-default). 100% local. Strictly per-conversation (keyed by id — no bleed).
+ * The store is injectable (d.userModel) so the CLI is unit-tested with no SQLite / no live model.
+ */
+async function cmdUser(rest, d = {}) {
+  const sub = (rest[0] || '').toLowerCase();
+  if (sub !== 'show' && sub !== 'forget') {
+    return { code: sub ? 1 : 0, lines: [
+      `${C.B}stratos user${C.x} — the dialectic theory of you (local, revisable, forgettable)`,
+      `  ${C.g}stratos user show [conversationId]${C.x}     print the current synthesized user-model`,
+      `  ${C.g}stratos user forget [conversationId]${C.x}   wipe observations + model for a conversation`,
+      `  ${C.d}A theory the agent grows of who you are (preferences · goals · style · topics) to personalize.${C.x}`,
+      `  ${C.d}Synthesized locally, never asserted as fact, strictly per-conversation, 100% on-device.${C.x}`,
+    ] };
+  }
+  const conversationId = rest.slice(1).join(' ').trim() || (sub === 'show' ? 'tg:default' : '');
+
+  // Capability gate: deny-by-default. A test/caller can inject denied caps to prove enforcement.
+  const caps = d.userCaps || USER_CAPS;
+  const action = sub === 'show' ? 'user.read' : 'user.forget';
+  try { assertStepAllowed(caps, { action }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  if (sub === 'forget' && !conversationId) {
+    return { code: 1, lines: [`${C.r}Usage: stratos user forget <conversationId>${C.x}`] };
+  }
+
+  const um = d.userModel || userModelMem;
+  await um.initUserModel?.();
+  if (um.available && !um.available()) {
+    return { code: 0, lines: [
+      `${C.y}User-model store unavailable:${C.x} ${um.unavailableReason?.() || 'better-sqlite3 not available'}`,
+      `${C.d}(Honest degrade — no profile fabricated.)${C.x}`,
+    ] };
+  }
+
+  if (sub === 'forget') {
+    const okWiped = um.forget(conversationId);
+    return { code: 0, lines: [
+      okWiped
+        ? `${C.g}✓ forgot the theory of the user for ${conversationId}${C.x} ${C.d}(observations + model wiped)${C.x}`
+        : `${C.y}nothing to forget for ${conversationId}${C.x}`,
+    ] };
+  }
+
+  // show
+  const info = um.modelInfo ? um.modelInfo(conversationId) : { exists: false, observations: 0 };
+  if (!info.exists) {
+    return { code: 0, lines: [
+      `${C.B}user-model · ${conversationId}${C.x}`,
+      `${C.d}No synthesized theory yet${C.x} ${C.d}(${info.observations || 0} observation(s) accrued; synthesis runs after enough turns).${C.x}`,
+    ] };
+  }
+  const when = info.synthesizedAt ? new Date(info.synthesizedAt).toISOString().slice(0, 16).replace('T', ' ') : '?';
+  return { code: 0, lines: [
+    `${C.B}user-model · ${conversationId}${C.x} ${C.d}synthesized ${when} · ${info.observations} obs${C.x}`,
+    `${C.d}A revisable theory (not asserted fact) — local, per-conversation, forgettable:${C.x}`,
+    '',
+    info.summary,
+  ] };
 }
 
 // The `voice` surface is local-only (Piper on disk + localhost Ollama) — no network egress beyond
@@ -1083,6 +1155,10 @@ export async function run(argv = [], deps = {}) {
     memory: deps.memory,
     memoryCaps: deps.memoryCaps,
     summarize: deps.summarize,
+    // Injectable dialectic user-model surface (tests pass a stub store + caps; production uses the real
+    // user-model module + declared USER_CAPS inside cmdUser). Pass-through only — undefined in normal use.
+    userModel: deps.userModel,
+    userCaps: deps.userCaps,
     // Injectable sensory surface (tests pass a stub; production uses the real voice-engine).
     voice: deps.voice,
     voiceCaps: deps.voiceCaps,
@@ -1125,6 +1201,7 @@ export async function run(argv = [], deps = {}) {
     case 'route': return cmdRoute(rest);
     case 'demo': return cmdDemo(rest, d);
     case 'memory': return cmdMemory(rest, d);
+    case 'user': return cmdUser(rest, d);
     case 'voice': return cmdVoice(rest, d);
     case 'skill': return cmdSkill(rest, d);
     case 'egress': return cmdEgress(rest, d);

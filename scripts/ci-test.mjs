@@ -68,6 +68,13 @@ const SUITES = {
     // and the down-daemon degrade) with no live daemon, no Ollama, no on-disk keys. The CLI test also
     // covers `stratos demo` output, --json, --prompt, the capability gate (deny-by-default), and help.
     'test-demo-harness.mjs', 'test-stratos-demo.mjs',
+    // POLICY-AS-CODE EGRESS FIREWALL (this session) — hermetic: pure policy parse/match + the WASI
+    // sandbox's composed (caps ∩ host-policy) egress check + the `stratos egress` CLI. No network, no
+    // live services. Covers default-DENY, fail-closed on malformed/missing policy, SAFE suffix matching
+    // with anti-spoofing (evil-github.com / x.github.com.evil.com → DENY), per-method/path granularity,
+    // caps∩policy intersection both directions, hot-reload on mtime change, the env-allowlist discipline,
+    // and the capability-gated CLI (deny-by-default).
+    'test-egress-policy.mjs', 'test-egress-sandbox.mjs', 'test-stratos-egress.mjs',
   ],
 };
 

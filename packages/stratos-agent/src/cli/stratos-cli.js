@@ -27,6 +27,7 @@ import { route as routeDecision, difficulty, autoEscalateEnabled } from '../rout
 import { runDemo, DEFAULT_PROMPT } from './demo-harness.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
 import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
+import { EgressPolicy, checkEgress, connectorHostsToRules } from '../security/egress-policy.js';
 import * as fts from '../memory/fts-memory.js';
 import * as voiceEngine from '../sensory/voice-engine.js';
 import { parseSkillMd, importSkillMd, exportSkillMd } from '../skills/skill-md.js';
@@ -92,6 +93,7 @@ function helpText() {
     `  ${C.g}memory${C.x}          Full-text recall over past conversations (local FTS5): search · recall`,
     `  ${C.g}voice${C.x}           Native local talk/hear/see (Piper TTS · gemma audio/vision): say · hear · see · status`,
     `  ${C.g}skill${C.x}           SKILL.md portability (agentskills.io-compatible): import · export · list`,
+    `  ${C.g}egress${C.x}          Policy-as-code egress firewall (default-DENY, anti-exfiltration): show · check`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
@@ -736,7 +738,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'voice', 'skill', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -971,6 +973,90 @@ async function cmdSkill(rest, d = {}) {
   return { code: 1, lines: [`${C.r}Unknown skill subcommand: ${sub}${C.x}`, `${C.d}Try: import · export · list${C.x}`] };
 }
 
+// `stratos egress` — the POLICY-AS-CODE EGRESS FIREWALL surface (anti-exfiltration made auditable).
+//   stratos egress                      print the active policy + effective posture (default-deny)
+//   stratos egress check <host> [m] [p] test a request → ALLOW/DENY + why (composes with skill caps)
+// Reading/checking the egress policy is itself a capability — declared minimally and gated deny-by-
+// default through the SAME capability-gate the skill runtime uses. `egress.read` is all it needs:
+// it touches the local policy file only — no network, no secrets, no extra fs.
+const EGRESS_CAPS = parseCapabilities({ capabilities: { actions: ['egress.read'] } });
+
+function egressPolicyPath(arg) {
+  if (arg) return path.resolve(arg);
+  if (process.env.STRATOS_EGRESS_POLICY) return process.env.STRATOS_EGRESS_POLICY;
+  const base = process.env.STRATOS_PROFILE_DIR || path.join(_ROOT, '.stratos-profile');
+  const cands = [path.join(base, 'egress-policy.json'), path.join(_ROOT, 'config', 'egress-policy.json')];
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+
+function cmdEgress(rest, d = {}) {
+  const sub = (rest[0] || '').toLowerCase();
+
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos egress${C.x} ${C.d}— the policy-as-code egress firewall (default-DENY, fail-closed)${C.x}`,
+      `  ${C.g}stratos egress${C.x}                       Print the active policy + effective posture`,
+      `  ${C.g}stratos egress check <host> [m] [path]${C.x}  Test a request → ALLOW / DENY + why`,
+      '',
+      `  ${C.d}Effective allow = (this host policy) ∩ (a skill's sealed net caps). A skill reaches a host`,
+      `  only if it is in BOTH. Nothing leaves the box unless an allow-rule permits it. Hot-reloaded.${C.x}`,
+    ] };
+  }
+
+  // Capability gate: deny-by-default (a test/caller can inject denied caps to prove enforcement).
+  const caps = d.egressCaps || EGRESS_CAPS;
+  try { assertStepAllowed(caps, { action: 'egress.read' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  const policyPath = d.egressPolicyPath || egressPolicyPath();
+  const ep = d.egressPolicy || new EgressPolicy({ path: policyPath });
+  const policy = ep.current();
+
+  if (sub === 'check') {
+    const host = rest[1];
+    if (!host) return { code: 1, lines: [`${C.r}usage: stratos egress check <host> [method] [path]${C.x}`] };
+    const method = rest[2] && !rest[2].startsWith('/') ? rest[2] : null;
+    const pth = rest.find((a, i) => i >= 2 && a.startsWith('/')) || null;
+    // Compose with skill caps if the caller supplies a --caps host list (else policy-only check).
+    const ci = rest.indexOf('--caps');
+    const capNet = ci >= 0 ? rest.slice(ci + 1).filter((a) => !a.startsWith('-')) : null;
+    const res = checkEgress({ host, method, path: pth }, policy, capNet ? { caps: { net: capNet } } : {});
+    const verdict = res.allowed ? `${C.g}✓ ALLOW${C.x}` : `${C.r}✗ DENY${C.x}`;
+    return { code: res.allowed ? 0 : 1, lines: [
+      `${C.B}stratos egress check${C.x} ${C.d}${host}${method ? ' ' + method : ''}${pth || ''}${C.x}`,
+      `  ${verdict}  ${res.allowed ? `${C.d}matched an allow-rule${res.rule?.suffix ? ` (suffix .${res.rule.host})` : ''}${C.x}`
+        : `${C.d}${res.reason}${res.layer ? ` [${res.layer}]` : ''}${C.x}`}`,
+      capNet ? `  ${C.d}composed with caps.net = [${capNet.join(', ')}] (intersection)${C.x}` : `  ${C.d}policy-only (pass --caps <hosts…> to compose with skill caps)${C.x}`,
+    ] };
+  }
+
+  // default: print the active policy + posture.
+  const lines = [
+    `${C.B}stratos egress${C.x} ${C.d}— policy-as-code egress firewall (anti-exfiltration)${C.x}`,
+    `  ${C.d}policy   ${C.x}${policyPath}`,
+    `  ${C.d}default  ${C.x}${C.r}DENY${C.x} ${C.d}(fail-closed)${C.x}`,
+  ];
+  if (ep.lastError) {
+    lines.push(`  ${C.y}! load issue: ${ep.lastError} — DENYING ALL (fail-closed)${C.x}`);
+  }
+  if (policy._malformed) {
+    lines.push(`  ${C.y}! ${policy._malformed} malformed rule(s) dropped (not trusted)${C.x}`);
+  }
+  lines.push('', `${C.B}Allow-rules${C.x} ${C.d}(${policy.allow.length})${C.x}`);
+  if (!policy.allow.length) {
+    lines.push(`  ${C.y}none — total egress lockdown${C.x} ${C.d}(nothing leaves the box)${C.x}`);
+  } else {
+    for (const r of policy.allow) {
+      const h = r.suffix ? `.${r.host} ${C.d}(suffix)${C.x}` : r.host;
+      const m = r.methods ? ` ${C.d}methods=[${r.methods.join(',')}]${C.x}` : '';
+      const p = r.paths ? ` ${C.d}paths=[${r.paths.join(',')}]${C.x}` : '';
+      lines.push(`  ${C.g}allow${C.x} ${C.b}${h}${C.x}${m}${p}`);
+    }
+  }
+  lines.push('', `${C.d}Effective allow for a skill = these rules ∩ the skill's sealed net caps (host must be in BOTH).${C.x}`);
+  return { code: 0, lines };
+}
+
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
   return {
@@ -1010,6 +1096,11 @@ export async function run(argv = [], deps = {}) {
     originDid: deps.originDid,
     // Injectable capability-receipt gate (tests inject denied caps to prove deny-by-default).
     receiptCaps: deps.receiptCaps,
+    // Injectable egress-firewall surface (tests inject a policy/path + denied caps to prove the gate +
+    // the default-deny posture; production uses the on-disk .stratos-profile/egress-policy.json).
+    egressPolicy: deps.egressPolicy,
+    egressPolicyPath: deps.egressPolicyPath,
+    egressCaps: deps.egressCaps,
     // Injectable "$0 bill" demo surface (tests inject a mock gateway fetch + deterministic keypair +
     // denied caps; production uses global fetch, an ephemeral node identity, and DEMO_CAPS).
     demoFetch: deps.demoFetch,
@@ -1036,6 +1127,7 @@ export async function run(argv = [], deps = {}) {
     case 'memory': return cmdMemory(rest, d);
     case 'voice': return cmdVoice(rest, d);
     case 'skill': return cmdSkill(rest, d);
+    case 'egress': return cmdEgress(rest, d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

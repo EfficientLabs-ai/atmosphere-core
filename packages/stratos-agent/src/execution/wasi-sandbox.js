@@ -1,19 +1,53 @@
 import fs from 'node:fs';
 import { WASI } from 'node:wasi';
+import { EgressPolicy, DENY_ALL, assertEgressAllowed, EgressDenied } from '../security/egress-policy.js';
 
 /**
  * WasiSandbox: Executes compiled WebAssembly skill binaries within a strict,
  * capability-based WASI micro-kernel environment. Implements full linear memory
  * isolation and zero ambient host authority.
+ *
+ * EGRESS FIREWALL (default-DENY, fail-closed): outbound network attempts from a sandboxed guest are
+ * checked against the policy-as-code egress firewall (egress-policy.js), COMPOSED with the skill's
+ * declared `net` caps — a host must be permitted by BOTH the skill's caps AND the host policy. With
+ * neither configured, NOTHING leaves the box (the safe, backward-compatible default for capless skills).
+ * This replaces the prior STUB that only granted egress on a bare `*` wildcard.
+ *
+ * ENV DISCIPLINE: the guest env is deny-by-default — only NODE_ENV/ATMOS_PROTOCOL markers plus
+ * caller-supplied keys that are EXPLICITLY allowlisted (allowedEnvKeys). Arbitrary caller env is never
+ * forwarded, matching the VaultHost's empty-env enclave discipline (no API keys / SOLANA_KEYPAIR leak).
  */
 export class WasiSandbox {
   constructor(options = {}) {
     this.verbose = options.verbose !== false;
     this.allowedPaths = options.allowedPaths || {}; // Maps GUEST mount point -> HOST directory (matches job-policy.js sanitizer output)
-    this.allowedDomains = options.allowedDomains || new Set(); // Domain whitelists for sandboxed networking
+    this.allowedDomains = options.allowedDomains || new Set(); // Legacy domain whitelist (kept for back-compat)
     this.allowedEnvKeys = options.allowedEnvKeys instanceof Set
       ? options.allowedEnvKeys
       : new Set(options.allowedEnvKeys || []); // Explicit env passthrough allowlist (deny-by-default)
+
+    // Egress firewall. Accept (in priority order): an EgressPolicy instance, a {path} to hot-reload from,
+    // a raw policy source, or nothing ⇒ DENY_ALL. Composed with the skill's declared net caps below.
+    if (options.egressPolicy instanceof EgressPolicy) {
+      this.egress = options.egressPolicy;
+    } else if (options.egressPolicyPath) {
+      this.egress = new EgressPolicy({ path: options.egressPolicyPath });
+    } else if (options.egressPolicySource != null) {
+      this.egress = new EgressPolicy({ source: options.egressPolicySource });
+    } else {
+      this.egress = new EgressPolicy({ source: DENY_ALL }); // default-deny: no egress unless configured
+    }
+    // Skill's declared net caps (from capability-gate's parseCapabilities). Absent ⇒ no net at all.
+    this.caps = options.caps && Array.isArray(options.caps.net) ? options.caps : { net: [] };
+  }
+
+  /**
+   * Enforce one outbound request against the COMPOSED firewall: caps ∩ host-policy. Returns the matched
+   * rule on ALLOW; throws EgressDenied on any denial (fail-closed). This is the real check the guest's
+   * network-permission shim calls — no more bare-`*` stub.
+   */
+  assertEgressAllowed(req) {
+    return assertEgressAllowed(req, this.egress.current(), { caps: this.caps });
   }
 
   /**
@@ -76,16 +110,41 @@ export class WasiSandbox {
       // 3. Compile the WebAssembly bytes
       const wasmModule = await WebAssembly.compile(wasmBytes);
 
+      // Late-bound ref to the instance's memory so the network shim can read the guest-supplied host
+      // string out of linear memory at call time (set right after instantiate, below).
+      let guestMemory = null;
+      const readGuestString = (ptr, len) => {
+        if (!guestMemory || !Number.isInteger(ptr) || !Number.isInteger(len) || len < 0) return null;
+        try {
+          const buf = new Uint8Array(guestMemory.buffer, ptr, len);
+          return Buffer.from(buf).toString('utf8');
+        } catch { return null; }
+      };
+
       // 4. Construct import object with strict, capability-checked APIs
       const importObject = {
         wasi_snapshot_preview1: wasi.wasiImport,
         env: {
-          // Strict capability-governed lateral network check.
-          // Deny-by-default: only an explicit wildcard ('*') in the allowlist
-          // grants the guest network capability. (Node WASI preview1 exposes no
-          // real sockets regardless, so this is defence-in-depth for custom hosts.)
-          check_network_permission: (hostPtr, hostLen) => {
-            return this.allowedDomains.has('*') ? 1 : 0;
+          // REAL egress firewall (replaces the bare-`*` stub). The guest passes the target host (and,
+          // optionally, method/path) it wants to reach; we resolve it against the COMPOSED policy:
+          // skill net-caps ∩ host egress policy. Default-DENY + fail-closed: any unparseable host,
+          // unlisted host, caps miss, or internal error ⇒ 0 (DENY). Returns 1 only on an explicit ALLOW.
+          check_network_permission: (hostPtr, hostLen, methodPtr = 0, methodLen = 0, pathPtr = 0, pathLen = 0) => {
+            const host = readGuestString(hostPtr, hostLen);
+            if (host == null) return 0;
+            const method = methodLen ? readGuestString(methodPtr, methodLen) : null;
+            const path = pathLen ? readGuestString(pathPtr, pathLen) : null;
+            try {
+              this.assertEgressAllowed({ host, method, path });
+              if (this.verbose) console.log(`🛡️  [WasiSandbox] EGRESS ALLOW → ${host}${method ? ' ' + method : ''}${path || ''}`);
+              return 1;
+            } catch (e) {
+              if (this.verbose) {
+                const why = e instanceof EgressDenied ? e.reason : e.message;
+                console.warn(`⛔ [WasiSandbox] EGRESS DENY → ${host} (${why})`);
+              }
+              return 0; // fail-closed
+            }
           },
           // Core logging channel
           log_execution_step: (msgPtr, msgLen) => {
@@ -98,6 +157,7 @@ export class WasiSandbox {
 
       // 5. Instantiate and run
       const wasmInstance = await WebAssembly.instantiate(wasmModule, importObject);
+      guestMemory = wasmInstance.exports.memory || null;
       
       // Execute the WASI start routine
       const exitCode = wasi.start(wasmInstance);

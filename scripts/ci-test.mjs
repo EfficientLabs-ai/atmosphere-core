@@ -118,6 +118,15 @@ const SUITES = {
     // verifies with the public key only + fail-closed tamper detection + fail-open emission, and the
     // capability-gated `stratos workspace|task|capture|trace` CLI (deny-by-default).
     'test-operating-core.mjs',
+    // EVAL-ENGINE (Increment 2) — the trace→evaluation→lesson hop. Hermetic: pure fs/crypto in an
+    // isolated tmp dir, in-process keypair (no on-disk keys), no network/Ollama/daemon. Covers
+    // evaluate() writing evals/{id}.md + .json (EvalRecord shape), the deterministic default rubric
+    // (clean ok-trace PASSES; error-step/no-outputs FAILS the right criteria; cost-budget), the
+    // TRACE-INTEGRITY verify-as-a-criterion (PASSES for a verifying receipt, FAILS CLOSED for a
+    // tampered trace/receipt, never passes unverified), the bidirectional eval↔trace link, candidate
+    // lessons per failed criterion, determinism (same input → same score), the off-by-default LLM-judge
+    // hook (throwing judge degrades, never fabricates), input validation, and the gated `stratos eval` CLI.
+    'test-eval-engine.mjs',
   ],
 };
 

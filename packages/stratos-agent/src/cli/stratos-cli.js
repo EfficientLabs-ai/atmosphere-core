@@ -40,7 +40,8 @@ import * as composioToolkits from '../integrations/composio-toolkits.js';
 import { runToolAction } from '../integrations/composio-exec.js';
 import * as workspaceTree from '../workspace/workspace-tree.js';
 import { capture as captureEvent, classify as classifyEvent } from '../context/context-capture.js';
-import { startTrace, recordStep, endTrace } from '../trace/trace-engine.js';
+import { startTrace, recordStep, endTrace, readTrace } from '../trace/trace-engine.js';
+import { evaluate as evaluateTrace } from '../eval/eval-engine.js';
 import { generateHybridKeyPair } from '../security/quantum-crypto.js';
 import { makeReceiptSigner } from '../ledger/capability-receipt.js';
 
@@ -100,6 +101,7 @@ function helpText() {
     `  ${C.g}task${C.x}            Scaffold a task (instructions.md · tools.json · data/ · memory/ · outputs/ · traces/ · evals/ · skills/): create`,
     `  ${C.g}capture${C.x}         Capture an event into the operational map (Capture → Classify → Store; deterministic)`,
     `  ${C.g}trace${C.x}           Trace an execution → traces/{task-id}.json + a signed capability-receipt spine`,
+    `  ${C.g}eval${C.x}            Score a trace → evals/{task-id}.md + .json (deterministic rubric · verify-as-a-criterion · candidate lessons)`,
     `  ${C.g}ledger${C.x}          Attribution: who contributed what — summary · verify · list (measured, not priced)`,
     `  ${C.g}receipt${C.x}         Signed capability receipts — the cross-machine proof rail: export · verify · summary`,
     `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
@@ -843,7 +845,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'workspace', 'task', 'capture', 'trace', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'workspace', 'task', 'capture', 'trace', 'eval', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -1348,7 +1350,7 @@ async function cmdContent(rest, d = {}) {
 // capability — declared minimally and gated deny-by-default through the SAME capability-gate the skill
 // runtime uses. workspace/task scaffolding is `workspace.write`; capture is `context.capture`; the
 // trace exerciser is `trace.write`. All touch only the local stratos state dir — no network, no secrets.
-const WORKSPACE_CAPS = parseCapabilities({ capabilities: { actions: ['workspace.write', 'context.capture', 'trace.write'] } });
+const WORKSPACE_CAPS = parseCapabilities({ capabilities: { actions: ['workspace.write', 'context.capture', 'trace.write', 'eval.write'] } });
 
 function fmtTree(node, prefix = '', isLast = true, lines = []) {
   const branch = prefix ? (isLast ? '└─ ' : '├─ ') : '';
@@ -1549,6 +1551,84 @@ function cmdTrace(rest, d = {}) {
   } catch (e) { return { code: 1, lines: [`${C.r}trace failed: ${e.message}${C.x}`] }; }
 }
 
+/**
+ * `stratos eval <ws/proj/wf/task>` — score the task's trace with the deterministic default rubric and
+ * write evals/{task-id}.md + .json, linking the eval back into the trace. The trace-integrity criterion
+ * re-runs the receipt verify path (verify-as-a-criterion). Capability-gated deny-by-default. Reads the
+ * trace from traces/{task-id}.json by default; a receipt verifier is loaded from the node public key if
+ * present (else the integrity criterion honestly reports "unverified"). DETERMINISTIC — no LLM/network.
+ */
+function cmdEval(rest, d = {}) {
+  const root = d.workspacesRoot;
+  if (!rest.length || rest[0] === 'help' || rest[0] === '-h' || rest[0] === '--help') {
+    return { code: rest.length ? 0 : 1, lines: [
+      `${C.B}stratos eval${C.x} ${C.d}— score a trace against the deterministic rubric (the trace→eval→lesson loop)${C.x}`,
+      `  ${C.g}stratos eval <ws/proj/wf/task>${C.x} ${C.d}[--budget <units>]${C.x}`,
+      '',
+      `  ${C.d}Writes evals/{task-id}.md + .json, links eval_path back into the trace. Default rubric:${C.x}`,
+      `  ${C.d}result-ok · no-error-steps · outputs-present · cost-within-budget · trace-integrity (verify-as-a-criterion).${C.x}`,
+      `  ${C.d}Each failed criterion emits a candidate lesson — the seam into self-improvement.${C.x}`,
+    ] };
+  }
+  const caps = d.workspaceCaps || WORKSPACE_CAPS;
+  try { assertStepAllowed(caps, { action: 'eval.write' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  const taskPath = rest[0];
+  const bi = rest.indexOf('--budget');
+  const budget = bi >= 0 && /^\d+(\.\d+)?$/.test(rest[bi + 1] || '') ? Number(rest[bi + 1]) : undefined;
+
+  const evalFn = d.evaluate || evaluateTrace;
+  const read = d.readTrace || readTrace;
+
+  // Resolve the trace file for this task and read it (deny-by-default: a missing trace is an honest error).
+  let wt = d.workspaceTree || workspaceTree;
+  let t, trace;
+  try {
+    t = wt.resolveTask(taskPath, root ? { root } : {});
+    const taskId = t.subtask || t.task;
+    const traceFile = path.join(t.dirs.traces, `${taskId}.json`);
+    if (!fs.existsSync(traceFile)) {
+      return { code: 1, lines: [
+        `${C.r}no trace at ${traceFile}${C.x}`,
+        `${C.d}run ${C.x}${C.g}stratos trace ${taskPath}${C.x}${C.d} first — eval scores a finished trace.${C.x}`,
+      ] };
+    }
+    trace = read(traceFile);
+  } catch (e) { return { code: 1, lines: [`${C.r}eval failed: ${e.message}${C.x}`] }; }
+
+  // Load the node's PUBLIC key bundle to verify the receipt chain (verify-as-a-criterion). If absent,
+  // the trace-integrity criterion honestly reports "unverified" rather than fabricating a pass.
+  const pub = d.evalPublicKeyBundle || loadNodePublicBundle(nodeKeysPath());
+  const verifier = pub ? makeReceiptVerifier(pub) : undefined;
+  // If the trace's receipt lives in a JSONL log on disk, hand the log so the REAL chain is replayed.
+  let receiptLog;
+  const rp = trace.receipt_path;
+  if (verifier && rp && !String(rp).startsWith('(in-memory)') && fs.existsSync(rp)) {
+    try { receiptLog = new ReceiptLog({ path: rp, verifier }); } catch { receiptLog = undefined; }
+  }
+
+  let out;
+  try {
+    out = evalFn({ taskPath, trace, root, budget, verifier, receiptLog, now: d.evalNow });
+  } catch (e) { return { code: 1, lines: [`${C.r}eval failed: ${e.message}${C.x}`] }; }
+
+  const r = out.record;
+  const lines = [
+    `${r.passed ? C.g + '✓ eval PASS' : C.y + '✗ eval FAIL'}${C.x} ${C.b}${r.task_id}${C.x} ${C.d}· ${r.score}/${r.max_score} (${Math.round(r.normalized * 100)}%)${C.x}`,
+    `  ${C.d}scorecard ${C.x}${out.mdFile}`,
+    `  ${C.d}record    ${C.x}${out.jsonFile}`,
+  ];
+  for (const c of r.criteria) {
+    lines.push(`  ${c.pass ? C.g + '✓' : C.r + '✗'}${C.x} ${String(c.id).padEnd(20)} ${C.d}${c.detail}${C.x}`);
+  }
+  if (r.lessons.length) {
+    lines.push('', `${C.B}Candidate lessons${C.x} ${C.d}(seam into self-improvement)${C.x}`);
+    for (const l of r.lessons) lines.push(`  ${C.y}• ${l.criterion}${C.x} ${C.d}(${l.severity}) — ${l.suggested_instruction}${C.x}`);
+  }
+  return { code: 0, lines };
+}
+
 export async function run(argv = [], deps = {}) {
   const d = {
     config: deps.config || realConfig,
@@ -1619,6 +1699,13 @@ export async function run(argv = [], deps = {}) {
     traceModel: deps.traceModel,
     traceNow: deps.traceNow,
     ReceiptLog: deps.ReceiptLog,
+    // Injectable eval-engine surface (Increment 2). Tests inject the isolated root + denied caps + a
+    // deterministic clock + (optionally) a public-key bundle / stub evaluate; production uses the
+    // on-disk trace, the node public key for verify-as-a-criterion, WORKSPACE_CAPS, and the real engine.
+    evaluate: deps.evaluate,
+    readTrace: deps.readTrace,
+    evalPublicKeyBundle: deps.evalPublicKeyBundle,
+    evalNow: deps.evalNow,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -1647,6 +1734,7 @@ export async function run(argv = [], deps = {}) {
     case 'task': return cmdTask(rest, d);
     case 'capture': return cmdCapture(rest, d);
     case 'trace': return cmdTrace(rest, d);
+    case 'eval': return cmdEval(rest, d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

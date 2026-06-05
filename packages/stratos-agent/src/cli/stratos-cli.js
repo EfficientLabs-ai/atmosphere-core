@@ -24,6 +24,7 @@ import { AttributionLedger } from '../ledger/attribution-ledger.js';
 import { ReceiptLog, makeReceiptVerifier, verifyBundle } from '../ledger/capability-receipt.js';
 import { originId } from '../memory/skill-seal.js';
 import { route as routeDecision, difficulty, autoEscalateEnabled } from '../routing/model-router.js';
+import { runDemo, DEFAULT_PROMPT } from './demo-harness.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
 import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
 import * as fts from '../memory/fts-memory.js';
@@ -87,6 +88,7 @@ function helpText() {
     `  ${C.g}receipt${C.x}         Signed capability receipts — the cross-machine proof rail: export · verify · summary`,
     `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
     `  ${C.g}route${C.x} <prompt>   Preview the sovereign router: local by default, cloud only on opt-in`,
+    `  ${C.g}demo${C.x}            The "$0 bill" proof: one local call · sovereign-routed · signed receipt · $0 vs cloud`,
     `  ${C.g}memory${C.x}          Full-text recall over past conversations (local FTS5): search · recall`,
     `  ${C.g}voice${C.x}           Native local talk/hear/see (Piper TTS · gemma audio/vision): say · hear · see · status`,
     `  ${C.g}skill${C.x}           SKILL.md portability (agentskills.io-compatible): import · export · list`,
@@ -461,6 +463,108 @@ function cmdRoute(rest) {
   return { code: 0, lines };
 }
 
+// `stratos demo` — the WIRED VERTICAL-SLICE "$0 bill" proof. Runs ONE OpenAI-compatible request against
+// the LOCAL gateway, shows the sovereign routing decision, emits + verifies a signed capability receipt,
+// and prints the honest $0-vs-illustrative-cloud bill. The slice logic lives in demo-harness.js (reuses
+// the router + receipt + gateway; invents nothing). Capability-gated deny-by-default like `receipt`: this
+// surface reads local receipts + makes a loopback call, so `receipt.read` is the action it declares.
+const DEMO_CAPS = parseCapabilities({ capabilities: { actions: ['receipt.read'] } });
+
+const usd = (n) => '$' + Number(n).toFixed(6).replace(/0+$/, '').replace(/\.$/, '.0');
+
+async function cmdDemo(rest, d = {}) {
+  if (rest[0] === 'help' || rest[0] === '-h' || rest[0] === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos demo${C.x} ${C.d}— the "$0 bill" vertical-slice proof (local · sovereign · signed · verifiable)${C.x}`,
+      `  ${C.g}stratos demo${C.x}                  Run the end-to-end proof against your local daemon`,
+      `  ${C.g}stratos demo --prompt "<text>"${C.x}  Use your own prompt (default: the sovereignty thesis)`,
+      `  ${C.g}stratos demo --json${C.x}            Emit the machine-readable proof bundle (for pipelines/CI)`,
+      '',
+      `  ${C.d}Proves: one OpenAI-shaped request runs on THIS machine, sovereign-routed (cloud NOT used),`,
+      `  with a third-party-verifiable signed receipt, at $0 marginal cost — data never leaves the box.`,
+      `  Honest: real local numbers; the cloud column is an explicitly illustrative list-price estimate.${C.x}`,
+    ] };
+  }
+
+  // Capability gate: deny-by-default (a test/caller can inject denied caps to prove enforcement).
+  const caps = d.demoCaps || DEMO_CAPS;
+  try { assertStepAllowed(caps, { action: 'receipt.read' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  const flags = new Set(rest.filter((a) => a.startsWith('--')));
+  const json = flags.has('--json');
+  const pi = rest.indexOf('--prompt');
+  const prompt = (pi >= 0 ? rest.slice(pi + 1).filter((a) => !a.startsWith('--')).join(' ').trim() : '') || DEFAULT_PROMPT;
+
+  const port = d.port || process.env.PORT || 4099;
+  const result = await runDemo({
+    prompt,
+    port,
+    model: d.demoModel || process.env.LOCAL_MODEL_DEFAULT || 'gemma2:2b',
+    fetchImpl: d.demoFetch,        // injected in tests; production uses global fetch
+    keyPair: d.demoKeyPair,        // injected in tests; production mints an ephemeral node identity
+    gatewaySecret: process.env.ATMOS_GATEWAY_SECRET || null,
+  });
+
+  // --json: emit the proof bundle verbatim (degrade is still well-formed JSON for pipelines).
+  if (json) return { code: result.ok ? 0 : 1, lines: JSON.stringify(result, null, 2).split('\n') };
+
+  // Honest degrade: NO response was fabricated. Show the (pure/local) decision + how to start the daemon.
+  if (!result.ok) {
+    const g = result.gateway || {};
+    return { code: 1, lines: [
+      `${C.B}stratos demo${C.x} ${C.d}— the "$0 bill" proof${C.x}`,
+      `${C.r}✗ no local response — the daemon isn't answering.${C.x}`,
+      `  ${C.d}reason ${C.x}${g.reason || 'gateway unreachable'}`,
+      `  ${C.y}→ ${g.fix || 'start the daemon:  stratos start'}${C.x}`,
+      '',
+      `${C.d}The sovereign router still decided ${C.x}${C.g}LOCAL${C.x}${C.d} for this prompt — but nothing was run or faked.${C.x}`,
+    ] };
+  }
+
+  const r = result;
+  const tier = `${C.g}🛡  LOCAL${C.x} ${C.d}(${r.decision.tier})${C.x}`;
+  const verOk = r.receipt.verification?.ok === true;
+  const u = r.response.usage || {};
+  const ill = r.bill.illustrativeCloud;
+  const snippet = r.response.content.trim().replace(/\s+/g, ' ').slice(0, 220);
+
+  const lines = [
+    `${C.B}━━ stratos demo · the "$0 bill" proof ━━${C.x}`,
+    '',
+    `${C.B}1 · OpenAI-compatible request → your machine${C.x}`,
+    `  ${C.d}POST ${C.x}127.0.0.1:${port}/v1/chat/completions ${C.d}(same shape any OpenAI client sends)${C.x}`,
+    `  ${C.d}prompt   ${C.x}"${prompt.length > 64 ? prompt.slice(0, 61) + '…' : prompt}"`,
+    `  ${C.g}✓ real local response${C.x} ${C.d}from ${r.response.model} · ${u.total_tokens ?? '?'} tokens${C.x}`,
+    `  ${C.d}↳ ${snippet}${r.response.content.trim().length > 220 ? '…' : ''}${C.x}`,
+    '',
+    `${C.B}2 · Sovereign routing decision${C.x}`,
+    `  ${C.d}decision ${C.x}${tier}`,
+    `  ${C.d}reason   ${C.x}${r.decision.reason}`,
+    `  ${C.d}cloud    ${C.x}${r.decision.cloud ? C.r + 'USED' + C.x : C.g + 'NOT used — data stays on this machine' + C.x}`,
+    '',
+    `${C.B}3 · Signed capability receipt${C.x}`,
+    `  ${C.d}id       ${C.x}${r.receipt.receipt_id}`,
+    `  ${C.d}hash     ${C.x}${shortHash(r.receipt.hash)} ${C.d}· node ${didShort(r.receipt.node_id)}${C.x}`,
+    `  ${C.d}attests  ${C.x}${r.receipt.action} of ${r.receipt.ref} · in/out HASHED · ${r.receipt.cost_units} measured units`,
+    verOk
+      ? `  ${C.g}✓ verifiable proof${C.x} ${C.d}— signature + chain verified with the PUBLIC key only${C.x}`
+      : `  ${C.r}✗ verification failed: ${r.receipt.verification?.reason || 'unknown'}${C.x}`,
+    '',
+    `${C.B}4 · The $0 bill${C.x}`,
+    `  ${C.g}local marginal cost   ${usd(r.bill.localMarginalUsd)}${C.x} ${C.d}(${r.bill.localBasis})${C.x}`,
+    `  ${C.d}data locality         ${C.x}${r.bill.dataLocality}`,
+    `  ${C.y}same call on cloud   ~${usd(ill.usd)}${C.x} ${C.d}(${ill.label}: ${ill.model}, ${ill.prompt_tokens}+${ill.completion_tokens} tok × list price)${C.x}`,
+    `  ${C.d}basis                 ${C.x}${C.d}${ill.basis}${C.x}`,
+    '',
+    verOk
+      ? `${C.g}${C.B}✓ PROVEN: local · sovereign · signed-and-verifiable · $0 marginal cost.${C.x}`
+      : `${C.y}slice ran locally at $0, but the receipt did not verify — see step 3.${C.x}`,
+    `${C.d}Reproduce: stratos demo --json  ·  the cloud figure is illustrative, never a measured bill.${C.x}`,
+  ];
+  return { code: verOk ? 0 : 1, lines };
+}
+
 function cmdConnectors(deps) {
   let list;
   try { list = deps.connectors.listConnectors(); } catch (e) { return { code: 1, lines: [`${C.r}connector registry error: ${e.message}${C.x}`] }; }
@@ -632,7 +736,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'receipt', 'id', 'route', 'memory', 'voice', 'skill', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'voice', 'skill', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -906,6 +1010,12 @@ export async function run(argv = [], deps = {}) {
     originDid: deps.originDid,
     // Injectable capability-receipt gate (tests inject denied caps to prove deny-by-default).
     receiptCaps: deps.receiptCaps,
+    // Injectable "$0 bill" demo surface (tests inject a mock gateway fetch + deterministic keypair +
+    // denied caps; production uses global fetch, an ephemeral node identity, and DEMO_CAPS).
+    demoFetch: deps.demoFetch,
+    demoKeyPair: deps.demoKeyPair,
+    demoCaps: deps.demoCaps,
+    demoModel: deps.demoModel,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -922,6 +1032,7 @@ export async function run(argv = [], deps = {}) {
     case 'receipt': return cmdReceipt(rest, d);
     case 'id': return cmdId(rest);
     case 'route': return cmdRoute(rest);
+    case 'demo': return cmdDemo(rest, d);
     case 'memory': return cmdMemory(rest, d);
     case 'voice': return cmdVoice(rest, d);
     case 'skill': return cmdSkill(rest, d);

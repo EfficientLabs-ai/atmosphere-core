@@ -62,6 +62,12 @@ const SUITES = {
     // and a real SkillExecutor skill-run receipt. The CLI test covers `stratos receipt export|verify|
     // summary` incl. the capability gate (deny-by-default) and non-zero exit on a broken bundle.
     'test-capability-receipt.mjs', 'test-stratos-receipt.mjs',
+    // "$0 bill" WIRED VERTICAL-SLICE demo (this session) — hermetic: the gateway fetch is MOCKED and the
+    // node keypair is INJECTED, so it tests the end-to-end slice (real-response contract, sovereign-local
+    // decision, signed receipt verified with the public key only, honest $0-vs-illustrative-cloud bill,
+    // and the down-daemon degrade) with no live daemon, no Ollama, no on-disk keys. The CLI test also
+    // covers `stratos demo` output, --json, --prompt, the capability gate (deny-by-default), and help.
+    'test-demo-harness.mjs', 'test-stratos-demo.mjs',
   ],
 };
 

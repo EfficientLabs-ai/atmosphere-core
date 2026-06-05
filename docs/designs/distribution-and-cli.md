@@ -64,7 +64,7 @@ and pushes it to the product repo (build-artifact push, NOT `git subtree` histor
 deterministic, and keeps the private upstream's history private):
 - `stratos`: copy the runtime packages + CLI + generated README/LICENSE + the rewritten
   `package.json`; run the test suite against the assembled tree; commit to `StratosAgent` repo.
-- `atmosphere`: same for the mesh node + ghost/relay bundles → `TheAtmosphere` repo.
+- `atmosphere`: same for the mesh node + node/relay bundles → `TheAtmosphere` repo.
 - Dry-run by default; `--push` to actually publish; never pushes secrets (reuses `secret-guard`
   scanning of the assembled tree as a pre-push gate). Versioned + tagged.
 - **No npm publish or repo push happens unattended** — these are operator-gated release steps.

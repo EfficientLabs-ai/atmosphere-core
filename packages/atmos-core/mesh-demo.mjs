@@ -252,7 +252,7 @@ async function runBroadcast() {
     console.log(`🤝 [BROADCAST] peer connected: ${peer}… — sending signed skill block`);
     sendFrame(socket, wasm);
     // Announce ourselves as a relay so any relay peer can include us in leader election.
-    // Ghosts ignore RELAY_HELLO (unknown type); only relays act on it.
+    // Nodes ignore RELAY_HELLO (unknown type); only relays act on it.
     sendFrame(socket, Buffer.from(JSON.stringify({ type: 'RELAY_HELLO', relayId: RELAY_ID })));
     served++;
     sockets.set(peerKey, socket);

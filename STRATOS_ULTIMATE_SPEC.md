@@ -25,7 +25,7 @@ This document serves as the authoritative, production-locked engineering and dep
 ### 🛡️ Pillar 1: The Sovereign WASI Execution Core & x402 Economy
 *   **The Paradigm**: We permanently strip the agent of raw host operating system shell access (`child_process.exec`). Stratos executes all dynamic tasks, tools, and actions inside a **WebAssembly System Interface (WASI)** micro-kernel sandbox.
 *   **Capability-Based Security**: The Wasm execution enclave maintains **zero ambient authority**. System resources (explicit file descriptors, networking ports, or databases) are pre-allocated and cryptographically delegated as capability objects (`libpreopen`). Any prompt-injection or privilege-escalation attempt fails deterministically at the sandbox boundary.
-*   **The x402 Compute Economy**: Local desktop edge nodes operate within our decentralized DePIN compute mesh. If a local machine lacks the CPU/GPU memory to run heavy reasoning tasks (e.g., Llama-3 70B fallbacks), the WASI core instantly routes the task to a nearby partnered **Ghost Node** (e.g. Esports GPU clusters) over secure Hyperswarm Noise sockets. The transaction is settled in real-time using off-chain **x402 micropayments** rolled up on Solana.
+*   **The x402 Compute Economy**: Local desktop edge nodes operate within our decentralized DePIN compute mesh. If a local machine lacks the CPU/GPU memory to run heavy reasoning tasks (e.g., Llama-3 70B fallbacks), the WASI core instantly routes the task to a nearby partnered **mesh node** (e.g. GPU clusters) over secure Hyperswarm Noise sockets. The transaction is settled in real-time using off-chain **x402 micropayments** rolled up on Solana.
 
 ---
 

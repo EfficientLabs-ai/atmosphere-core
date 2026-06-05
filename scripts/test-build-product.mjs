@@ -71,17 +71,17 @@ const aout = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-pkg-'));
 const ar = assembleProduct({ product: 'atmosphere', outDir: aout, version: '9.9.9' });
 ok(ar.fileCount > 10 && ar.violations === 0, `atmosphere assembled ${ar.fileCount} files, 0 violations (anonymization gated)`);
 const apkg = JSON.parse(fs.readFileSync(path.join(aout, 'package.json'), 'utf8'));
-ok(apkg.name === '@efficientlabs/atmosphere' && apkg.bin['atmos-ghost'] === 'atmos-core/ghost-node/atmos-ghost.mjs', 'atmosphere manifest: name + atmos-ghost bin');
+ok(apkg.name === '@efficientlabs/atmosphere' && apkg.bin['atmos-node'] === 'atmos-core/node-runner/mesh-node.mjs', 'atmosphere manifest: name + atmos-node bin');
 ok(apkg.dependencies.hyperswarm && apkg.dependencies['@noble/post-quantum'] && !apkg.dependencies.express, 'atmosphere manifest: mesh deps, no express');
 
-console.log('  -- vendored ghost verifier (so the bin resolves) --');
-ok(exists(path.join(aout, 'atmos-core/ghost-node/atmos-ghost.mjs')), 'ghost bin present');
-ok(exists(path.join(aout, 'atmos-core/ghost-node/quantum-crypto.js')), 'vendored quantum-crypto.js present (./quantum-crypto.js resolves)');
-ok(exists(path.join(aout, 'atmos-core/ghost-node/wasm-sections.js')), 'vendored wasm-sections.js present');
+console.log('  -- vendored node verifier (so the bin resolves) --');
+ok(exists(path.join(aout, 'atmos-core/node-runner/mesh-node.mjs')), 'mesh-node bin present');
+ok(exists(path.join(aout, 'atmos-core/node-runner/quantum-crypto.js')), 'vendored quantum-crypto.js present (./quantum-crypto.js resolves)');
+ok(exists(path.join(aout, 'atmos-core/node-runner/wasm-sections.js')), 'vendored wasm-sections.js present');
 
 console.log('  -- ops tooling + internal codename excluded --');
-ok(!exists(path.join(aout, 'atmos-core/ghost-node/build.sh')), 'ghost build.sh (references build-host paths) excluded');
-ok(!exists(path.join(aout, 'atmos-core/ghost-node/relay')), 'relay/ ops scripts excluded');
+ok(!exists(path.join(aout, 'atmos-core/node-runner/build.sh')), 'build.sh (references build-host paths) excluded');
+ok(!exists(path.join(aout, 'atmos-core/node-runner/relay')), 'relay/ ops scripts excluded');
 ok(!exists(path.join(aout, 'atmos-core/test.js')), 'atmos-core tests excluded');
 const allText = fs.readdirSync(aout, { recursive: true }).filter((f) => /\.(js|mjs|json|md)$/.test(String(f)))
   .map((f) => { try { return fs.readFileSync(path.join(aout, String(f)), 'utf8'); } catch { return ''; } }).join('\n');

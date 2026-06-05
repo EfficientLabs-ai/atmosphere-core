@@ -7,15 +7,37 @@ import crypto from 'node:crypto';
  * defense-in-depth against OTHER local processes/users on the host driving spend
  * or the /mcp browser. It is OPT-IN and non-breaking:
  *   - ATMOS_GATEWAY_SECRET unset  → routes behave exactly as before (warn once).
- *   - ATMOS_GATEWAY_SECRET set    → spend + /mcp routes require the
- *                                   `x-atmos-gateway` header to match; the
- *                                   first-party callers attach it automatically.
+ *   - ATMOS_GATEWAY_SECRET set    → spend + /mcp routes require the secret via EITHER
+ *                                   `x-atmos-gateway: <secret>`  (first-party callers), OR
+ *                                   `Authorization: Bearer <secret>` (OpenAI convention —
+ *                                   how ElevenLabs' Custom LLM and any OpenAI SDK client
+ *                                   authenticate). The same secret, compared timing-safely.
  */
 export const GATEWAY_SECRET = process.env.ATMOS_GATEWAY_SECRET || null;
 
 let warned = false;
 
-/** Express middleware: gate a route behind the shared secret (allow + warn if unset). */
+/** Timing-safe equality that never short-circuits on length (avoids leaking length via timing). */
+export function secretMatches(provided, expected) {
+  const a = Buffer.from(String(provided || ''));
+  const b = Buffer.from(String(expected));
+  // Compare against a fixed-length digest so a length mismatch still does constant work.
+  const ah = crypto.createHash('sha256').update(a).digest();
+  const bh = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(ah, bh) && a.length === b.length;
+}
+
+/** Pull the bearer token out of an `Authorization: Bearer <token>` header (case-insensitive scheme). */
+function bearerToken(req) {
+  const h = req.get('authorization') || '';
+  const m = /^Bearer\s+(.+)$/i.exec(h.trim());
+  return m ? m[1].trim() : '';
+}
+
+/**
+ * Express middleware: gate a route behind the shared secret (allow + warn if unset).
+ * Accepts the secret via `x-atmos-gateway` OR `Authorization: Bearer` — either is sufficient.
+ */
 export function requireGatewaySecret(req, res, next) {
   if (!GATEWAY_SECRET) {
     if (!warned) {
@@ -24,10 +46,10 @@ export function requireGatewaySecret(req, res, next) {
     }
     return next();
   }
-  const provided = Buffer.from(req.get('x-atmos-gateway') || '');
-  const expected = Buffer.from(GATEWAY_SECRET);
-  if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
-    return res.status(401).json({ error: { message: 'Unauthorized: invalid or missing x-atmos-gateway header', type: 'gateway_auth' } });
+  const viaHeader = secretMatches(req.get('x-atmos-gateway'), GATEWAY_SECRET);
+  const viaBearer = secretMatches(bearerToken(req), GATEWAY_SECRET);
+  if (!viaHeader && !viaBearer) {
+    return res.status(401).json({ error: { message: 'Unauthorized: invalid or missing gateway secret (x-atmos-gateway or Authorization: Bearer)', type: 'gateway_auth' } });
   }
   return next();
 }

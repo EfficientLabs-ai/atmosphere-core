@@ -1,75 +1,31 @@
-import { spawn } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
+import { hear } from './voice-engine.js';
 
 /**
- * AudioIngestionEngine: Handles local Speech-to-Text (STT) conversions.
- * Primarily wraps local whisper.cpp executable, with resilient simulated fallback
- * for development, container, and sandboxed testing.
+ * AudioIngestionEngine: local Speech-to-Text (STT).
+ *
+ * REAL transcription via the shared voice-engine: primary path is the local multimodal model
+ * (gemma-class) through Ollama's OpenAI-compatible audio endpoint; optional whisper.cpp fallback if a
+ * binary is configured. NO cloud. NO mock: if no local STT path works we throw an honest error rather
+ * than return a fabricated transcript.
  */
 export class AudioIngestionEngine {
   constructor(options = {}) {
-    this.whisperPath = options.whisperPath || 'whisper.cpp';
     this.verbose = options.verbose !== false;
+    this.model = options.model;
+    this.ollamaHost = options.ollamaHost;
   }
 
   /**
-   * Transcribes a .wav file (16kHz, mono) into text.
-   * Runs local whisper.cpp or returns simulated high-performance Whisper transcriptions.
+   * Transcribes an audio file (wav/ogg/…) into text. Throws on honest degrade (no local STT).
+   * @returns {Promise<string>} the transcript.
    */
-  async transcribeSpeech(wavPath) {
-    if (this.verbose) {
-      console.log(`📡 [AudioIngestionEngine] Transcribing audio file: ${wavPath}`);
+  async transcribeSpeech(audioPath) {
+    const res = await hear(audioPath, { verbose: this.verbose, model: this.model, ollamaHost: this.ollamaHost });
+    if (!res.ok) {
+      if (this.verbose) console.warn(`⚠️ [AudioIngestionEngine] STT unavailable — ${res.reason}`);
+      throw new Error(`local STT unavailable: ${res.reason}`);
     }
-
-    if (!fs.existsSync(wavPath)) {
-      throw new Error(`Speech file not found: ${wavPath}`);
-    }
-
-    return new Promise((resolve) => {
-      // Setup command to run whisper.cpp locally
-      const cmd = `"${this.whisperPath}" -m models/ggml-base.bin -f "${wavPath}" -otxt`;
-      const child = spawn(process.platform === 'win32' ? 'cmd.exe' : 'bash', 
-                          process.platform === 'win32' ? ['/c', cmd] : ['-c', cmd]);
-
-      let stdout = '';
-      child.stdout.on('data', (chunk) => {
-        stdout += chunk.toString();
-      });
-
-      child.on('close', (code) => {
-        if (code === 0 && stdout.trim().length > 0) {
-          if (this.verbose) console.log(`📡 [AudioIngestionEngine] Whisper STT Success: "${stdout.trim()}"`);
-          return resolve(stdout.trim());
-        }
-
-        // Resilient simulated fallback voice commands for sandbox/bootstrap
-        const mockTranscriptions = [
-          "Generate a sovereign web scraper skill targeting efficientlabs.ai",
-          "What is currently active on my display screen?",
-          "Explain post-quantum signatures and state channel engine bypass rules",
-          "Open state channel node and execute micropayment rollup"
-        ];
-        
-        // Deterministically mock if the filename matches a test string, otherwise pick random
-        const filename = path.basename(wavPath).toLowerCase();
-        let matchedTranscript = mockTranscriptions[0];
-        
-        if (filename.includes('vision') || filename.includes('screen')) {
-          matchedTranscript = mockTranscriptions[1];
-        } else if (filename.includes('pqc') || filename.includes('signatures') || filename.includes('deepscan')) {
-          matchedTranscript = mockTranscriptions[2];
-        } else if (filename.includes('state') || filename.includes('payment') || filename.includes('balance')) {
-          matchedTranscript = mockTranscriptions[3];
-        } else {
-          matchedTranscript = mockTranscriptions[Math.floor(Math.random() * mockTranscriptions.length)];
-        }
-
-        if (this.verbose) {
-          console.log(`📡 [AudioIngestionEngine] Local/Simulated STT: "${matchedTranscript}"`);
-        }
-        resolve(matchedTranscript);
-      });
-    });
+    if (this.verbose) console.log(`📡 [AudioIngestionEngine] STT (${res.engine}): "${res.text}"`);
+    return res.text;
   }
 }

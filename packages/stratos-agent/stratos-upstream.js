@@ -5,7 +5,7 @@
  * Historically :5001 was an unimplemented placeholder, so cloud-routed prompts
  * hit ECONNREFUSED. This is a minimal, sovereign-consistent implementation:
  * it presents the OpenAI-compatible surface the bridge expects and serves it
- * from the LOCAL open-weights model (Ollama qwen2.5:7b) — no external cloud,
+ * from the LOCAL open-weights model (Ollama gemma2:2b) — no external cloud,
  * no API keys, no egress. Repoint UPSTREAM_MODEL_URL at a true frontier
  * endpoint later to get genuine cloud routing without touching the bridge.
  */
@@ -15,7 +15,7 @@ import { buildIdentityPrompt } from './src/core/identity.js';
 const PORT = parseInt(process.env.STRATOS_UPSTREAM_PORT || '5001', 10);
 const HOST = process.env.STRATOS_UPSTREAM_HOST || '127.0.0.1';
 const MODEL_URL = process.env.UPSTREAM_MODEL_URL || 'http://127.0.0.1:11434';
-const MODEL = process.env.UPSTREAM_MODEL || 'qwen2.5:7b';
+const MODEL = process.env.UPSTREAM_MODEL || 'gemma2:2b';
 
 const app = express();
 app.use(express.json({ limit: '8mb' }));

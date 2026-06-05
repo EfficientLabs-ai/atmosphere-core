@@ -142,6 +142,21 @@ export async function tryServe(prompt) {
 }
 
 /**
+ * Hook R (RECEIPT): after the gateway serves a local/router response, emit a signed, hash-chained
+ * capability receipt (the cross-machine proof rail) attesting WHO ran WHAT model, on THIS node, over
+ * which input/output (hashed — content never stored), at what measured cost. FAIL-OPEN: inert unless
+ * STRATOS_EVOLUTION is on and the node key exists; degrades to no-receipt and NEVER throws into the
+ * request path. This does not gate, slow, or alter serving in any way.
+ * @param {object} o { prompt, response, model, costUnits? }
+ */
+export async function recordInference(o = {}) {
+  const eng = await getEngine();
+  if (!eng || typeof eng.recordInference !== 'function') return null;
+  try { return eng.recordInference(o); }
+  catch (e) { console.warn('⚠️ [SelfEvolution] receipt emit skipped:', e.message); return null; }
+}
+
+/**
  * Hook A (OBSERVE): after a successful local completion, if the exchange encodes a typed
  * numeric I/O example, record it so the night shift can induce + compile a skill. No-op for
  * free-form prose (nothing typed to learn). Never throws.

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Efficient Labs Atmosphere DePIN - Headless Ghost Node Installer & Load Tracker
+    Efficient Labs Atmosphere DePIN - Headless Mesh Node Installer & Load Tracker
 .DESCRIPTION
     Installs a background daemon on the host Windows machine to monitor system resource loads.
     Performs periodic WMI (Windows Management Instrumentation) telemetry checks to detect when
@@ -22,8 +22,8 @@ param (
     [int]$LoadThreshold = 80
 )
 
-$ServiceName = "AtmosGhostNode"
-$LockFile = Join-Path $PSScriptRoot ".ghost-node.lock"
+$ServiceName = "AtmosMeshNode"
+$LockFile = Join-Path $PSScriptRoot ".mesh-node.lock"
 
 function Get-CpuLoad {
     try {
@@ -114,17 +114,17 @@ function Show-Status {
     if (Test-Path $LockFile) {
         $daemonPid = Get-Content $LockFile -ErrorAction SilentlyContinue
         if ($null -ne $daemonPid -and (Get-Process -Id $daemonPid -ErrorAction SilentlyContinue)) {
-            Write-Host "🟢 Atmos Ghost Node is ACTIVE (Process ID: $daemonPid)" -ForegroundColor Green
+            Write-Host "🟢 Atmos Mesh Node is ACTIVE (Process ID: $daemonPid)" -ForegroundColor Green
             $cpuLoad = Get-CpuLoad
             Write-Host "📊 Current CPU Load: $cpuLoad%" -ForegroundColor Gray
             return
         }
     }
-    Write-Host "🔴 Atmos Ghost Node load tracker is INACTIVE." -ForegroundColor Red
+    Write-Host "🔴 Atmos Mesh Node load tracker is INACTIVE." -ForegroundColor Red
 }
 
 function Install-Service {
-    Write-Host "🛠️  Registering Atmos Ghost Node Task in Windows Task Scheduler..." -ForegroundColor Cyan
+    Write-Host "🛠️  Registering Atmos Mesh Node Task in Windows Task Scheduler..." -ForegroundColor Cyan
     
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-NoProfile -WindowStyle Hidden -File `"$PSCommandPath`" -Action start"
@@ -133,7 +133,7 @@ function Install-Service {
     Register-ScheduledTask -TaskName $ServiceName -Trigger $trigger -Action $action -Settings $settings -User "SYSTEM" -Force | Out-Null
     
     Write-Host "✅ [Installation Complete] Service registered to start hidden on boot." -ForegroundColor Green
-    Write-Host "👉 Run: .\install-ghost-node.ps1 -Action start to trigger daemon." -ForegroundColor Yellow
+    Write-Host "👉 Run: .\install-node.ps1 -Action start to trigger daemon." -ForegroundColor Yellow
 }
 
 # Router action

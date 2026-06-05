@@ -18,7 +18,8 @@ export class ConfigParser {
    * Registers default model endpoints (Portal, OpenAI, Anthropic, Ollama local weights)
    */
   initializeDefaultModelMap() {
-    this.modelMap.set('qwen2.5:7b', { provider: 'ollama', url: 'http://127.0.0.1:11434' });
+    this.modelMap.set('gemma2:2b', { provider: 'ollama', url: 'http://127.0.0.1:11434' });   // fast on-device default
+    this.modelMap.set('gemma4:e4b', { provider: 'ollama', url: 'http://127.0.0.1:11434' });  // capable + multimodal (text/image/audio)
     this.modelMap.set('gpt-4o', { provider: 'openai', url: 'https://api.openai.com/v1' });
     this.modelMap.set('claude-3-5-sonnet', { provider: 'anthropic', url: 'https://api.anthropic.com/v1' });
     this.modelMap.set('hermes-3-70b', { provider: 'openrouter', url: 'https://openrouter.ai/api/v1' });
@@ -109,7 +110,7 @@ export class ConfigParser {
     if (modelName.startsWith('claude-')) {
       return { provider: 'anthropic', url: 'https://api.anthropic.com/v1', apiKey: process.env.ANTHROPIC_API_KEY };
     }
-    if (modelName.includes(':7b') || modelName.includes('qwen') || modelName.includes('llama')) {
+    if (modelName.includes('gemma') || modelName.includes(':7b') || modelName.includes('qwen') || modelName.includes('llama') || modelName.includes('mistral') || modelName.includes('phi')) {
       return { provider: 'ollama', url: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434' };
     }
 

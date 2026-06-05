@@ -7,7 +7,7 @@
  *
  * Deny-by-default + never invent peers (the honesty thesis): no fleet file, a corrupt file, zero
  * nodes, or zero cores ⇒ NOT available. As of this writing no device has ever actually connected,
- * so this returns false — correctly — until a real fleet.json is written by a live ghost-node.
+ * so this returns false — correctly — until a real fleet.json is written by a live mesh node.
  *
  * LIVENESS (review finding #3, now implemented): a fleet.json left over from a past mesh run must NOT
  * read as a live mesh. The file's own updatedAtMs is the origin's clock (not guaranteed wall-clock),

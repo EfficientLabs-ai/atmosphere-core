@@ -14,7 +14,7 @@ import { languageGate } from './src/language-gateway.js';
 import { complianceApprovalGate } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
-import { requireGatewaySecret } from './src/gateway-auth.js';
+import { requireGatewaySecret, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
 
 const localInference = new LocalInferenceEngine();
 const taskRouter = new TaskClassifierRouter({ verbose: true });
@@ -293,6 +293,12 @@ app.post('/v1/chat/completions', requireGatewaySecret, async (req, res) => {
   try {
     const proxyHeaders = { ...req.headers };
     delete proxyHeaders['x-atmos-gateway']; // never forward the gateway secret upstream
+    // If the caller authenticated to the gateway via `Authorization: Bearer <gateway-secret>`
+    // (OpenAI/ElevenLabs convention), that header carries OUR secret — never forward it upstream.
+    if (GATEWAY_SECRET) {
+      const m = /^Bearer\s+(.+)$/i.exec(String(proxyHeaders.authorization || '').trim());
+      if (m && secretMatches(m[1].trim(), GATEWAY_SECRET)) delete proxyHeaders.authorization;
+    }
     delete proxyHeaders.host;
     delete proxyHeaders['content-length'];
     proxyHeaders['content-type'] = 'application/json';
@@ -435,6 +441,12 @@ app.post('/v1/messages', requireGatewaySecret, async (req, res) => {
   try {
     const proxyHeaders = { ...req.headers };
     delete proxyHeaders['x-atmos-gateway']; // never forward the gateway secret upstream
+    // If the caller authenticated to the gateway via `Authorization: Bearer <gateway-secret>`
+    // (OpenAI/ElevenLabs convention), that header carries OUR secret — never forward it upstream.
+    if (GATEWAY_SECRET) {
+      const m = /^Bearer\s+(.+)$/i.exec(String(proxyHeaders.authorization || '').trim());
+      if (m && secretMatches(m[1].trim(), GATEWAY_SECRET)) delete proxyHeaders.authorization;
+    }
     delete proxyHeaders.host;
     delete proxyHeaders['content-length'];
     proxyHeaders['content-type'] = 'application/json';

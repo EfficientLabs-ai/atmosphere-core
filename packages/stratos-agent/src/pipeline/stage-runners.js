@@ -7,7 +7,7 @@ import path from 'node:path';
 import fetch from 'node-fetch';
 
 /** Default model runner — calls the local OpenAI-compatible endpoint (identity + Tier-0 window apply). */
-export function defaultModelRunner({ endpoint = `http://127.0.0.1:${process.env.PORT || 4099}/v1/chat/completions`, fallbackModel = 'qwen2.5:7b' } = {}) {
+export function defaultModelRunner({ endpoint = `http://127.0.0.1:${process.env.PORT || 4099}/v1/chat/completions`, fallbackModel = 'gemma2:2b' } = {}) {
   // Only attach the gateway secret when the destination is the LOCAL shim — never leak it to a
   // remote endpoint a caller may point this runner at (Codex review of F2).
   let _loopback = false;

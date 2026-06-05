@@ -21,9 +21,18 @@ import { languageName } from '../core/languages.js';
 import { realProbes } from './probes.js';
 import { scaffoldWorkspace, validateWorkspace, ICM_LAYERS } from '../context/icm-workspace.js';
 import { AttributionLedger } from '../ledger/attribution-ledger.js';
+import { ReceiptLog, makeReceiptVerifier, verifyBundle } from '../ledger/capability-receipt.js';
 import { originId } from '../memory/skill-seal.js';
 import { route as routeDecision, difficulty, autoEscalateEnabled } from '../routing/model-router.js';
+import { runDemo, DEFAULT_PROMPT } from './demo-harness.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
+import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
+import { EgressPolicy, checkEgress, connectorHostsToRules } from '../security/egress-policy.js';
+import * as fts from '../memory/fts-memory.js';
+import * as userModelMem from '../memory/user-model.js';
+import * as voiceEngine from '../sensory/voice-engine.js';
+import { parseSkillMd, importSkillMd, exportSkillMd } from '../skills/skill-md.js';
+import { SkillStore } from '../skills/skill-store.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -78,8 +87,15 @@ function helpText() {
     `  ${C.g}mesh${C.x}            The Atmosphere mesh — status + how to join (optional)`,
     `  ${C.g}icm${C.x}             Context workspace contract (folders over agents): init · validate`,
     `  ${C.g}ledger${C.x}          Attribution: who contributed what — summary · verify · list (measured, not priced)`,
+    `  ${C.g}receipt${C.x}         Signed capability receipts — the cross-machine proof rail: export · verify · summary`,
     `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
     `  ${C.g}route${C.x} <prompt>   Preview the sovereign router: local by default, cloud only on opt-in`,
+    `  ${C.g}demo${C.x}            The "$0 bill" proof: one local call · sovereign-routed · signed receipt · $0 vs cloud`,
+    `  ${C.g}memory${C.x}          Full-text recall over past conversations (local FTS5): search · recall`,
+    `  ${C.g}user${C.x}            The dialectic theory of you — grows across sessions, personalizes: show · forget`,
+    `  ${C.g}voice${C.x}           Native local talk/hear/see (Piper TTS · gemma audio/vision): say · hear · see · status`,
+    `  ${C.g}skill${C.x}           SKILL.md portability (agentskills.io-compatible): import · export · list`,
+    `  ${C.g}egress${C.x}          Policy-as-code egress firewall (default-DENY, anti-exfiltration): show · check`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
@@ -139,6 +155,144 @@ function nodeKeysPath(arg) {
   if (process.env.STRATOS_NODE_KEYS) return process.env.STRATOS_NODE_KEYS;
   const cands = [path.join(_ROOT, '.stratos-profile', 'node-keys.json'), path.join(_ROOT, 'node-keys.json')];
   return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+
+// Capability receipts default to <skills>/receipts.jsonl, mirroring the daemon runtime's
+// DIST_SKILLS_DIR convention (env STRATOS_RECEIPTS / STRATOS_SKILLS_DIR override).
+function receiptsPath(arg) {
+  if (arg && !/^\d+$/.test(arg)) return path.resolve(arg);
+  if (process.env.STRATOS_RECEIPTS) return process.env.STRATOS_RECEIPTS;
+  const cands = [
+    process.env.STRATOS_SKILLS_DIR && path.join(process.env.STRATOS_SKILLS_DIR, 'receipts.jsonl'),
+    path.join(_ROOT, 'packages', 'stratos-agent', 'dist', 'skills', 'receipts.jsonl'),
+    path.join(_ROOT, 'dist', 'skills', 'receipts.jsonl'),
+    path.join(_ROOT, 'receipts.jsonl'),
+  ].filter(Boolean);
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+
+// Reading/exporting/verifying the capability-receipt proof rail is a capability — declared minimally
+// and gated deny-by-default through the SAME capability-gate the skill runtime uses. `receipt.read`
+// is all this surface needs: it touches no network, no secrets, only the local receipts.jsonl.
+const RECEIPT_CAPS = parseCapabilities({ capabilities: { actions: ['receipt.read'] } });
+
+// Load the node's PUBLIC key bundle (no private half) so `receipt export` can embed it for
+// third-party verification and `receipt verify` can check the live log. Public-only by design.
+function loadNodePublicBundle(kf) {
+  if (!kf || !fs.existsSync(kf)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(kf, 'utf8'));
+    return Object.fromEntries(Object.entries(raw.publicKey).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
+  } catch { return null; }
+}
+
+/**
+ * `stratos receipt export|verify|summary` — the SIGNED CAPABILITY RECEIPT proof rail.
+ *   export [--since <iso>]  emit a self-contained, third-party-verifiable JSON bundle to stdout
+ *   verify <bundle-file>    check every PQC signature + the full hash chain (OK/BROKEN + where)
+ *   summary                 measured cost/count per actor + per node (measurement, never a price)
+ * Capability-gated (deny-by-default). HONEST: hashes not content; measurement not price; fail-closed
+ * verification. `export` embeds ONLY the node's PUBLIC key, so anyone can verify the bundle with no
+ * private key and no access to this node.
+ */
+function cmdReceipt(rest, d = {}) {
+  const sub = (rest[0] || 'summary').toLowerCase();
+  const caps = d.receiptCaps || RECEIPT_CAPS;
+
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos receipt${C.x} ${C.d}— the signed capability-receipt proof rail (cross-machine, PQC, hash-chained)${C.x}`,
+      `  ${C.g}export${C.x} [--since <iso>]   Emit a signed, third-party-verifiable JSON bundle to stdout`,
+      `  ${C.g}verify${C.x} <bundle-file>     Check every signature + the full hash chain (fail-closed)`,
+      `  ${C.g}summary${C.x}                  Measured cost/count per actor + per node (NOT a payout)`,
+      '',
+      `  ${C.d}Proves WHO ran WHAT, on WHOSE node, over which input/output (hashed), at what measured cost.`,
+      `  A verifier holding ONLY the node's public key can confirm it — and detect any altered or`,
+      `  removed/reordered receipt. Content is never stored; cost is measured, never priced.${C.x}`,
+    ] };
+  }
+
+  // Capability gate: deny-by-default. Tests/callers can inject denied caps to prove enforcement.
+  try { assertStepAllowed(caps, { action: 'receipt.read' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  // VERIFY a bundle file — third-party path: needs only the bundle (public key is embedded).
+  if (sub === 'verify') {
+    const file = rest[1];
+    if (!file) return { code: 1, lines: [`${C.r}usage: stratos receipt verify <bundle-file>${C.x}`] };
+    let bundle;
+    try { bundle = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8')); }
+    catch (e) { return { code: 1, lines: [`${C.r}cannot read bundle ${file}: ${e.message}${C.x}`] }; }
+    const v = verifyBundle(bundle);
+    if (v.ok) return { code: 0, lines: [
+      `${C.g}✓ receipt bundle OK${C.x} ${C.d}${v.count} receipt(s)${v.node_id ? ` · node ${didShort(v.node_id)}` : ''}${C.x}`,
+      `${C.d}every hybrid-PQC signature verified + the hash chain is intact — third-party-verifiable with the public key only.${C.x}`,
+    ] };
+    return { code: 1, lines: [
+      `${C.r}✗ receipt bundle BROKEN${v.brokenAt != null ? ` at receipt ${v.brokenAt}` : ''}: ${v.reason}${C.x}`,
+      `${C.d}a receipt was altered, removed, or reordered — the proof no longer validates (fail-closed).${C.x}`,
+    ] };
+  }
+
+  // export + summary read the live receipts.jsonl.
+  const pArg = rest.find((a, i) => i > 0 && a !== '--since' && !/^\d+$/.test(a) && rest[i - 1] !== '--since');
+  const p = receiptsPath(sub === 'export' ? undefined : pArg);
+  const kf = nodeKeysPath();
+  const pub = loadNodePublicBundle(kf);
+  const verifier = pub ? makeReceiptVerifier(pub) : null;
+
+  let log;
+  try { log = new ReceiptLog({ path: fs.existsSync(p) ? p : null, verifier }); }
+  catch (e) { return { code: 1, lines: [`${C.r}could not read receipts: ${e.message}${C.x}`] }; }
+
+  if (sub === 'export') {
+    if (!log.length) {
+      // Honest: nothing to export yet. Still emit a well-formed (empty) bundle so pipelines don't break.
+      const empty = log.exportBundle({ publicKeyBundle: pub || undefined });
+      return { code: 0, lines: JSON.stringify(empty, null, 2).split('\n') };
+    }
+    if (!pub) {
+      return { code: 1, lines: [
+        `${C.r}no node public key found${C.x} ${C.d}(${kf})${C.x}`,
+        `${C.d}export embeds the node's PUBLIC key so a third party can verify — without it the bundle isn't verifiable.${C.x}`,
+      ] };
+    }
+    const si = rest.indexOf('--since');
+    const since = si >= 0 ? rest[si + 1] || null : null;
+    const bundle = log.exportBundle({ since, publicKeyBundle: pub });
+    // Emit raw JSON to stdout so it can be piped/redirected to a file — portable + verifiable by design.
+    return { code: 0, lines: JSON.stringify(bundle, null, 2).split('\n') };
+  }
+
+  // default: summary — measured cost/count per actor + per node (NOT a payout).
+  if (!log.length) {
+    return { code: 0, lines: [
+      `${C.B}stratos receipt${C.x} ${C.d}— the capability-receipt proof rail${C.x}`,
+      `${C.y}no receipts yet${C.x} ${C.d}at ${p}${C.x}`,
+      `${C.d}The daemon emits a signed receipt per inference + verified skill-run once evolution is enabled.${C.x}`,
+    ] };
+  }
+  const v = verifier ? log.verify() : { ok: null };
+  const sum = log.summarize();
+  const lines = [
+    `${C.B}Capability receipts${C.x} ${C.d}— measured cost/count per actor + node (NOT a payout)${C.x}`,
+    v.ok === true ? `${C.g}✓ chain + signatures intact${C.x} ${C.d}${log.length} receipt(s)${C.x}`
+      : v.ok === false ? `${C.r}✗ chain broken at ${v.brokenAt}: ${v.reason}${C.x}`
+      : `${C.y}chain present${C.x} ${C.d}${log.length} receipt(s) (no node key to check signatures)${C.x}`,
+    '',
+    `${C.B}By actor${C.x}`,
+  ];
+  for (const a of sum.byActor) {
+    const acts = Object.entries(a.byAction).map(([k, u]) => `${k}:${u}`).join(' ');
+    lines.push(`  ${C.b}${didShort(a.actor_id)}${C.x}  ${C.g}${String(a.cost_units).padStart(7)}u${C.x} ${C.d}${String(a.count)}rcpt · ${acts}${C.x}`);
+  }
+  lines.push('', `${C.B}By node${C.x}`);
+  for (const n of sum.byNode) {
+    const acts = Object.entries(n.byAction).map(([k, u]) => `${k}:${u}`).join(' ');
+    lines.push(`  ${C.b}${didShort(n.node_id)}${C.x}  ${C.g}${String(n.cost_units).padStart(7)}u${C.x} ${C.d}${String(n.count)}rcpt · ${acts}${C.x}`);
+  }
+  lines.push('', `${C.d}Measurement before rewards: the cross-machine proof a future reward layer would read.${C.x}`);
+  return { code: 0, lines };
 }
 
 function cmdLedger(rest) {
@@ -313,6 +467,108 @@ function cmdRoute(rest) {
   return { code: 0, lines };
 }
 
+// `stratos demo` — the WIRED VERTICAL-SLICE "$0 bill" proof. Runs ONE OpenAI-compatible request against
+// the LOCAL gateway, shows the sovereign routing decision, emits + verifies a signed capability receipt,
+// and prints the honest $0-vs-illustrative-cloud bill. The slice logic lives in demo-harness.js (reuses
+// the router + receipt + gateway; invents nothing). Capability-gated deny-by-default like `receipt`: this
+// surface reads local receipts + makes a loopback call, so `receipt.read` is the action it declares.
+const DEMO_CAPS = parseCapabilities({ capabilities: { actions: ['receipt.read'] } });
+
+const usd = (n) => '$' + Number(n).toFixed(6).replace(/0+$/, '').replace(/\.$/, '.0');
+
+async function cmdDemo(rest, d = {}) {
+  if (rest[0] === 'help' || rest[0] === '-h' || rest[0] === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos demo${C.x} ${C.d}— the "$0 bill" vertical-slice proof (local · sovereign · signed · verifiable)${C.x}`,
+      `  ${C.g}stratos demo${C.x}                  Run the end-to-end proof against your local daemon`,
+      `  ${C.g}stratos demo --prompt "<text>"${C.x}  Use your own prompt (default: the sovereignty thesis)`,
+      `  ${C.g}stratos demo --json${C.x}            Emit the machine-readable proof bundle (for pipelines/CI)`,
+      '',
+      `  ${C.d}Proves: one OpenAI-shaped request runs on THIS machine, sovereign-routed (cloud NOT used),`,
+      `  with a third-party-verifiable signed receipt, at $0 marginal cost — data never leaves the box.`,
+      `  Honest: real local numbers; the cloud column is an explicitly illustrative list-price estimate.${C.x}`,
+    ] };
+  }
+
+  // Capability gate: deny-by-default (a test/caller can inject denied caps to prove enforcement).
+  const caps = d.demoCaps || DEMO_CAPS;
+  try { assertStepAllowed(caps, { action: 'receipt.read' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  const flags = new Set(rest.filter((a) => a.startsWith('--')));
+  const json = flags.has('--json');
+  const pi = rest.indexOf('--prompt');
+  const prompt = (pi >= 0 ? rest.slice(pi + 1).filter((a) => !a.startsWith('--')).join(' ').trim() : '') || DEFAULT_PROMPT;
+
+  const port = d.port || process.env.PORT || 4099;
+  const result = await runDemo({
+    prompt,
+    port,
+    model: d.demoModel || process.env.LOCAL_MODEL_DEFAULT || 'gemma2:2b',
+    fetchImpl: d.demoFetch,        // injected in tests; production uses global fetch
+    keyPair: d.demoKeyPair,        // injected in tests; production mints an ephemeral node identity
+    gatewaySecret: process.env.ATMOS_GATEWAY_SECRET || null,
+  });
+
+  // --json: emit the proof bundle verbatim (degrade is still well-formed JSON for pipelines).
+  if (json) return { code: result.ok ? 0 : 1, lines: JSON.stringify(result, null, 2).split('\n') };
+
+  // Honest degrade: NO response was fabricated. Show the (pure/local) decision + how to start the daemon.
+  if (!result.ok) {
+    const g = result.gateway || {};
+    return { code: 1, lines: [
+      `${C.B}stratos demo${C.x} ${C.d}— the "$0 bill" proof${C.x}`,
+      `${C.r}✗ no local response — the daemon isn't answering.${C.x}`,
+      `  ${C.d}reason ${C.x}${g.reason || 'gateway unreachable'}`,
+      `  ${C.y}→ ${g.fix || 'start the daemon:  stratos start'}${C.x}`,
+      '',
+      `${C.d}The sovereign router still decided ${C.x}${C.g}LOCAL${C.x}${C.d} for this prompt — but nothing was run or faked.${C.x}`,
+    ] };
+  }
+
+  const r = result;
+  const tier = `${C.g}🛡  LOCAL${C.x} ${C.d}(${r.decision.tier})${C.x}`;
+  const verOk = r.receipt.verification?.ok === true;
+  const u = r.response.usage || {};
+  const ill = r.bill.illustrativeCloud;
+  const snippet = r.response.content.trim().replace(/\s+/g, ' ').slice(0, 220);
+
+  const lines = [
+    `${C.B}━━ stratos demo · the "$0 bill" proof ━━${C.x}`,
+    '',
+    `${C.B}1 · OpenAI-compatible request → your machine${C.x}`,
+    `  ${C.d}POST ${C.x}127.0.0.1:${port}/v1/chat/completions ${C.d}(same shape any OpenAI client sends)${C.x}`,
+    `  ${C.d}prompt   ${C.x}"${prompt.length > 64 ? prompt.slice(0, 61) + '…' : prompt}"`,
+    `  ${C.g}✓ real local response${C.x} ${C.d}from ${r.response.model} · ${u.total_tokens ?? '?'} tokens${C.x}`,
+    `  ${C.d}↳ ${snippet}${r.response.content.trim().length > 220 ? '…' : ''}${C.x}`,
+    '',
+    `${C.B}2 · Sovereign routing decision${C.x}`,
+    `  ${C.d}decision ${C.x}${tier}`,
+    `  ${C.d}reason   ${C.x}${r.decision.reason}`,
+    `  ${C.d}cloud    ${C.x}${r.decision.cloud ? C.r + 'USED' + C.x : C.g + 'NOT used — data stays on this machine' + C.x}`,
+    '',
+    `${C.B}3 · Signed capability receipt${C.x}`,
+    `  ${C.d}id       ${C.x}${r.receipt.receipt_id}`,
+    `  ${C.d}hash     ${C.x}${shortHash(r.receipt.hash)} ${C.d}· node ${didShort(r.receipt.node_id)}${C.x}`,
+    `  ${C.d}attests  ${C.x}${r.receipt.action} of ${r.receipt.ref} · in/out HASHED · ${r.receipt.cost_units} measured units`,
+    verOk
+      ? `  ${C.g}✓ verifiable proof${C.x} ${C.d}— signature + chain verified with the PUBLIC key only${C.x}`
+      : `  ${C.r}✗ verification failed: ${r.receipt.verification?.reason || 'unknown'}${C.x}`,
+    '',
+    `${C.B}4 · The $0 bill${C.x}`,
+    `  ${C.g}local marginal cost   ${usd(r.bill.localMarginalUsd)}${C.x} ${C.d}(${r.bill.localBasis})${C.x}`,
+    `  ${C.d}data locality         ${C.x}${r.bill.dataLocality}`,
+    `  ${C.y}same call on cloud   ~${usd(ill.usd)}${C.x} ${C.d}(${ill.label}: ${ill.model}, ${ill.prompt_tokens}+${ill.completion_tokens} tok × list price)${C.x}`,
+    `  ${C.d}basis                 ${C.x}${C.d}${ill.basis}${C.x}`,
+    '',
+    verOk
+      ? `${C.g}${C.B}✓ PROVEN: local · sovereign · signed-and-verifiable · $0 marginal cost.${C.x}`
+      : `${C.y}slice ran locally at $0, but the receipt did not verify — see step 3.${C.x}`,
+    `${C.d}Reproduce: stratos demo --json  ·  the cloud figure is illustrative, never a measured bill.${C.x}`,
+  ];
+  return { code: verOk ? 0 : 1, lines };
+}
+
 function cmdConnectors(deps) {
   let list;
   try { list = deps.connectors.listConnectors(); } catch (e) { return { code: 1, lines: [`${C.r}connector registry error: ${e.message}${C.x}`] }; }
@@ -335,9 +591,9 @@ function cmdMesh(deps) {
       `  ${C.d}What it is: a public-DHT, hole-punched (no inbound ports), post-quantum zero-trust mesh that lets`,
       `  your agent borrow/lend spare compute. Your data stays end-to-end encrypted; nodes are PQC-verified.${C.x}`,
       '',
-      `  ${C.d}To join: run a ghost-node bundle (built per platform) — it hole-punches outward, opening no ports.${C.x}`,
+      `  ${C.d}To join: run a node bundle (built per platform) — it hole-punches outward, opening no ports.${C.x}`,
       optIn
-        ? `  ${C.g}✓ You've opted in.${C.x} ${C.d}Build/run your ghost-node bundle to bring this device online.${C.x}`
+        ? `  ${C.g}✓ You've opted in.${C.x} ${C.d}Build/run your node bundle to bring this device online.${C.x}`
         : `  ${C.d}Opt in:${C.x} ${C.g}stratos init${C.x} ${C.d}(mesh step) — or set ATMOSPHERE_P2P_OPT_IN=true.${C.x}`,
     ],
   };
@@ -441,7 +697,7 @@ async function cmdModels(deps) {
   lines.push(`  Providers: ${provs.length ? provs.map((p) => `${p}${ms.providers[p].keyHandle ? C.g + ' ✓' + C.x : C.y + ' (no key)' + C.x}`).join(', ') : C.d + 'none' + C.x}`);
   lines.push('');
   if (!reachable) lines.push(`  ${C.y}Ollama not reachable — no local models to list.${C.x}`);
-  else if (!models.length) lines.push(`  ${C.d}(no local models installed — run: ollama pull qwen2.5:7b)${C.x}`);
+  else if (!models.length) lines.push(`  ${C.d}(no local models installed — run: ollama pull gemma2:2b)${C.x}`);
   else { lines.push('  Installed locally:'); for (const m of models) lines.push(`    - ${m}`); }
   return { code: 0, lines };
 }
@@ -484,7 +740,394 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
+
+// Reading local cross-session memory is itself a capability — declared minimally and gated
+// deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
+// only action this surface needs; it touches no network, no extra fs, no secrets.
+const MEMORY_CAPS = parseCapabilities({ capabilities: { actions: ['memory.read'] } });
+
+/**
+ * `stratos memory search|recall "<query>"` — sovereign full-text recall over past conversations.
+ * Capability-gated (deny-by-default): refuses unless the `memory.read` action is permitted. Honest:
+ * if FTS5 isn't available in the SQLite build it says so plainly instead of inventing results.
+ */
+async function cmdMemory(rest, d = {}) {
+  const sub = rest[0];
+  const query = rest.slice(1).join(' ').trim();
+  if (sub !== 'search' && sub !== 'recall') {
+    return { code: query || sub ? 1 : 0, lines: [
+      `${C.B}stratos memory${C.x} — full-text recall over past conversations (local, sovereign)`,
+      `  ${C.g}stratos memory search "<query>"${C.x}   ranked keyword hits (FTS5 bm25 + snippets)`,
+      `  ${C.g}stratos memory recall "<query>"${C.x}   search + local-model summary ("what did we decide about X?")`,
+      `  ${C.d}Keyword/exact recall — complementary to the semantic vector store. 100% local.${C.x}`,
+    ] };
+  }
+  if (!query) return { code: 1, lines: [`${C.r}Usage: stratos memory ${sub} "<query>"${C.x}`] };
+
+  // Capability gate: deny-by-default. A test/caller can inject denied caps to prove enforcement.
+  const caps = d.memoryCaps || MEMORY_CAPS;
+  try { assertStepAllowed(caps, { action: 'memory.read' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  // Injectable memory backend (tests pass a stub; production uses the real FTS5 module).
+  const mem = d.memory || fts;
+  await mem.initFtsMemory?.();
+  if (mem.available && !mem.available()) {
+    return { code: 0, lines: [
+      `${C.y}Full-text memory unavailable:${C.x} ${mem.unavailableReason?.() || 'FTS5 not compiled in this SQLite build'}`,
+      `${C.d}(Honest degrade — no results fabricated. Vector recall is unaffected.)${C.x}`,
+    ] };
+  }
+
+  if (sub === 'search') {
+    const hits = mem.search(query, { limit: 8 });
+    if (!hits.length) return { code: 0, lines: [`${C.d}No matches for "${query}".${C.x}`] };
+    const lines = [`${C.B}${hits.length} match(es) for "${query}":${C.x}`];
+    for (const h of hits) {
+      const when = h.ts ? new Date(h.ts).toISOString().slice(0, 16).replace('T', ' ') : '?';
+      lines.push(`  ${C.b}${h.role}${C.x} ${C.d}${when} · ${h.conversationId}${C.x}`);
+      lines.push(`    ${h.snippet || h.content}`);
+    }
+    return { code: 0, lines };
+  }
+
+  // recall: search + summarize via the local gateway (sovereign — never cloud).
+  const summarize = d.summarize || mem.localGatewaySummarizer?.({ port: d.port });
+  const out = await mem.recall(query, { limit: 6, summarize });
+  if (!out.hits.length) return { code: 0, lines: [`${C.d}No matches for "${query}".${C.x}`] };
+  const lines = [];
+  if (out.answer) lines.push(`${C.B}Recall:${C.x} ${out.answer}`, '');
+  else lines.push(`${C.y}(No summary — showing raw hits)${C.x}`);
+  lines.push(`${C.d}Based on ${out.hits.length} excerpt(s):${C.x}`);
+  for (const h of out.hits) lines.push(`  ${C.b}${h.role}${C.x} ${h.snippet || h.content}`);
+  return { code: 0, lines };
+}
+
+// Reading/forgetting the synthesized theory of the user is a capability — declared minimally and gated
+// deny-by-default through the SAME capability-gate the skill runtime uses. `user.read` shows the model;
+// `user.forget` wipes it. Neither touches network, extra fs, or secrets.
+const USER_CAPS = parseCapabilities({ capabilities: { actions: ['user.read', 'user.forget'] } });
+
+/**
+ * `stratos user show|forget [conversationId]` — inspect / erase the DIALECTIC theory of the user.
+ *   show   [cid]  print the current synthesized user-model (a revisable theory, not asserted fact)
+ *   forget [cid]  clear that conversation's observations + synthesized model (fully forgettable)
+ * Capability-gated (deny-by-default). 100% local. Strictly per-conversation (keyed by id — no bleed).
+ * The store is injectable (d.userModel) so the CLI is unit-tested with no SQLite / no live model.
+ */
+async function cmdUser(rest, d = {}) {
+  const sub = (rest[0] || '').toLowerCase();
+  if (sub !== 'show' && sub !== 'forget') {
+    return { code: sub ? 1 : 0, lines: [
+      `${C.B}stratos user${C.x} — the dialectic theory of you (local, revisable, forgettable)`,
+      `  ${C.g}stratos user show [conversationId]${C.x}     print the current synthesized user-model`,
+      `  ${C.g}stratos user forget [conversationId]${C.x}   wipe observations + model for a conversation`,
+      `  ${C.d}A theory the agent grows of who you are (preferences · goals · style · topics) to personalize.${C.x}`,
+      `  ${C.d}Synthesized locally, never asserted as fact, strictly per-conversation, 100% on-device.${C.x}`,
+    ] };
+  }
+  const conversationId = rest.slice(1).join(' ').trim() || (sub === 'show' ? 'tg:default' : '');
+
+  // Capability gate: deny-by-default. A test/caller can inject denied caps to prove enforcement.
+  const caps = d.userCaps || USER_CAPS;
+  const action = sub === 'show' ? 'user.read' : 'user.forget';
+  try { assertStepAllowed(caps, { action }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  if (sub === 'forget' && !conversationId) {
+    return { code: 1, lines: [`${C.r}Usage: stratos user forget <conversationId>${C.x}`] };
+  }
+
+  const um = d.userModel || userModelMem;
+  await um.initUserModel?.();
+  if (um.available && !um.available()) {
+    return { code: 0, lines: [
+      `${C.y}User-model store unavailable:${C.x} ${um.unavailableReason?.() || 'better-sqlite3 not available'}`,
+      `${C.d}(Honest degrade — no profile fabricated.)${C.x}`,
+    ] };
+  }
+
+  if (sub === 'forget') {
+    const okWiped = um.forget(conversationId);
+    return { code: 0, lines: [
+      okWiped
+        ? `${C.g}✓ forgot the theory of the user for ${conversationId}${C.x} ${C.d}(observations + model wiped)${C.x}`
+        : `${C.y}nothing to forget for ${conversationId}${C.x}`,
+    ] };
+  }
+
+  // show
+  const info = um.modelInfo ? um.modelInfo(conversationId) : { exists: false, observations: 0 };
+  if (!info.exists) {
+    return { code: 0, lines: [
+      `${C.B}user-model · ${conversationId}${C.x}`,
+      `${C.d}No synthesized theory yet${C.x} ${C.d}(${info.observations || 0} observation(s) accrued; synthesis runs after enough turns).${C.x}`,
+    ] };
+  }
+  const when = info.synthesizedAt ? new Date(info.synthesizedAt).toISOString().slice(0, 16).replace('T', ' ') : '?';
+  return { code: 0, lines: [
+    `${C.B}user-model · ${conversationId}${C.x} ${C.d}synthesized ${when} · ${info.observations} obs${C.x}`,
+    `${C.d}A revisable theory (not asserted fact) — local, per-conversation, forgettable:${C.x}`,
+    '',
+    info.summary,
+  ] };
+}
+
+// The `voice` surface is local-only (Piper on disk + localhost Ollama) — no network egress beyond
+// 127.0.0.1, no secrets, no filesystem writes outside the user-named output path. We declare the
+// minimal sensory actions and gate deny-by-default through the SAME capability-gate skills use.
+const VOICE_CAPS = parseCapabilities({ capabilities: { actions: ['voice.say', 'voice.hear', 'voice.see', 'voice.status'] } });
+
+/**
+ * `stratos voice say|hear|see|status` — the turnkey, open-source, local, zero-cost sensory surface.
+ *   say "<text>"     → Piper TTS, prints the wav path it produced
+ *   hear <audiofile> → local STT (gemma audio via Ollama, whisper.cpp fallback), prints transcript
+ *   see <imagefile>  → gemma vision via Ollama, prints the description
+ *   status           → HONEST report of which engines are available on this box
+ * Every sub honestly degrades (clear reason, non-zero exit) — never fabricates output.
+ * Engine surface is injectable (d.voice) so it's unit-tested without real binaries / a live Ollama.
+ */
+async function cmdVoice(rest, d = {}) {
+  const sub = (rest[0] || '').toLowerCase();
+  const ve = d.voice || voiceEngine;
+
+  if (!sub || sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: sub ? 0 : 0, lines: [
+      `${C.B}stratos voice${C.x} — native local talk / hear / see (open-source, 100% local, zero-cost)`,
+      `  ${C.g}stratos voice say "<text>"${C.x}      Piper TTS → a .wav you can play`,
+      `  ${C.g}stratos voice hear <audiofile>${C.x}  local speech-to-text → transcript`,
+      `  ${C.g}stratos voice see <imagefile>${C.x}   local vision → image description`,
+      `  ${C.g}stratos voice status${C.x}            which engines are available (honest ✓/✗)`,
+      `  ${C.d}No cloud, no API keys, no cost. Cloud phone voice is a separate optional add-on.${C.x}`,
+    ] };
+  }
+
+  const actionFor = { say: 'voice.say', hear: 'voice.hear', see: 'voice.see', status: 'voice.status' }[sub];
+  if (!actionFor) return { code: 1, lines: [`${C.r}Unknown voice subcommand: ${sub}${C.x}`, `${C.d}Try: say · hear · see · status${C.x}`] };
+
+  // Capability gate: deny-by-default. A test/caller can inject denied caps to prove enforcement.
+  const caps = d.voiceCaps || VOICE_CAPS;
+  try { assertStepAllowed(caps, { action: actionFor }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  if (sub === 'status') {
+    const st = await ve.voiceStatus({ ollamaHost: typeof d.ollamaHost === 'string' ? d.ollamaHost : undefined });
+    const mark = (ok) => (ok ? `${C.g}✓${C.x}` : `${C.r}✗${C.x}`);
+    const why = (o) => (o.ok ? '' : `  ${C.d}${o.reason}${C.x}`);
+    return { code: 0, lines: [
+      `${C.B}stratos voice — engine status${C.x} ${C.d}(local-only, honest)${C.x}`,
+      `  ${mark(st.piper.ok)} ${C.B}Piper TTS${C.x} (talk)${why(st.piper)}`,
+      `  ${mark(st.gemmaAudio.ok)} ${C.B}${st.model} audio${C.x} (hear)${why(st.gemmaAudio)}`,
+      `  ${mark(st.gemmaVision.ok)} ${C.B}${st.model} vision${C.x} (see)${why(st.gemmaVision)}`,
+      `  ${mark(st.whisper.ok)} ${C.B}whisper.cpp${C.x} (hear, fallback)${why(st.whisper)}`,
+      '',
+      `  ${C.d}Effective:${C.x} talk ${mark(st.canTalk)}  ·  hear ${mark(st.canHear)}  ·  see ${mark(st.canSee)}`,
+    ] };
+  }
+
+  const arg = rest.slice(1).join(' ').trim();
+  if (!arg) return { code: 1, lines: [`${C.r}Usage: stratos voice ${sub} ${sub === 'say' ? '"<text>"' : '<file>'}${C.x}`] };
+
+  if (sub === 'say') {
+    const out = d.sayOutPath || path.join(process.cwd(), `stratos-voice-${Date.now()}.wav`);
+    const res = await ve.say(arg, out, { verbose: false, silent: true });
+    if (!res.ok) return { code: 1, lines: [`${C.y}TTS unavailable:${C.x} ${res.reason}`, `${C.d}(Honest degrade — no audio fabricated.)${C.x}`] };
+    return { code: 0, lines: [`${C.g}🔊 Spoke ${arg.length} chars → ${C.x}${res.path}`] };
+  }
+
+  // Generous timeout for the one-shot CLI: a cold multimodal load (audio/vision) can take a while.
+  const CLI_TIMEOUT_MS = 240_000;
+
+  if (sub === 'hear') {
+    const res = await ve.hear(arg, { verbose: false, silent: true, timeoutMs: CLI_TIMEOUT_MS, ollamaHost: typeof d.ollamaHost === 'string' ? d.ollamaHost : undefined });
+    if (!res.ok) return { code: 1, lines: [`${C.y}STT unavailable:${C.x} ${res.reason}`, `${C.d}(Honest degrade — no transcript fabricated.)${C.x}`] };
+    return { code: 0, lines: [`${C.b}📝 (${res.engine})${C.x} ${res.text}`] };
+  }
+
+  // see
+  const res = await ve.see(arg, null, { verbose: false, silent: true, timeoutMs: CLI_TIMEOUT_MS, ollamaHost: typeof d.ollamaHost === 'string' ? d.ollamaHost : undefined });
+  if (!res.ok) return { code: 1, lines: [`${C.y}Vision unavailable:${C.x} ${res.reason}`, `${C.d}(Honest degrade — no description fabricated.)${C.x}`] };
+  return { code: 0, lines: [`${C.b}👁️${C.x} ${res.text}`] };
+}
+
+// `stratos skill import|export|list` — SKILL.md portability (agentskills.io / clawhub compatible).
+// IMPORT is untrusted-by-default + deny-by-default capability-gated; EXPORT emits provenance. Network-effect
+// MOAT: interoperate with the open skill ecosystem WITHOUT shedding the sovereign PQC seal.
+//
+// Capability-gated through the SAME gate the skill runtime uses: importing a foreign skill is the
+// `skill.import` action; reading/exporting ours is `skill.read`. Deny-by-default.
+const SKILL_CAPS = parseCapabilities({ capabilities: { actions: ['skill.import', 'skill.read'] } });
+
+function skillsDir() {
+  if (process.env.STRATOS_SKILLS_DIR) return path.resolve(process.env.STRATOS_SKILLS_DIR);
+  const cands = [
+    path.join(_ROOT, 'packages', 'stratos-agent', 'dist', 'skills'),
+    path.join(_ROOT, 'dist', 'skills'),
+  ];
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+
+async function cmdSkill(rest, d = {}) {
+  const sub = (rest[0] || 'help').toLowerCase();
+  const caps = d.skillCaps || SKILL_CAPS;
+  const store = d.skillStore || new SkillStore(skillsDir());
+
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: rest[0] ? 0 : 0, lines: [
+      `${C.B}stratos skill${C.x} ${C.d}— SKILL.md portability (agentskills.io / clawhub compatible)${C.x}`,
+      `  ${C.g}import${C.x} <file.md>   Ingest a foreign SKILL.md ${C.d}(UNTRUSTED by default · deny-by-default caps)${C.x}`,
+      `  ${C.g}export${C.x} <id>        Emit one of your skills as portable SKILL.md ${C.d}(+ did:atmos provenance)${C.x}`,
+      `  ${C.g}list${C.x}              List imported skills + their honest trust label`,
+      '',
+      `  ${C.d}Imported skills are prose/instruction by default: stored + capability-gated, never auto-run.`,
+      `  Net/fs/secrets/compute are NEVER granted to a foreign .md — that requires local re-sealing.${C.x}`,
+    ] };
+  }
+
+  if (sub === 'list') {
+    try { assertStepAllowed(caps, { action: 'skill.read' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    let items;
+    try { items = store.list(); } catch (e) { return { code: 1, lines: [`${C.r}store error: ${e.message}${C.x}`] }; }
+    if (!items.length) {
+      return { code: 0, lines: [
+        `${C.B}Imported skills${C.x} ${C.d}— none yet${C.x}`,
+        `${C.d}Import one with: ${C.x}${C.g}stratos skill import <file.md>${C.x}`,
+      ] };
+    }
+    const lines = [`${C.B}Imported skills${C.x} ${C.d}(${items.length})${C.x}`];
+    for (const it of items) {
+      const trust = it.sealed ? `${C.g}sealed-locally${C.x}` : `${C.y}untrusted${C.x}`;
+      lines.push(`  ${C.b}${it.id}${C.x}  ${trust} ${C.d}· ${it.kind}${C.x}`);
+      if (it.description) lines.push(`    ${C.d}${String(it.description).slice(0, 80)}${C.x}`);
+    }
+    return { code: 0, lines };
+  }
+
+  if (sub === 'import') {
+    try { assertStepAllowed(caps, { action: 'skill.import' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const file = rest[1];
+    if (!file) return { code: 1, lines: [`${C.r}usage: stratos skill import <file.md>${C.x}`] };
+    let text;
+    try { text = fs.readFileSync(path.resolve(file), 'utf8'); }
+    catch (e) { return { code: 1, lines: [`${C.r}cannot read ${file}: ${e.message}${C.x}`] }; }
+    let rec;
+    try { rec = await importSkillMd(text, { store, source: d.skillSource || `file:${path.basename(file)}` }); }
+    catch (e) { return { code: 1, lines: [`${C.r}import rejected: ${e.message}${C.x}`] }; }
+    const lines = [
+      `${C.g}✓ imported${C.x} ${C.b}${rec.name}${C.x}  ${C.d}→ ${rec.id}${C.x}`,
+      `  ${C.d}trust    ${C.x}${rec.sealed ? C.g + 'sealed-locally' + C.x : C.y + 'UNTRUSTED' + C.x} ${C.d}(${rec.kind})${C.x}`,
+      `  ${C.d}granted  ${C.x}${rec.grantedCapabilities.length ? rec.grantedCapabilities.join(', ') : C.d + 'none — inert instruction skill' + C.x}`,
+    ];
+    if (rec.refusedCapabilities.length) {
+      lines.push(`  ${C.y}refused  ${C.x}${rec.refusedCapabilities.join(', ')} ${C.d}(deny-by-default: a foreign .md can't grant these)${C.x}`);
+    }
+    if (rec.provenance?.claimedAuthor) {
+      lines.push(`  ${C.d}author   ${C.x}${rec.provenance.claimedAuthor} ${C.y}(claimed, unverified)${C.x}`);
+    }
+    return { code: 0, lines };
+  }
+
+  if (sub === 'export') {
+    try { assertStepAllowed(caps, { action: 'skill.read' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const id = rest[1];
+    if (!id) return { code: 1, lines: [`${C.r}usage: stratos skill export <id>${C.x}`] };
+    let md;
+    try { md = exportSkillMd(id, { store, originDid: d.originDid }); }
+    catch (e) { return { code: 1, lines: [`${C.r}export failed: ${e.message}${C.x}`] }; }
+    // Emit the raw SKILL.md to stdout so it can be piped/redirected to a file — portable by design.
+    return { code: 0, lines: md.split('\n') };
+  }
+
+  return { code: 1, lines: [`${C.r}Unknown skill subcommand: ${sub}${C.x}`, `${C.d}Try: import · export · list${C.x}`] };
+}
+
+// `stratos egress` — the POLICY-AS-CODE EGRESS FIREWALL surface (anti-exfiltration made auditable).
+//   stratos egress                      print the active policy + effective posture (default-deny)
+//   stratos egress check <host> [m] [p] test a request → ALLOW/DENY + why (composes with skill caps)
+// Reading/checking the egress policy is itself a capability — declared minimally and gated deny-by-
+// default through the SAME capability-gate the skill runtime uses. `egress.read` is all it needs:
+// it touches the local policy file only — no network, no secrets, no extra fs.
+const EGRESS_CAPS = parseCapabilities({ capabilities: { actions: ['egress.read'] } });
+
+function egressPolicyPath(arg) {
+  if (arg) return path.resolve(arg);
+  if (process.env.STRATOS_EGRESS_POLICY) return process.env.STRATOS_EGRESS_POLICY;
+  const base = process.env.STRATOS_PROFILE_DIR || path.join(_ROOT, '.stratos-profile');
+  const cands = [path.join(base, 'egress-policy.json'), path.join(_ROOT, 'config', 'egress-policy.json')];
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+
+function cmdEgress(rest, d = {}) {
+  const sub = (rest[0] || '').toLowerCase();
+
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos egress${C.x} ${C.d}— the policy-as-code egress firewall (default-DENY, fail-closed)${C.x}`,
+      `  ${C.g}stratos egress${C.x}                       Print the active policy + effective posture`,
+      `  ${C.g}stratos egress check <host> [m] [path]${C.x}  Test a request → ALLOW / DENY + why`,
+      '',
+      `  ${C.d}Effective allow = (this host policy) ∩ (a skill's sealed net caps). A skill reaches a host`,
+      `  only if it is in BOTH. Nothing leaves the box unless an allow-rule permits it. Hot-reloaded.${C.x}`,
+    ] };
+  }
+
+  // Capability gate: deny-by-default (a test/caller can inject denied caps to prove enforcement).
+  const caps = d.egressCaps || EGRESS_CAPS;
+  try { assertStepAllowed(caps, { action: 'egress.read' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  const policyPath = d.egressPolicyPath || egressPolicyPath();
+  const ep = d.egressPolicy || new EgressPolicy({ path: policyPath });
+  const policy = ep.current();
+
+  if (sub === 'check') {
+    const host = rest[1];
+    if (!host) return { code: 1, lines: [`${C.r}usage: stratos egress check <host> [method] [path]${C.x}`] };
+    const method = rest[2] && !rest[2].startsWith('/') ? rest[2] : null;
+    const pth = rest.find((a, i) => i >= 2 && a.startsWith('/')) || null;
+    // Compose with skill caps if the caller supplies a --caps host list (else policy-only check).
+    const ci = rest.indexOf('--caps');
+    const capNet = ci >= 0 ? rest.slice(ci + 1).filter((a) => !a.startsWith('-')) : null;
+    const res = checkEgress({ host, method, path: pth }, policy, capNet ? { caps: { net: capNet } } : {});
+    const verdict = res.allowed ? `${C.g}✓ ALLOW${C.x}` : `${C.r}✗ DENY${C.x}`;
+    return { code: res.allowed ? 0 : 1, lines: [
+      `${C.B}stratos egress check${C.x} ${C.d}${host}${method ? ' ' + method : ''}${pth || ''}${C.x}`,
+      `  ${verdict}  ${res.allowed ? `${C.d}matched an allow-rule${res.rule?.suffix ? ` (suffix .${res.rule.host})` : ''}${C.x}`
+        : `${C.d}${res.reason}${res.layer ? ` [${res.layer}]` : ''}${C.x}`}`,
+      capNet ? `  ${C.d}composed with caps.net = [${capNet.join(', ')}] (intersection)${C.x}` : `  ${C.d}policy-only (pass --caps <hosts…> to compose with skill caps)${C.x}`,
+    ] };
+  }
+
+  // default: print the active policy + posture.
+  const lines = [
+    `${C.B}stratos egress${C.x} ${C.d}— policy-as-code egress firewall (anti-exfiltration)${C.x}`,
+    `  ${C.d}policy   ${C.x}${policyPath}`,
+    `  ${C.d}default  ${C.x}${C.r}DENY${C.x} ${C.d}(fail-closed)${C.x}`,
+  ];
+  if (ep.lastError) {
+    lines.push(`  ${C.y}! load issue: ${ep.lastError} — DENYING ALL (fail-closed)${C.x}`);
+  }
+  if (policy._malformed) {
+    lines.push(`  ${C.y}! ${policy._malformed} malformed rule(s) dropped (not trusted)${C.x}`);
+  }
+  lines.push('', `${C.B}Allow-rules${C.x} ${C.d}(${policy.allow.length})${C.x}`);
+  if (!policy.allow.length) {
+    lines.push(`  ${C.y}none — total egress lockdown${C.x} ${C.d}(nothing leaves the box)${C.x}`);
+  } else {
+    for (const r of policy.allow) {
+      const h = r.suffix ? `.${r.host} ${C.d}(suffix)${C.x}` : r.host;
+      const m = r.methods ? ` ${C.d}methods=[${r.methods.join(',')}]${C.x}` : '';
+      const p = r.paths ? ` ${C.d}paths=[${r.paths.join(',')}]${C.x}` : '';
+      lines.push(`  ${C.g}allow${C.x} ${C.b}${h}${C.x}${m}${p}`);
+    }
+  }
+  lines.push('', `${C.d}Effective allow for a skill = these rules ∩ the skill's sealed net caps (host must be in BOTH).${C.x}`);
+  return { code: 0, lines };
+}
 
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
@@ -507,6 +1150,39 @@ export async function run(argv = [], deps = {}) {
     port: deps.port || process.env.PORT || 4099,
     ollamaHost: deps.ollamaHost || process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
     version: deps.version || '0.0.0',
+    // Injectable memory surface (tests pass stubs; production falls back to the real FTS5 module +
+    // declared MEMORY_CAPS inside cmdMemory). Pass-through only — undefined in normal use.
+    memory: deps.memory,
+    memoryCaps: deps.memoryCaps,
+    summarize: deps.summarize,
+    // Injectable dialectic user-model surface (tests pass a stub store + caps; production uses the real
+    // user-model module + declared USER_CAPS inside cmdUser). Pass-through only — undefined in normal use.
+    userModel: deps.userModel,
+    userCaps: deps.userCaps,
+    // Injectable sensory surface (tests pass a stub; production uses the real voice-engine).
+    voice: deps.voice,
+    voiceCaps: deps.voiceCaps,
+    ollamaHost: deps.ollamaHost,
+    sayOutPath: deps.sayOutPath,
+    // Injectable SKILL.md portability surface (tests pass a stub store + caps; production uses the
+    // file-backed SkillStore + declared SKILL_CAPS inside cmdSkill).
+    skillStore: deps.skillStore,
+    skillCaps: deps.skillCaps,
+    skillSource: deps.skillSource,
+    originDid: deps.originDid,
+    // Injectable capability-receipt gate (tests inject denied caps to prove deny-by-default).
+    receiptCaps: deps.receiptCaps,
+    // Injectable egress-firewall surface (tests inject a policy/path + denied caps to prove the gate +
+    // the default-deny posture; production uses the on-disk .stratos-profile/egress-policy.json).
+    egressPolicy: deps.egressPolicy,
+    egressPolicyPath: deps.egressPolicyPath,
+    egressCaps: deps.egressCaps,
+    // Injectable "$0 bill" demo surface (tests inject a mock gateway fetch + deterministic keypair +
+    // denied caps; production uses global fetch, an ephemeral node identity, and DEMO_CAPS).
+    demoFetch: deps.demoFetch,
+    demoKeyPair: deps.demoKeyPair,
+    demoCaps: deps.demoCaps,
+    demoModel: deps.demoModel,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -520,8 +1196,15 @@ export async function run(argv = [], deps = {}) {
     case 'mesh': return cmdMesh(d);
     case 'icm': return cmdIcm(rest);
     case 'ledger': return cmdLedger(rest);
+    case 'receipt': return cmdReceipt(rest, d);
     case 'id': return cmdId(rest);
     case 'route': return cmdRoute(rest);
+    case 'demo': return cmdDemo(rest, d);
+    case 'memory': return cmdMemory(rest, d);
+    case 'user': return cmdUser(rest, d);
+    case 'voice': return cmdVoice(rest, d);
+    case 'skill': return cmdSkill(rest, d);
+    case 'egress': return cmdEgress(rest, d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

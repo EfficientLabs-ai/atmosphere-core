@@ -208,7 +208,7 @@ async function initWizard() {
   console.log(stepHdr(4, 5, 'The Atmosphere mesh (optional)'));
   console.log(`    ${C.d}A public-DHT, hole-punched (no inbound ports), post-quantum zero-trust mesh that lets your${C.x}`);
   console.log(`    ${C.d}agent borrow/lend spare compute. Data stays end-to-end encrypted; peers are PQC-verified.${C.x}`);
-  console.log(`    ${C.d}Opting in just sets a flag — you bring a device online later by running a ghost-node bundle.${C.x}`);
+  console.log(`    ${C.d}Opting in just sets a flag — you bring a device online later by running a node bundle.${C.x}`);
   const meshEnroll = /^y/i.test(((await asker.ask(`  ${C.b}→${C.x} Opt in to the mesh now? ${C.d}(you can join devices later) [y/N]${C.x} `)).trim() || 'N'));
   if (meshEnroll) console.log(`    ${C.g}✓ Opted in.${C.x} ${C.d}Next: see ${C.x}${C.b}stratos mesh${C.x}${C.d} for how to bring this device online.${C.x}`);
   asker.close(); // release before the raw-mode channel multi-select

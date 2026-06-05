@@ -19,7 +19,7 @@ const text = (r) => r.lines.join('\n');
 const probes = (over = {}) => ({
   nodeVersion: () => ({ raw: '20.0.0', major: 20, ok: true }),
   probePort: async () => false,
-  probeOllama: async () => ({ reachable: true, models: ['qwen2.5:7b'] }),
+  probeOllama: async () => ({ reachable: true, models: ['gemma2:2b'] }),
   ...over,
 });
 
@@ -37,7 +37,7 @@ r = await run(['status'], { config, probes: probes(), port: 4099 });
 const s = text(r);
 ok(r.code === 0 && /StratosAgent/.test(s), 'status shows the agent name');
 ok(/Daemon:\s+\x1b\[33mstopped/.test(s) || /stopped/.test(s), 'daemon reported stopped (probePort=false) — measured, not assumed');
-ok(/qwen2\.5:7b/.test(s) && /ready/.test(s), 'model readiness from effectiveCapabilities (installed → ready)');
+ok(/gemma2:2b/.test(s) && /ready/.test(s), 'model readiness from effectiveCapabilities (installed → ready)');
 ok(/off/.test(s) && /not joined/.test(s), 'mesh reported off (no fleet.json) — not fabricated');
 ok(!/SOL|12\.45|Maximus|EsportsCafe|records|connected/.test(s), 'NO fabricated SOL balance / peer list / record counts');
 
@@ -61,7 +61,7 @@ ok(r.code === 0 && config.getOwner() === '8213853174', 'bind with valid id → o
 
 console.log('\n=== models ===');
 r = await run(['models'], { config, probes: probes() });
-ok(r.code === 0 && /qwen2\.5:7b/.test(text(r)), 'models lists installed local models');
+ok(r.code === 0 && /gemma2:2b/.test(text(r)), 'models lists installed local models');
 
 console.log('\n=== init is LOCAL-ONLY (no wallet/mesh) and validates ===');
 applyInit({ agentName: 'Atlas', localModel: 'gemma2:9b' }, config);

@@ -136,6 +136,16 @@ const SUITES = {
     // lesson), the off-by-default distiller hook (throwing degrades, never fabricates), input validation,
     // and the capability-gated `stratos improve` CLI (deny-by-default).
     'test-self-improve.mjs',
+    // MODEL-AGNOSTIC ROUTING (Increment 4) — the unified model-adapter seam over the EXISTING
+    // model-router.js (wraps route(), does not fork it). Hermetic: injected FAKE provider adapters,
+    // NO network anywhere (each provider's call() is a local stub). Proves the policy precedence
+    // Privacy > Capability > Cost > Fallback: a private task never reaches a frontier provider even
+    // with a key+mesh, a high-reasoning class routes to frontier (when the router allows cloud) while
+    // batch/extraction stays open-weight/local, the cheaper/$0-local provider wins within an acceptable
+    // tier, provider error/timeout degrades along the chain logging each hop (deterministic, exhausted
+    // chain fails honestly with the full hop log), and a user-provided model plugs into the SAME
+    // interface + precedence with no special path. Policy docs: /opt/efficient-labs/models/routing/.
+    'test-model-adapter.mjs',
   ],
 };
 

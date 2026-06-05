@@ -1,59 +1,50 @@
+
+!docs/archive/brain/SUPERSEDED.md
+# Compiled WASM Skills Output
 # Dependency Directories
-node_modules/
-jspm_packages/
-web_modules/
-
-# Secrets Vault and Private Keys (Strict Quarantine Lock!)
-.secrets-vault/
-.env
-.env.*
-*.pem
-*.key
-*.pat
-
 # Local Storage, Vector Banks, Databases, and Local Profiles
-.stratos-vector-store/
-.stratos-profile/
+# Next.js Build Output
+# OS/IDE Configurations
+# Pipeline run outputs are ephemeral artifacts, not source
+# Rust Build Targets
+# Secrets Vault and Private Keys (Strict Quarantine Lock!)
+# Superseded Antigravity planning docs — kept on disk for provenance, not versioned (one had an email; all discredited per STATE_OF_REALITY)
+# Temporary / Stress Testing Sandboxes
+# per-package build outputs (compiled skills, etc.)
+# product assembler outputs (build artifacts)
+**/.next/
+**/Cargo.lock
+**/target/
 *.db
 *.db-shm
 *.db-wal
-
-# Temporary / Stress Testing Sandboxes
+*.key
+*.log
+*.pat
+*.pem
+.DS_Store
+.env
+.env.*
+.idea/
+.next/
+.secrets-vault/
+.stratos-profile/
+.stratos-vector-store/
+.vscode/
+/services/
+Cargo.lock
+Thumbs.db
+dist/atmosphere/
+dist/skills/
+dist/stratos/
+docs/archive/brain/*
+jspm_packages/
+logs/
+node_modules/
+packages/*/dist/
+packages/stratos-agent/pipelines/*/runs/
+target/
+temp/
 tmp-*/
 tmp/
-temp/
-logs/
-*.log
-
-# Compiled WASM Skills Output
-dist/skills/
-
-# OS/IDE Configurations
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-
-# Next.js Build Output
-.next/
-**/.next/
-
-# Rust Build Targets
-target/
-**/target/
-Cargo.lock
-**/Cargo.lock
-
-# Superseded Antigravity planning docs — kept on disk for provenance, not versioned (one had an email; all discredited per STATE_OF_REALITY)
-docs/archive/brain/*
-!docs/archive/brain/SUPERSEDED.md
-
-# Pipeline run outputs are ephemeral artifacts, not source
-packages/stratos-agent/pipelines/*/runs/
-
-# product assembler outputs (build artifacts)
-dist/stratos/
-dist/atmosphere/
-
-# per-package build outputs (compiled skills, etc.)
-packages/*/dist/
+web_modules/

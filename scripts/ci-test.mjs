@@ -101,6 +101,23 @@ const SUITES = {
     // capability gate (deny-by-default), the honest fail-open degrade when the model is down (no fabrication),
     // and the missing-profile/help guards. The tool is generic; the profile + batches stay PRIVATE off-repo.
     'test-content-engine.mjs',
+    // SOVEREIGN COMPOSIO ADAPTER (Path A) — 1000+ integration surface from Composio's MIT toolkit
+    // catalog, run on OUR stack (vault + identity-broker + capability-gate). Hermetic: the APP API
+    // (fetch) is MOCKED, the vault is a real encrypted-at-rest store in a TEMP dir, the broker is real.
+    // NO composio.dev. Covers MIT-catalog load (1000 toolkits), getAction spec resolution, GitHub
+    // end-to-end (PAT→api.github.com, token NEVER returned), capability-gate deny-by-default, per-entity
+    // isolation, zero-composio.dev, the OAuth scaffold (provider-only exchange + operator-config gating),
+    // connector-registry registration, and the `stratos tool list/run` CLI.
+    'test-composio-sovereign.mjs',
+    // FILES-FIRST OPERATING CORE (Increment 1) — the durable operational map: workspace-tree +
+    // context-capture + trace-engine. Hermetic: pure fs/crypto in an isolated tmp dir, in-process
+    // keypair (no on-disk keys), no network/Ollama/daemon. Covers the 8-entry task scaffold +
+    // path-traversal rejection + idempotency, capture() matching every CONTEXT_CAPTURE_SCHEMA field
+    // (raw→data/, record→memory/, workspace session log) + deterministic classify() + the off-by-
+    // default LLM-assist hook, the TRACE_SCHEMA record + a receipt-chained tamper-evident spine that
+    // verifies with the public key only + fail-closed tamper detection + fail-open emission, and the
+    // capability-gated `stratos workspace|task|capture|trace` CLI (deny-by-default).
+    'test-operating-core.mjs',
   ],
 };
 

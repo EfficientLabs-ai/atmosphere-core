@@ -36,6 +36,13 @@ import * as voiceEngine from '../sensory/voice-engine.js';
 import { parseSkillMd, importSkillMd, exportSkillMd } from '../skills/skill-md.js';
 import { SkillStore } from '../skills/skill-store.js';
 import { generateBatch, resolveModelConfig, PLATFORMS, TONES } from '../content/content-engine.js';
+import * as composioToolkits from '../integrations/composio-toolkits.js';
+import { runToolAction } from '../integrations/composio-exec.js';
+import * as workspaceTree from '../workspace/workspace-tree.js';
+import { capture as captureEvent, classify as classifyEvent } from '../context/context-capture.js';
+import { startTrace, recordStep, endTrace } from '../trace/trace-engine.js';
+import { generateHybridKeyPair } from '../security/quantum-crypto.js';
+import { makeReceiptSigner } from '../ledger/capability-receipt.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -89,6 +96,10 @@ function helpText() {
     `  ${C.g}connectors${C.x}      List onboarded connectors (metadata only; secrets stay in the vault)`,
     `  ${C.g}mesh${C.x}            The Atmosphere mesh — status + how to join (optional)`,
     `  ${C.g}icm${C.x}             Context workspace contract (folders over agents): init · validate`,
+    `  ${C.g}workspace${C.x}       Files-first operational unit (Workspace > Project > Workflow > Task): create · tree`,
+    `  ${C.g}task${C.x}            Scaffold a task (instructions.md · tools.json · data/ · memory/ · outputs/ · traces/ · evals/ · skills/): create`,
+    `  ${C.g}capture${C.x}         Capture an event into the operational map (Capture → Classify → Store; deterministic)`,
+    `  ${C.g}trace${C.x}           Trace an execution → traces/{task-id}.json + a signed capability-receipt spine`,
     `  ${C.g}ledger${C.x}          Attribution: who contributed what — summary · verify · list (measured, not priced)`,
     `  ${C.g}receipt${C.x}         Signed capability receipts — the cross-machine proof rail: export · verify · summary`,
     `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
@@ -100,6 +111,7 @@ function helpText() {
     `  ${C.g}skill${C.x}           SKILL.md portability (agentskills.io-compatible): import · export · list`,
     `  ${C.g}egress${C.x}          Policy-as-code egress firewall (default-DENY, anti-exfiltration): show · check`,
     `  ${C.g}content${C.x}         Reusable content engine — private profile in, dated batch out (sovereign-default): generate`,
+    `  ${C.g}tool${C.x}            Sovereign Composio toolkits (1000+ apps, keys stay in OUR vault): list · run`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
@@ -294,6 +306,16 @@ function cmdReceipt(rest, d = {}) {
   for (const n of sum.byNode) {
     const acts = Object.entries(n.byAction).map(([k, u]) => `${k}:${u}`).join(' ');
     lines.push(`  ${C.b}${didShort(n.node_id)}${C.x}  ${C.g}${String(n.cost_units).padStart(7)}u${C.x} ${C.d}${String(n.count)}rcpt · ${acts}${C.x}`);
+  }
+  // By OWNER WALLET — the reward-attribution view: measured cost per Solana owner (NOT a payout, no
+  // price). Wallet-less contributions are summed under an explicit (unattributed) bucket.
+  if (Array.isArray(sum.byWallet) && sum.byWallet.length) {
+    lines.push('', `${C.B}By owner wallet${C.x} ${C.d}(reward-attribution basis — measured cost only)${C.x}`);
+    for (const w of sum.byWallet) {
+      const acts = Object.entries(w.byAction).map(([k, u]) => `${k}:${u}`).join(' ');
+      const label = w.owner_wallet ? `${w.owner_wallet.slice(0, 4)}…${w.owner_wallet.slice(-4)}` : '(unattributed)';
+      lines.push(`  ${C.b}${label}${C.x}  ${C.g}${String(w.cost_units).padStart(7)}u${C.x} ${C.d}${String(w.count)}rcpt · ${acts}${C.x}`);
+    }
   }
   lines.push('', `${C.d}Measurement before rewards: the cross-machine proof a future reward layer would read.${C.x}`);
   return { code: 0, lines };
@@ -573,6 +595,83 @@ async function cmdDemo(rest, d = {}) {
   return { code: verOk ? 0 : 1, lines };
 }
 
+// `stratos tool` is capability-gated deny-by-default through the SAME gate the skill runtime uses.
+// `tool.read` lists toolkits/actions; `tool.run` executes a sovereign Composio action.
+const TOOL_CAPS = parseCapabilities({ capabilities: { actions: ['tool.read', 'tool.run'] } });
+
+/**
+ * cmdTool — sovereign Composio toolkit surface.
+ *   stratos tool list [toolkit]                      — discover toolkits, or actions in one
+ *   stratos tool run <toolkit> <action> [--entity id] [--json '{...}']
+ * HONEST: execution hits the APP's API only (never composio.dev), pulls the per-entity credential from
+ * OUR vault via the broker, and prints a brokered result — never the raw token.
+ */
+async function cmdTool(rest, d = {}) {
+  const sub = (rest[0] || 'list').toLowerCase();
+  const caps = d.toolCaps || TOOL_CAPS;
+  const tk = d.composioToolkits || composioToolkits;
+
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos tool${C.x} ${C.d}— sovereign Composio toolkits (1000+ apps; your keys never leave OUR vault)${C.x}`,
+      `  ${C.g}list${C.x} [toolkit]                 List toolkits (or actions in a toolkit). ★ = executable now`,
+      `  ${C.g}run${C.x} <toolkit> <action> [opts]  Execute an action via the sovereign executor`,
+      `    ${C.d}--entity <id>     per-user identity whose vaulted credential is used (default: "default")${C.x}`,
+      `    ${C.d}--json '<params>' action params as JSON${C.x}`,
+      '',
+      `  ${C.d}Zero composio.dev calls. Credential resolved broker-side, audience-bound + scoped, never returned.${C.x}`,
+    ] };
+  }
+
+  if (sub === 'list') {
+    try { assertStepAllowed(caps, { action: 'tool.read' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const toolkitArg = rest[1];
+    if (toolkitArg) {
+      let actions;
+      try { actions = tk.listActions(toolkitArg); } catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+      if (!actions.length) return { code: 1, lines: [`${C.r}unknown toolkit "${toolkitArg}"${C.x}`] };
+      const exec = actions.filter((a) => a.executable);
+      const lines = [`${C.b}${toolkitArg}${C.x} ${C.d}— ${actions.length} actions in the MIT catalog, ${exec.length} executable sovereignly${C.x}`];
+      for (const a of exec) lines.push(`  ${C.g}★ ${a.slug}${C.x} ${C.d}${a.name}${C.x}`);
+      if (!exec.length) lines.push(`  ${C.d}none wired yet — add a sovereign spec in composio-toolkits.js ACTION_SPECS${C.x}`);
+      lines.push(`  ${C.d}(+${actions.length - exec.length} catalog-only actions; add specs to run them)${C.x}`);
+      return { code: 0, lines };
+    }
+    let toolkits;
+    try { toolkits = tk.listToolkits(); } catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const exec = toolkits.filter((t) => t.executable);
+    const lines = [`${C.b}Sovereign Composio toolkits${C.x} ${C.d}(${toolkits.length} in MIT catalog; ${exec.length} executable now)${C.x}`];
+    for (const t of exec) lines.push(`  ${C.g}★ ${t.slug.padEnd(14)}${C.x} ${C.d}${t.name} · ${t.authSchemes.join(',')} · ${t.toolCount} actions${C.x}`);
+    lines.push(`  ${C.d}…and ${toolkits.length - exec.length} more catalog toolkits. ${C.x}${C.g}stratos tool list <toolkit>${C.x}${C.d} for actions.${C.x}`);
+    return { code: 0, lines };
+  }
+
+  if (sub === 'run') {
+    try { assertStepAllowed(caps, { action: 'tool.run' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const toolkit = rest[1], action = rest[2];
+    if (!toolkit || !action) return { code: 1, lines: [`${C.r}usage: stratos tool run <toolkit> <action> [--entity id] [--json '{...}']${C.x}`] };
+    let entity = 'default', params = {};
+    for (let i = 3; i < rest.length; i++) {
+      if (rest[i] === '--entity') entity = rest[++i];
+      else if (rest[i] === '--json') {
+        try { params = JSON.parse(rest[++i] || '{}'); } catch { return { code: 1, lines: [`${C.r}--json must be valid JSON${C.x}`] }; }
+      }
+    }
+    const runner = d.runToolAction || runToolAction;
+    let result;
+    try { result = await runner({ entity, toolkit, action, params }, d.composioDeps || {}); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    return { code: result.ok ? 0 : 1, lines: [
+      `${result.ok ? C.g + '✓' : C.r + '✗'} ${toolkit}/${action}${C.x} ${C.d}HTTP ${result.status} · brokered scope=${(result.brokered.scope || []).join(',')} aud=${result.brokered.aud}${C.x}`,
+      ...JSON.stringify(result.data, null, 2).split('\n').slice(0, 40),
+    ] };
+  }
+
+  return { code: 1, lines: [`${C.r}Unknown tool subcommand: ${sub}${C.x}`, `${C.d}Try: list · run · help${C.x}`] };
+}
+
 function cmdConnectors(deps) {
   let list;
   try { list = deps.connectors.listConnectors(); } catch (e) { return { code: 1, lines: [`${C.r}connector registry error: ${e.message}${C.x}`] }; }
@@ -744,7 +843,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'workspace', 'task', 'capture', 'trace', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -1244,6 +1343,212 @@ async function cmdContent(rest, d = {}) {
   ].filter(Boolean) };
 }
 
+// ---- operating core (Increment 1): workspace · task · capture · trace -------------------------
+// The files-first operational unit + capture + trace. Reading/writing the local operational map is a
+// capability — declared minimally and gated deny-by-default through the SAME capability-gate the skill
+// runtime uses. workspace/task scaffolding is `workspace.write`; capture is `context.capture`; the
+// trace exerciser is `trace.write`. All touch only the local stratos state dir — no network, no secrets.
+const WORKSPACE_CAPS = parseCapabilities({ capabilities: { actions: ['workspace.write', 'context.capture', 'trace.write'] } });
+
+function fmtTree(node, prefix = '', isLast = true, lines = []) {
+  const branch = prefix ? (isLast ? '└─ ' : '├─ ') : '';
+  const tag = node.type === 'task' ? `${C.g} [task]${C.x}` : node.type === 'workspace' ? `${C.d} [workspace]${C.x}` : '';
+  lines.push(`${C.d}${prefix}${C.x}${branch}${C.b}${node.name}${C.x}${tag}`);
+  const next = prefix + (isLast ? '   ' : `${C.d}│${C.x}  `);
+  node.children.forEach((c, i) => fmtTree(c, next, i === node.children.length - 1, lines));
+  return lines;
+}
+
+/**
+ * `stratos workspace create <name> | tree <name>` — the files-first operational unit. Capability-gated
+ * deny-by-default. Creates a Workspace (with its session log) or prints the Workspace>…>Task tree.
+ */
+function cmdWorkspace(rest, d = {}) {
+  const sub = (rest[0] || 'help').toLowerCase();
+  const wt = d.workspaceTree || workspaceTree;
+  const root = d.workspacesRoot; // undefined in normal use → module default
+
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos workspace${C.x} ${C.d}— the files-first operational unit (Workspace > Project > Workflow > Task > Subtask)${C.x}`,
+      `  ${C.g}create${C.x} <name>   Create (or resolve) a workspace`,
+      `  ${C.g}tree${C.x} <name>     Print the workspace tree (tasks scaffold instructions.md · tools.json · data/ · memory/ · outputs/ · traces/ · evals/ · skills/)`,
+      '',
+      `  ${C.d}The durable asset is your living operational map — files on disk, framework-agnostic.${C.x}`,
+    ] };
+  }
+
+  const caps = d.workspaceCaps || WORKSPACE_CAPS;
+
+  if (sub === 'create') {
+    try { assertStepAllowed(caps, { action: 'workspace.write' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const name = rest[1];
+    if (!name) return { code: 1, lines: [`${C.r}usage: stratos workspace create <name>${C.x}`] };
+    let r;
+    try { r = wt.createWorkspace(name, root ? { root } : {}); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    return { code: 0, lines: [
+      `${r.created ? C.g + '✓ created workspace' : C.d + '• workspace exists'}${C.x} ${C.b}${r.workspace}${C.x}`,
+      `  ${C.d}${r.path}${C.x}`,
+    ] };
+  }
+
+  if (sub === 'tree') {
+    try { assertStepAllowed(caps, { action: 'workspace.write' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const name = rest[1];
+    if (!name) {
+      // No name → list workspaces.
+      let list;
+      try { list = wt.listWorkspaces(root ? { root } : {}); }
+      catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+      if (!list.length) return { code: 0, lines: [`${C.y}no workspaces yet${C.x} ${C.d}— create one: stratos workspace create <name>${C.x}`] };
+      return { code: 0, lines: [`${C.B}Workspaces${C.x} ${C.d}(${list.length})${C.x}`, ...list.map((w) => `  ${C.b}${w}${C.x}`)] };
+    }
+    let tree;
+    try { tree = wt.listTree(name, root ? { root } : {}); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    if (!tree) return { code: 1, lines: [`${C.r}no workspace "${name}"${C.x} ${C.d}— create it: stratos workspace create ${name}${C.x}`] };
+    return { code: 0, lines: [`${C.B}stratos workspace tree${C.x}`, ...fmtTree(tree)] };
+  }
+
+  return { code: 1, lines: [`${C.r}Unknown workspace subcommand: ${sub}${C.x}`, `${C.d}Try: create · tree · help${C.x}`] };
+}
+
+/**
+ * `stratos task create <ws/proj/wf/task>` — scaffold a Task (the eight canonical entries) anywhere in
+ * the tree, creating any missing parents. Capability-gated deny-by-default.
+ */
+function cmdTask(rest, d = {}) {
+  const sub = (rest[0] || 'help').toLowerCase();
+  const wt = d.workspaceTree || workspaceTree;
+  const root = d.workspacesRoot;
+
+  if (sub === 'help' || sub === '-h' || sub === '--help' || !sub) {
+    return { code: 0, lines: [
+      `${C.B}stratos task${C.x} ${C.d}— the unit of work (scaffolds the 8 canonical entries)${C.x}`,
+      `  ${C.g}create${C.x} <ws/proj/wf/task>   Create a task (and any missing parents)`,
+      '',
+      `  ${C.d}A task folder holds: instructions.md · tools.json · data/ · memory/ · outputs/ · traces/ · evals/ · skills/${C.x}`,
+    ] };
+  }
+
+  if (sub === 'create') {
+    const caps = d.workspaceCaps || WORKSPACE_CAPS;
+    try { assertStepAllowed(caps, { action: 'workspace.write' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const p = rest[1];
+    if (!p) return { code: 1, lines: [`${C.r}usage: stratos task create <workspace/project/workflow/task>${C.x}`] };
+    const parts = p.split('/').map((s) => s.trim()).filter(Boolean);
+    if (parts.length !== 4) return { code: 1, lines: [`${C.r}task path must be "workspace/project/workflow/task" (4 segments)${C.x}`] };
+    let r;
+    try { r = wt.createTask(parts[0], parts[1], parts[2], parts[3], root ? { root } : {}); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    return { code: 0, lines: [
+      `${r.created ? C.g + '✓ created task' : C.d + '• task exists'}${C.x} ${C.b}${parts.join(' / ')}${C.x}`,
+      `  ${C.d}${r.path}${C.x}`,
+      `  ${C.g}scaffolded${C.x} ${C.d}${r.scaffolded.join(' · ')}${C.x}`,
+    ] };
+  }
+
+  return { code: 1, lines: [`${C.r}Unknown task subcommand: ${sub}${C.x}`, `${C.d}Try: create · help${C.x}`] };
+}
+
+/**
+ * `stratos capture <ws/proj/wf/task> "<text>"` — minimal CAPTURE exerciser: classify + persist a
+ * context record into the task's data/+memory/ and append the workspace session log. Deterministic
+ * (no LLM/network). Capability-gated deny-by-default.
+ */
+function cmdCapture(rest, d = {}) {
+  const cap = d.captureFn || captureEvent;
+  const root = d.workspacesRoot;
+  if (!rest.length || rest[0] === 'help' || rest[0] === '-h' || rest[0] === '--help') {
+    return { code: rest.length ? 0 : 1, lines: [
+      `${C.B}stratos capture${C.x} ${C.d}— capture an event into the operational map (Capture → Classify → Store)${C.x}`,
+      `  ${C.g}stratos capture <ws/proj/wf/task> "<text>"${C.x} ${C.d}[--source chat|file|repo|terminal|browser|api|mcp] [--intent "<intent>"]${C.x}`,
+      '',
+      `  ${C.d}Deterministic: rule-based classify, no LLM/network. Raw → data/, record → memory/, line → session.log.${C.x}`,
+    ] };
+  }
+  const caps = d.workspaceCaps || WORKSPACE_CAPS;
+  try { assertStepAllowed(caps, { action: 'context.capture' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  const taskPath = rest[0];
+  const si = rest.indexOf('--source');
+  const ii = rest.indexOf('--intent');
+  const source = si >= 0 ? rest[si + 1] : 'terminal';
+  const userIntent = ii >= 0 ? rest[ii + 1] : '';
+  const text = rest.slice(1).filter((a, i) => {
+    const idx = i + 1;
+    if (a.startsWith('--')) return false;
+    if (si >= 0 && idx === si + 1) return false;
+    if (ii >= 0 && idx === ii + 1) return false;
+    return true;
+  }).join(' ').trim();
+  if (!text) return { code: 1, lines: [`${C.r}usage: stratos capture <ws/proj/wf/task> "<text>"${C.x}`] };
+
+  let rec;
+  try { rec = cap({ task: taskPath, source, raw: text, user_intent: userIntent }, root ? { root } : {}); }
+  catch (e) { return { code: 1, lines: [`${C.r}capture failed: ${e.message}${C.x}`] }; }
+  return { code: 0, lines: [
+    `${C.g}✓ captured${C.x} ${C.b}${rec.id}${C.x} ${C.d}· ${rec.source}/${rec.classification.intent}${C.x}`,
+    `  ${C.d}raw    ${C.x}${rec._paths.raw}`,
+    `  ${C.d}record ${C.x}${rec._paths.record}`,
+    `  ${C.d}log    ${C.x}${rec._paths.sessionLog}`,
+  ] };
+}
+
+/**
+ * `stratos trace <ws/proj/wf/task>` — minimal TRACE exerciser: start → a couple of steps → end,
+ * minting a signed capability-receipt as the tamper-evident spine and verifying it with the public
+ * key. Uses an EPHEMERAL node identity (deterministic in tests via injected keyPair). Capability-gated.
+ */
+function cmdTrace(rest, d = {}) {
+  const root = d.workspacesRoot;
+  if (!rest.length || rest[0] === 'help' || rest[0] === '-h' || rest[0] === '--help') {
+    return { code: rest.length ? 0 : 1, lines: [
+      `${C.B}stratos trace${C.x} ${C.d}— exercise the trace engine (start → steps → end, with a signed receipt spine)${C.x}`,
+      `  ${C.g}stratos trace <ws/proj/wf/task>${C.x}`,
+      '',
+      `  ${C.d}Writes traces/{task-id}.json + a PQC-signed, hash-chained capability-receipt (the tamper-evident spine).${C.x}`,
+    ] };
+  }
+  const caps = d.workspaceCaps || WORKSPACE_CAPS;
+  try { assertStepAllowed(caps, { action: 'trace.write' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  const taskPath = rest[0];
+  const start = d.startTrace || startTrace;
+  const step = d.recordStep || recordStep;
+  const end = d.endTrace || endTrace;
+  const keyPair = d.traceKeyPair || generateHybridKeyPair();
+  const nodeId = originId(keyPair.publicKey);
+
+  let h, res;
+  try {
+    h = start({ task: taskPath, model_used: d.traceModel || 'gemma2:2b', model_class: 'openweight', root, now: d.traceNow });
+    step(h, { kind: 'plan', summary: 'plan the task', who: nodeId, model: 'gemma2:2b', permission: 'plan' });
+    step(h, { kind: 'io', summary: 'write an output', who: nodeId, model: 'gemma2:2b', permission: 'fs.write', input: taskPath, output: 'done', cost_units: 1 });
+    const log = d.traceReceiptLog || new (d.ReceiptLog || ReceiptLog)({
+      signer: makeReceiptSigner(keyPair.privateKey),
+      verifier: makeReceiptVerifier(keyPair.publicKey),
+      nodeId, now: d.traceNow,
+    });
+    res = end(h, { result: 'ok', outputs: ['done'], receiptLog: log, actor_id: nodeId, now: d.traceNow });
+    const v = res.receipt ? log.verify({ requireSig: true }) : { ok: null };
+    return { code: 0, lines: [
+      `${C.g}✓ trace written${C.x} ${C.d}${res.file}${C.x}`,
+      `  ${C.d}steps   ${C.x}${res.trace.steps.length} · result ${res.trace.result}`,
+      `  ${C.d}node    ${C.x}${didShort(nodeId)}`,
+      res.receipt
+        ? `  ${C.d}receipt ${C.x}${shortHash(res.receipt.hash)} ${v.ok === true ? C.g + '✓ verified (public key only)' + C.x : C.r + '✗ verify failed' + C.x}`
+        : `  ${C.y}no receipt minted${C.x}`,
+    ] };
+  } catch (e) { return { code: 1, lines: [`${C.r}trace failed: ${e.message}${C.x}`] }; }
+}
+
 export async function run(argv = [], deps = {}) {
   const d = {
     config: deps.config || realConfig,
@@ -1293,6 +1598,27 @@ export async function run(argv = [], deps = {}) {
     contentCaps: deps.contentCaps,
     buildLog: deps.buildLog,
     contentNow: deps.contentNow,
+    // Injectable sovereign-Composio surface (tests inject a stub toolkit loader + runner + denied caps;
+    // production uses the MIT catalog loader + the real broker/vault/gate executor and TOOL_CAPS).
+    composioToolkits: deps.composioToolkits,
+    runToolAction: deps.runToolAction,
+    composioDeps: deps.composioDeps,
+    toolCaps: deps.toolCaps,
+    // Injectable operating-core surface (Increment 1). Tests inject an isolated workspaces root +
+    // denied caps + a deterministic keypair/clock; production uses the on-disk .stratos-profile state
+    // dir, WORKSPACE_CAPS, and an ephemeral node identity. Pass-through only — undefined in normal use.
+    workspaceTree: deps.workspaceTree,
+    workspacesRoot: deps.workspacesRoot,
+    workspaceCaps: deps.workspaceCaps,
+    captureFn: deps.captureFn,
+    startTrace: deps.startTrace,
+    recordStep: deps.recordStep,
+    endTrace: deps.endTrace,
+    traceKeyPair: deps.traceKeyPair,
+    traceReceiptLog: deps.traceReceiptLog,
+    traceModel: deps.traceModel,
+    traceNow: deps.traceNow,
+    ReceiptLog: deps.ReceiptLog,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -1316,6 +1642,11 @@ export async function run(argv = [], deps = {}) {
     case 'skill': return cmdSkill(rest, d);
     case 'egress': return cmdEgress(rest, d);
     case 'content': return cmdContent(rest, d);
+    case 'tool': return cmdTool(rest, d);
+    case 'workspace': case 'ws': return cmdWorkspace(rest, d);
+    case 'task': return cmdTask(rest, d);
+    case 'capture': return cmdCapture(rest, d);
+    case 'trace': return cmdTrace(rest, d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

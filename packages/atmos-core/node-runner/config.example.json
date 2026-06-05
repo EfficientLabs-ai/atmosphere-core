@@ -2,5 +2,6 @@
   "nodeLabel": "atmos-node",
   "topic": "atmosphere-genesis-mesh-v1",
   "defaultInput": 9,
+  "walletAddress": "<optional: your PUBLIC Solana address \u2014 attributes this node's compute to you (never a private key). Omit to join unattributed, or pass --wallet <SOL_ADDRESS> at launch>",
   "pinnedPubKey": "<base64 of origin public key \u2014 generate from node-keys.json>"
 }

@@ -16,8 +16,8 @@ const regPath = () => path.join(dir(), 'connectors.json');
 const NAME_RE = /^[a-z0-9_-]+$/i;
 
 function load() {
-  try { const r = JSON.parse(fs.readFileSync(regPath(), 'utf8')); return { tools: r.tools || {}, connectors: r.connectors || {} }; }
-  catch (e) { if (e.code === 'ENOENT') return { tools: {}, connectors: {} }; throw new Error(`connector registry unreadable/corrupt: ${e.message}`); }
+  try { const r = JSON.parse(fs.readFileSync(regPath(), 'utf8')); return { tools: r.tools || {}, connectors: r.connectors || {}, toolkits: r.toolkits || {} }; }
+  catch (e) { if (e.code === 'ENOENT') return { tools: {}, connectors: {}, toolkits: {} }; throw new Error(`connector registry unreadable/corrupt: ${e.message}`); }
 }
 function save(reg) {
   fs.mkdirSync(dir(), { recursive: true, mode: 0o700 });
@@ -56,3 +56,27 @@ export function removeConnector(name, vault = vaultMod) {
 }
 
 export function registryPath() { return regPath(); }
+
+/**
+ * registerSovereignToolkits — record the in-process sovereign Composio toolkits so the agent can
+ * DISCOVER + call them, without a sidecar credential (creds live per-entity in the connector-vault,
+ * resolved broker-side at run time — NOT a single pinned credential here). Stored under reg.toolkits
+ * as { kind:'composio-sovereign', actions:[...] } so it never collides with sidecar connectors.
+ */
+export function registerSovereignToolkits(toolkits = []) {
+  const reg = load();
+  reg.toolkits = reg.toolkits || {};
+  for (const t of toolkits) {
+    if (!t || !NAME_RE.test(String(t.slug || ''))) continue;
+    reg.toolkits[t.slug] = { kind: 'composio-sovereign', actions: Array.isArray(t.actions) ? t.actions : [] };
+  }
+  save(reg);
+  return Object.keys(reg.toolkits);
+}
+
+/** List registered sovereign toolkits (metadata only — never credentials). */
+export function listSovereignToolkits() {
+  return Object.entries(load().toolkits || {})
+    .filter(([, v]) => v && v.kind === 'composio-sovereign')
+    .map(([slug, v]) => ({ slug, actions: v.actions || [] }));
+}

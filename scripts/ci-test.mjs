@@ -71,12 +71,20 @@ const SUITES = {
   ],
 };
 
+// Hermetic suites that live in scripts/ (not packages/) — business-automation jobs. Mocked external
+// I/O (Stripe fetch + Telegram send injected), no live services, no real keys.
+const SCRIPTS_SUITES = {
+  'scripts': ['test-finance-digest.mjs'],
+};
+
 const TIMEOUT_MS = 90_000;
 let total = 0, failed = 0;
 const failures = [];
 
-for (const [pkg, tests] of Object.entries(SUITES)) {
-  const dir = path.join(ROOT, 'packages', pkg);
+const PKG_BASE = (pkg) => pkg === 'scripts' ? path.join(ROOT, 'scripts') : path.join(ROOT, 'packages', pkg);
+
+for (const [pkg, tests] of Object.entries({ ...SUITES, ...SCRIPTS_SUITES })) {
+  const dir = PKG_BASE(pkg);
   console.log(`\n\x1b[1m━━ ${pkg} (${tests.length}) ━━\x1b[0m`);
   for (const t of tests) {
     total++;

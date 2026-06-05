@@ -55,6 +55,13 @@ const SUITES = {
     // import logic + CLI gating, no network, no crypto/live services. Covers round-trip, frontmatter edge
     // cases, conservative least-privilege import, export provenance, injection/oversized guards.
     'test-skill-md.mjs',
+    // SIGNED CAPABILITY RECEIPT — the cross-machine proof rail (this session). Hermetic: pure hybrid
+    // PQC + hash-chain + file, no network/Ollama. Covers create→sign→verify, field-tamper + recompute-
+    // hash forgery (caught by the PQC sig), remove/reorder detection, export→verifyBundle with ONLY the
+    // public key, fail-CLOSED verification, fail-OPEN emission, per-actor/per-node measured-cost summary,
+    // and a real SkillExecutor skill-run receipt. The CLI test covers `stratos receipt export|verify|
+    // summary` incl. the capability gate (deny-by-default) and non-zero exit on a broken bundle.
+    'test-capability-receipt.mjs', 'test-stratos-receipt.mjs',
   ],
 };
 

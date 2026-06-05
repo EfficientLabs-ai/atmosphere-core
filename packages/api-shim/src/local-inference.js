@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import fetch from 'node-fetch';
 import { queryCognitiveSkill, queryInterceptedReasoning, queryAmbientMemory } from '../../stratos-agent/src/memory/vector-bank.js';
-import { tryServe as evolutionTryServe, observe as evolutionObserve } from './self-evolution-runtime.js';
+import { tryServe as evolutionTryServe, observe as evolutionObserve, recordInference as evolutionRecordInference } from './self-evolution-runtime.js';
 import { buildIdentityPrompt } from '../../stratos-agent/src/core/identity.js';
 import { languageDirective } from '../../stratos-agent/src/core/languages.js';
 import { getLanguage } from '../../stratos-agent/src/core/agent-config.js';
@@ -167,11 +167,13 @@ Answer the user's actual message directly and conversationally. Only use the ref
     // Inert unless STRATOS_EVOLUTION + STRATOS_EVOLUTION_EXECUTE are set; never throws.
     let text = '';
     let servedFromSkill = false;
+    let receiptRef = model || this.modelName; // the model/skill that produced the answer (for the receipt)
     try {
       const served = await evolutionTryServe(lastUserMsg);
       if (served && served.text != null) {
         text = served.text;
         servedFromSkill = true;
+        receiptRef = served.skillId ? `skill:${served.skillId}` : receiptRef;
         if (this.verbose) {
           console.log(`⚡ [Local Model] served by verified skill ${served.skillId} (dist=${served.distance?.toFixed?.(3)}) — bypassing LLM.`);
         }
@@ -227,6 +229,7 @@ Answer the user's actual message directly and conversationally. Only use the ref
         if (this.verbose) console.warn(`⚠️ [Local Model] "${targetModel}" is not a local model; normalizing to installed gemma2:2b.`);
       }
       targetModel = 'gemma2:2b';
+      receiptRef = targetModel; // the model that actually produced the answer (for the capability receipt)
       if (this.verbose) {
         console.log(`🤖 [Local Model] Querying real Ollama model [${targetModel}] at ${ollamaEndpoint}...`);
       }
@@ -261,6 +264,13 @@ Answer the user's actual message directly and conversationally. Only use the ref
     // captures genuine successes (not the offline-fallback string, not skill-served replies).
     if (!servedFromSkill && !text.startsWith('⚠️')) {
       evolutionObserve(lastUserMsg, text).catch(() => {});
+    }
+
+    // Hook R (RECEIPT — flag-gated, default OFF): emit a signed, hash-chained capability receipt
+    // proving this node served this inference (input/output hashed — content never stored; cost is a
+    // measured length count). Skips the offline-fallback string. FAIL-OPEN: never throws into serving.
+    if (!text.startsWith('⚠️')) {
+      evolutionRecordInference({ prompt: lastUserMsg, response: text, model: receiptRef, costUnits: text.length }).catch(() => {});
     }
 
     const createdTime = Math.floor(Date.now() / 1000);

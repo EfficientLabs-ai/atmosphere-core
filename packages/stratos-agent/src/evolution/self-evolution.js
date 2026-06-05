@@ -8,6 +8,7 @@ import { generateHybridKeyPair } from '../security/quantum-crypto.js';
 import { insertCognitiveSkill, queryCognitiveSkill, getCognitiveSkillById } from '../memory/vector-bank.js';
 import { originId } from '../memory/skill-seal.js';
 import { AttributionLedger } from '../ledger/attribution-ledger.js';
+import { ReceiptLog, makeReceiptSigner, makeReceiptVerifier, hashContent } from '../ledger/capability-receipt.js';
 
 /**
  * SelfEvolutionEngine — the integration layer that wires the five components built
@@ -79,10 +80,21 @@ export class SelfEvolutionEngine {
     try { contributorId = originId(this.keyBundle.publicKey); } catch { /* not a did bundle — skip */ }
     this.contributorId = contributorId;
     this.ledger = opts.ledger || new AttributionLedger({ path: path.join(this.distSkillsDir, 'attribution.jsonl') });
+    // Capability-receipt log (the cross-machine proof rail): PQC-signed, hash-chained receipts of every
+    // inference + verified skill-run, third-party-verifiable with ONLY the node's PUBLIC key. The node
+    // signs with its hybrid private key; ANY node holding the public bundle can verify. If this bundle
+    // isn't a did/hybrid bundle (no contributorId) the signer is omitted and emission no-ops — fail-open.
+    this.receiptLog = opts.receiptLog || (this.contributorId ? new ReceiptLog({
+      path: path.join(this.distSkillsDir, 'receipts.jsonl'),
+      nodeId: this.contributorId,
+      signer: makeReceiptSigner(this.keyBundle.privateKey),
+      verifier: makeReceiptVerifier(this.keyBundle.publicKey),
+    }) : null);
     // enforceCapabilities ON: the compiler stamps least-privilege caps into every skill's sealed
-    // manifest, so the gate is live end-to-end. ledger + contributorId wire the trifecta live:
-    // every verified run is attributed + recorded (deny-by-default capability enforcement throughout).
-    this.executor = new SkillExecutor({ publicKeyBundle: this.keyBundle.publicKey, verbose: this.verbose, enforceCapabilities: true, ledger: this.ledger, contributorId: this.contributorId });
+    // manifest, so the gate is live end-to-end. ledger + receiptLog + contributorId wire the trifecta
+    // live: every verified run is attributed, recorded, AND emits a signed capability receipt
+    // (deny-by-default capability enforcement throughout).
+    this.executor = new SkillExecutor({ publicKeyBundle: this.keyBundle.publicKey, verbose: this.verbose, enforceCapabilities: true, ledger: this.ledger, receiptLog: this.receiptLog, contributorId: this.contributorId });
   }
 
   // ---- OBSERVE -----------------------------------------------------------------
@@ -209,6 +221,41 @@ export class SelfEvolutionEngine {
       return { skillId: m.skill_id, distance: m._distance, ...out };
     } catch (e) {
       if (this.verbose) console.warn('[SelfEvolution] execute failed:', e.message);
+      return null;
+    }
+  }
+
+  // ---- RECEIPT (cross-machine proof rail) -------------------------------------
+  /**
+   * Emit a signed 'inference' capability receipt after the gateway serves a local/router response.
+   * The cleanest inference seam: the api-shim calls this with the prompt + response + the model used;
+   * input/output are HASHED here (privacy — content never stored), cost_units is a measured token/
+   * length count. FAIL-OPEN: returns null on any error (no node key, broken signer, unwritable log)
+   * and NEVER throws into the request path — serving is never slowed or broken by receipt emission.
+   * @param {object} o { prompt, response, model, costUnits?, actorId?, callerId? }
+   * @returns the signed receipt, or null if not emitted.
+   */
+  recordInference(o = {}) {
+    if (!this.receiptLog || !this.contributorId) return null;
+    try {
+      const prompt = o.prompt == null ? '' : String(o.prompt);
+      const response = o.response == null ? '' : String(o.response);
+      // Measured cost: caller-supplied count, else a crude token estimate (~4 chars/token). Never a price.
+      let cost = o.costUnits;
+      if (typeof cost !== 'number' || !Number.isFinite(cost) || cost < 0) {
+        cost = Math.max(1, Math.round((prompt.length + response.length) / 4));
+      }
+      return this.receiptLog.append({
+        actor_id: o.actorId || this.contributorId, // subject of the work; defaults to this node's did
+        action: 'inference',
+        ref: o.model == null ? null : String(o.model),
+        input_hash: hashContent(prompt),
+        output_hash: hashContent(response),
+        cost_units: cost,
+        caller_id: o.callerId ?? null,
+      });
+    } catch (e) {
+      if (this.verbose) console.warn('[SelfEvolution] recordInference skipped:', e.message);
       return null;
     }
   }

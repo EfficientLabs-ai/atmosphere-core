@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { GsiCompiler, parseCustomSection } from '../../gsi-compiler.js';
 import { parseCapabilities, assertComputeAllowed, assertStepAllowed } from '../security/capability-gate.js';
+import { hashContent } from '../ledger/capability-receipt.js';
 
 /**
  * SkillExecutor: loads a compiled .wasm skill, VERIFIES its post-quantum seal before
@@ -36,12 +37,35 @@ export class SkillExecutor {
     this.ledger = options.ledger || null;
     this.broker = options.broker || null;
     this.contributorId = options.contributorId || null;
+    // Capability-receipt log (cross-machine proof rail): each verified run also emits a 'skill-run'
+    // receipt, PQC-signed + hash-chained, third-party-verifiable. Optional + FAIL-OPEN — a missing or
+    // broken receipt log degrades to "no receipt" and never affects the run (same contract as ledger).
+    this.receiptLog = options.receiptLog || null;
   }
 
   _record(kind, manifest, units, meta) {
     if (!this.ledger || !this.contributorId) return;
     try { this.ledger.append({ kind, contributor: this.contributorId, subject: manifest?.id ?? null, units, meta }); }
     catch (e) { if (this.verbose) console.warn(`⚠️  [SkillExecutor] ledger record failed: ${e.message}`); }
+  }
+
+  /**
+   * Emit a signed 'skill-run' capability receipt alongside the ledger record. FAIL-OPEN: any error
+   * (no node key, broken signer, unwritable log) is swallowed — the verified run is never blocked or
+   * slowed by receipt emission. input/output are HASHED (privacy), cost_units is a measured count.
+   */
+  _emitReceipt(manifest, input, result, units) {
+    if (!this.receiptLog || !this.contributorId) return;
+    try {
+      this.receiptLog.append({
+        actor_id: this.contributorId,
+        action: 'skill-run',
+        ref: manifest?.id ?? null,
+        input_hash: hashContent(input),
+        output_hash: hashContent(result),
+        cost_units: typeof units === 'number' && Number.isFinite(units) && units >= 0 ? units : 1,
+      });
+    } catch (e) { if (this.verbose) console.warn(`⚠️  [SkillExecutor] receipt emit skipped: ${e.message}`); }
   }
 
   /** Reads the signed pathway manifest out of a wasm skill. */
@@ -80,6 +104,7 @@ export class SkillExecutor {
       const result = wm.instance.exports.compute((input | 0));
       if (this.verbose) console.log(`▶️  [SkillExecutor] computational "${manifest.id}" compute(${input}) = ${result}`);
       this._record('skill-executed', manifest, 1, { kind: 'computational', verified });
+      this._emitReceipt(manifest, input, result, 1);
       return { id: manifest.id, kind: 'computational', verified, input, result };
     }
 
@@ -107,6 +132,7 @@ export class SkillExecutor {
       console.log(`▶️  [SkillExecutor] automation "${manifest.id}" — ${steps.length} step(s) ${mode}`);
     }
     this._record('skill-executed', manifest, steps.length || 1, { kind: 'automation', executed: !!this.actionExecutor });
+    this._emitReceipt(manifest, { input, steps: steps.length }, trace, steps.length || 1);
     return { id: manifest.id, kind: 'automation', verified, executed: !!this.actionExecutor, steps: steps.length, trace };
   }
 }

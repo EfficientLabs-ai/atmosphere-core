@@ -21,6 +21,7 @@ import { languageName } from '../core/languages.js';
 import { realProbes } from './probes.js';
 import { scaffoldWorkspace, validateWorkspace, ICM_LAYERS } from '../context/icm-workspace.js';
 import { AttributionLedger } from '../ledger/attribution-ledger.js';
+import { ReceiptLog, makeReceiptVerifier, verifyBundle } from '../ledger/capability-receipt.js';
 import { originId } from '../memory/skill-seal.js';
 import { route as routeDecision, difficulty, autoEscalateEnabled } from '../routing/model-router.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
@@ -83,6 +84,7 @@ function helpText() {
     `  ${C.g}mesh${C.x}            The Atmosphere mesh — status + how to join (optional)`,
     `  ${C.g}icm${C.x}             Context workspace contract (folders over agents): init · validate`,
     `  ${C.g}ledger${C.x}          Attribution: who contributed what — summary · verify · list (measured, not priced)`,
+    `  ${C.g}receipt${C.x}         Signed capability receipts — the cross-machine proof rail: export · verify · summary`,
     `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
     `  ${C.g}route${C.x} <prompt>   Preview the sovereign router: local by default, cloud only on opt-in`,
     `  ${C.g}memory${C.x}          Full-text recall over past conversations (local FTS5): search · recall`,
@@ -147,6 +149,144 @@ function nodeKeysPath(arg) {
   if (process.env.STRATOS_NODE_KEYS) return process.env.STRATOS_NODE_KEYS;
   const cands = [path.join(_ROOT, '.stratos-profile', 'node-keys.json'), path.join(_ROOT, 'node-keys.json')];
   return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+
+// Capability receipts default to <skills>/receipts.jsonl, mirroring the daemon runtime's
+// DIST_SKILLS_DIR convention (env STRATOS_RECEIPTS / STRATOS_SKILLS_DIR override).
+function receiptsPath(arg) {
+  if (arg && !/^\d+$/.test(arg)) return path.resolve(arg);
+  if (process.env.STRATOS_RECEIPTS) return process.env.STRATOS_RECEIPTS;
+  const cands = [
+    process.env.STRATOS_SKILLS_DIR && path.join(process.env.STRATOS_SKILLS_DIR, 'receipts.jsonl'),
+    path.join(_ROOT, 'packages', 'stratos-agent', 'dist', 'skills', 'receipts.jsonl'),
+    path.join(_ROOT, 'dist', 'skills', 'receipts.jsonl'),
+    path.join(_ROOT, 'receipts.jsonl'),
+  ].filter(Boolean);
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+
+// Reading/exporting/verifying the capability-receipt proof rail is a capability — declared minimally
+// and gated deny-by-default through the SAME capability-gate the skill runtime uses. `receipt.read`
+// is all this surface needs: it touches no network, no secrets, only the local receipts.jsonl.
+const RECEIPT_CAPS = parseCapabilities({ capabilities: { actions: ['receipt.read'] } });
+
+// Load the node's PUBLIC key bundle (no private half) so `receipt export` can embed it for
+// third-party verification and `receipt verify` can check the live log. Public-only by design.
+function loadNodePublicBundle(kf) {
+  if (!kf || !fs.existsSync(kf)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(kf, 'utf8'));
+    return Object.fromEntries(Object.entries(raw.publicKey).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
+  } catch { return null; }
+}
+
+/**
+ * `stratos receipt export|verify|summary` — the SIGNED CAPABILITY RECEIPT proof rail.
+ *   export [--since <iso>]  emit a self-contained, third-party-verifiable JSON bundle to stdout
+ *   verify <bundle-file>    check every PQC signature + the full hash chain (OK/BROKEN + where)
+ *   summary                 measured cost/count per actor + per node (measurement, never a price)
+ * Capability-gated (deny-by-default). HONEST: hashes not content; measurement not price; fail-closed
+ * verification. `export` embeds ONLY the node's PUBLIC key, so anyone can verify the bundle with no
+ * private key and no access to this node.
+ */
+function cmdReceipt(rest, d = {}) {
+  const sub = (rest[0] || 'summary').toLowerCase();
+  const caps = d.receiptCaps || RECEIPT_CAPS;
+
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos receipt${C.x} ${C.d}— the signed capability-receipt proof rail (cross-machine, PQC, hash-chained)${C.x}`,
+      `  ${C.g}export${C.x} [--since <iso>]   Emit a signed, third-party-verifiable JSON bundle to stdout`,
+      `  ${C.g}verify${C.x} <bundle-file>     Check every signature + the full hash chain (fail-closed)`,
+      `  ${C.g}summary${C.x}                  Measured cost/count per actor + per node (NOT a payout)`,
+      '',
+      `  ${C.d}Proves WHO ran WHAT, on WHOSE node, over which input/output (hashed), at what measured cost.`,
+      `  A verifier holding ONLY the node's public key can confirm it — and detect any altered or`,
+      `  removed/reordered receipt. Content is never stored; cost is measured, never priced.${C.x}`,
+    ] };
+  }
+
+  // Capability gate: deny-by-default. Tests/callers can inject denied caps to prove enforcement.
+  try { assertStepAllowed(caps, { action: 'receipt.read' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  // VERIFY a bundle file — third-party path: needs only the bundle (public key is embedded).
+  if (sub === 'verify') {
+    const file = rest[1];
+    if (!file) return { code: 1, lines: [`${C.r}usage: stratos receipt verify <bundle-file>${C.x}`] };
+    let bundle;
+    try { bundle = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8')); }
+    catch (e) { return { code: 1, lines: [`${C.r}cannot read bundle ${file}: ${e.message}${C.x}`] }; }
+    const v = verifyBundle(bundle);
+    if (v.ok) return { code: 0, lines: [
+      `${C.g}✓ receipt bundle OK${C.x} ${C.d}${v.count} receipt(s)${v.node_id ? ` · node ${didShort(v.node_id)}` : ''}${C.x}`,
+      `${C.d}every hybrid-PQC signature verified + the hash chain is intact — third-party-verifiable with the public key only.${C.x}`,
+    ] };
+    return { code: 1, lines: [
+      `${C.r}✗ receipt bundle BROKEN${v.brokenAt != null ? ` at receipt ${v.brokenAt}` : ''}: ${v.reason}${C.x}`,
+      `${C.d}a receipt was altered, removed, or reordered — the proof no longer validates (fail-closed).${C.x}`,
+    ] };
+  }
+
+  // export + summary read the live receipts.jsonl.
+  const pArg = rest.find((a, i) => i > 0 && a !== '--since' && !/^\d+$/.test(a) && rest[i - 1] !== '--since');
+  const p = receiptsPath(sub === 'export' ? undefined : pArg);
+  const kf = nodeKeysPath();
+  const pub = loadNodePublicBundle(kf);
+  const verifier = pub ? makeReceiptVerifier(pub) : null;
+
+  let log;
+  try { log = new ReceiptLog({ path: fs.existsSync(p) ? p : null, verifier }); }
+  catch (e) { return { code: 1, lines: [`${C.r}could not read receipts: ${e.message}${C.x}`] }; }
+
+  if (sub === 'export') {
+    if (!log.length) {
+      // Honest: nothing to export yet. Still emit a well-formed (empty) bundle so pipelines don't break.
+      const empty = log.exportBundle({ publicKeyBundle: pub || undefined });
+      return { code: 0, lines: JSON.stringify(empty, null, 2).split('\n') };
+    }
+    if (!pub) {
+      return { code: 1, lines: [
+        `${C.r}no node public key found${C.x} ${C.d}(${kf})${C.x}`,
+        `${C.d}export embeds the node's PUBLIC key so a third party can verify — without it the bundle isn't verifiable.${C.x}`,
+      ] };
+    }
+    const si = rest.indexOf('--since');
+    const since = si >= 0 ? rest[si + 1] || null : null;
+    const bundle = log.exportBundle({ since, publicKeyBundle: pub });
+    // Emit raw JSON to stdout so it can be piped/redirected to a file — portable + verifiable by design.
+    return { code: 0, lines: JSON.stringify(bundle, null, 2).split('\n') };
+  }
+
+  // default: summary — measured cost/count per actor + per node (NOT a payout).
+  if (!log.length) {
+    return { code: 0, lines: [
+      `${C.B}stratos receipt${C.x} ${C.d}— the capability-receipt proof rail${C.x}`,
+      `${C.y}no receipts yet${C.x} ${C.d}at ${p}${C.x}`,
+      `${C.d}The daemon emits a signed receipt per inference + verified skill-run once evolution is enabled.${C.x}`,
+    ] };
+  }
+  const v = verifier ? log.verify() : { ok: null };
+  const sum = log.summarize();
+  const lines = [
+    `${C.B}Capability receipts${C.x} ${C.d}— measured cost/count per actor + node (NOT a payout)${C.x}`,
+    v.ok === true ? `${C.g}✓ chain + signatures intact${C.x} ${C.d}${log.length} receipt(s)${C.x}`
+      : v.ok === false ? `${C.r}✗ chain broken at ${v.brokenAt}: ${v.reason}${C.x}`
+      : `${C.y}chain present${C.x} ${C.d}${log.length} receipt(s) (no node key to check signatures)${C.x}`,
+    '',
+    `${C.B}By actor${C.x}`,
+  ];
+  for (const a of sum.byActor) {
+    const acts = Object.entries(a.byAction).map(([k, u]) => `${k}:${u}`).join(' ');
+    lines.push(`  ${C.b}${didShort(a.actor_id)}${C.x}  ${C.g}${String(a.cost_units).padStart(7)}u${C.x} ${C.d}${String(a.count)}rcpt · ${acts}${C.x}`);
+  }
+  lines.push('', `${C.B}By node${C.x}`);
+  for (const n of sum.byNode) {
+    const acts = Object.entries(n.byAction).map(([k, u]) => `${k}:${u}`).join(' ');
+    lines.push(`  ${C.b}${didShort(n.node_id)}${C.x}  ${C.g}${String(n.cost_units).padStart(7)}u${C.x} ${C.d}${String(n.count)}rcpt · ${acts}${C.x}`);
+  }
+  lines.push('', `${C.d}Measurement before rewards: the cross-machine proof a future reward layer would read.${C.x}`);
+  return { code: 0, lines };
 }
 
 function cmdLedger(rest) {
@@ -492,7 +632,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'memory', 'voice', 'skill', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'receipt', 'id', 'route', 'memory', 'voice', 'skill', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -764,6 +904,8 @@ export async function run(argv = [], deps = {}) {
     skillCaps: deps.skillCaps,
     skillSource: deps.skillSource,
     originDid: deps.originDid,
+    // Injectable capability-receipt gate (tests inject denied caps to prove deny-by-default).
+    receiptCaps: deps.receiptCaps,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -777,6 +919,7 @@ export async function run(argv = [], deps = {}) {
     case 'mesh': return cmdMesh(d);
     case 'icm': return cmdIcm(rest);
     case 'ledger': return cmdLedger(rest);
+    case 'receipt': return cmdReceipt(rest, d);
     case 'id': return cmdId(rest);
     case 'route': return cmdRoute(rest);
     case 'memory': return cmdMemory(rest, d);

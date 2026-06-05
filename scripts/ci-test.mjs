@@ -127,6 +127,15 @@ const SUITES = {
     // lessons per failed criterion, determinism (same input → same score), the off-by-default LLM-judge
     // hook (throwing judge degrades, never fabricates), input validation, and the gated `stratos eval` CLI.
     'test-eval-engine.mjs',
+    // SELF-IMPROVEMENT COMPRESSION (Increment 3) — the closing loop trace→eval→lesson→instruction→skill.
+    // Hermetic: pure fs/crypto in an isolated tmp dir, in-process keypair (no on-disk keys), no network/
+    // Ollama/daemon. Covers a FAILED eval distilling a lesson + appending its suggested_instruction to
+    // instructions.md with IDEMPOTENT re-runs (no duplicate, applied-id ledger), a PASSED eval scaffolding
+    // a reusable skill (skill.md + examples/ + tools.json) in the EXISTING SKILL.md format that the
+    // existing SkillStore loads back (a failed run never promotes a skill), determinism (same input → same
+    // lesson), the off-by-default distiller hook (throwing degrades, never fabricates), input validation,
+    // and the capability-gated `stratos improve` CLI (deny-by-default).
+    'test-self-improve.mjs',
   ],
 };
 

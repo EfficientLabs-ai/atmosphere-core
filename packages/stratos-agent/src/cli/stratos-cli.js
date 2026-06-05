@@ -42,6 +42,8 @@ import * as workspaceTree from '../workspace/workspace-tree.js';
 import { capture as captureEvent, classify as classifyEvent } from '../context/context-capture.js';
 import { startTrace, recordStep, endTrace, readTrace } from '../trace/trace-engine.js';
 import { evaluate as evaluateTrace } from '../eval/eval-engine.js';
+import { improve as improveTask } from '../self-improve/improvement-engine.js';
+import { readEval as readEvalRecord } from '../eval/eval-engine.js';
 import { generateHybridKeyPair } from '../security/quantum-crypto.js';
 import { makeReceiptSigner } from '../ledger/capability-receipt.js';
 
@@ -102,6 +104,7 @@ function helpText() {
     `  ${C.g}capture${C.x}         Capture an event into the operational map (Capture → Classify → Store; deterministic)`,
     `  ${C.g}trace${C.x}           Trace an execution → traces/{task-id}.json + a signed capability-receipt spine`,
     `  ${C.g}eval${C.x}            Score a trace → evals/{task-id}.md + .json (deterministic rubric · verify-as-a-criterion · candidate lessons)`,
+    `  ${C.g}improve${C.x}         Compress an eval → lesson + updated instruction (idempotent) + reusable skill on PASS (the closing loop)`,
     `  ${C.g}ledger${C.x}          Attribution: who contributed what — summary · verify · list (measured, not priced)`,
     `  ${C.g}receipt${C.x}         Signed capability receipts — the cross-machine proof rail: export · verify · summary`,
     `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
@@ -845,7 +848,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'workspace', 'task', 'capture', 'trace', 'eval', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'workspace', 'task', 'capture', 'trace', 'eval', 'improve', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -1350,7 +1353,7 @@ async function cmdContent(rest, d = {}) {
 // capability — declared minimally and gated deny-by-default through the SAME capability-gate the skill
 // runtime uses. workspace/task scaffolding is `workspace.write`; capture is `context.capture`; the
 // trace exerciser is `trace.write`. All touch only the local stratos state dir — no network, no secrets.
-const WORKSPACE_CAPS = parseCapabilities({ capabilities: { actions: ['workspace.write', 'context.capture', 'trace.write', 'eval.write'] } });
+const WORKSPACE_CAPS = parseCapabilities({ capabilities: { actions: ['workspace.write', 'context.capture', 'trace.write', 'eval.write', 'improve.write'] } });
 
 function fmtTree(node, prefix = '', isLast = true, lines = []) {
   const branch = prefix ? (isLast ? '└─ ' : '├─ ') : '';
@@ -1629,6 +1632,77 @@ function cmdEval(rest, d = {}) {
   return { code: 0, lines };
 }
 
+/**
+ * `stratos improve <ws/proj/wf/task>` — the COMPRESSION step closing the loop: read the task's trace +
+ * eval and produce a lesson + an idempotent instruction update, plus a reusable SKILL scaffold when the
+ * eval PASSED. Capability-gated deny-by-default (improve.write). Reads traces/{id}.json + evals/{id}.json
+ * from the task folder by default. DETERMINISTIC — no LLM/network (the distiller hook is OFF by default).
+ */
+function cmdImprove(rest, d = {}) {
+  const root = d.workspacesRoot;
+  if (!rest.length || rest[0] === 'help' || rest[0] === '-h' || rest[0] === '--help') {
+    return { code: rest.length ? 0 : 1, lines: [
+      `${C.B}stratos improve${C.x} ${C.d}— compress an eval into reusable improvement (trace → eval → lesson → instruction → skill)${C.x}`,
+      `  ${C.g}stratos improve <ws/proj/wf/task>${C.x}`,
+      '',
+      `  ${C.d}On a FAILED eval: writes a lesson + appends its suggested instruction to instructions.md (idempotent).${C.x}`,
+      `  ${C.d}On a PASSED eval: also scaffolds a reusable skill (skill.md + examples/ + tools.json) in the SKILL.md format.${C.x}`,
+      `  ${C.d}Deterministic + rule-based; the LLM distiller is an off-by-default hook. Does NOT generate executable code.${C.x}`,
+    ] };
+  }
+  const caps = d.workspaceCaps || WORKSPACE_CAPS;
+  try { assertStepAllowed(caps, { action: 'improve.write' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  const taskPath = rest[0];
+  const improveFn = d.improve || improveTask;
+  const read = d.readTrace || readTrace;
+  const readEv = d.readEval || readEvalRecord;
+  const wt = d.workspaceTree || workspaceTree;
+
+  let trace, evalRecord;
+  try {
+    const t = wt.resolveTask(taskPath, root ? { root } : {});
+    const taskId = t.subtask || t.task;
+    const traceFile = path.join(t.dirs.traces, `${taskId}.json`);
+    const evalFile = path.join(t.dirs.evals, `${taskId}.json`);
+    if (!fs.existsSync(traceFile)) {
+      return { code: 1, lines: [`${C.r}no trace at ${traceFile}${C.x}`, `${C.d}run ${C.x}${C.g}stratos trace ${taskPath}${C.x}${C.d} then ${C.x}${C.g}stratos eval ${taskPath}${C.x}${C.d} first.${C.x}`] };
+    }
+    if (!fs.existsSync(evalFile)) {
+      return { code: 1, lines: [`${C.r}no eval at ${evalFile}${C.x}`, `${C.d}run ${C.x}${C.g}stratos eval ${taskPath}${C.x}${C.d} first — improve compresses a scored trace.${C.x}`] };
+    }
+    trace = read(traceFile);
+    evalRecord = readEv(evalFile);
+  } catch (e) { return { code: 1, lines: [`${C.r}improve failed: ${e.message}${C.x}`] }; }
+
+  let out;
+  try {
+    out = improveFn({ taskPath, trace, evalRecord, root, now: d.improveNow });
+  } catch (e) { return { code: 1, lines: [`${C.r}improve failed: ${e.message}${C.x}`] }; }
+
+  const lines = [
+    `${out.passed ? C.g + '✓ improve (PASS)' : C.y + '✓ improve (FAIL)'}${C.x} ${C.b}${taskPath}${C.x}`,
+  ];
+  if (out.lesson) {
+    lines.push(`  ${C.d}lesson    ${C.x}${out.lesson.file} ${C.d}(${out.lesson.record.severity})${C.x}`);
+  } else {
+    lines.push(`  ${C.d}lesson    ${C.x}${C.d}none — the eval passed with no failed criteria${C.x}`);
+  }
+  if (out.instruction) {
+    lines.push(out.instruction.applied
+      ? `  ${C.g}✓ instruction applied${C.x} ${C.d}${out.instruction.instructionsFile}${C.x}`
+      : `  ${C.d}instruction already applied (idempotent — no duplicate)${C.x}`);
+  }
+  if (out.skill) {
+    lines.push(`  ${C.g}✓ reusable skill scaffolded${C.x} ${C.d}${out.skill.skillMdFile}${C.x}`);
+    lines.push(`  ${C.d}skill id  ${C.x}${out.skill.id} ${C.d}(loads via SkillStore)${C.x}`);
+  } else {
+    lines.push(`  ${C.d}skill     ${C.x}${C.d}not scaffolded — only a passing run is promoted to a skill${C.x}`);
+  }
+  return { code: 0, lines };
+}
+
 export async function run(argv = [], deps = {}) {
   const d = {
     config: deps.config || realConfig,
@@ -1706,6 +1780,12 @@ export async function run(argv = [], deps = {}) {
     readTrace: deps.readTrace,
     evalPublicKeyBundle: deps.evalPublicKeyBundle,
     evalNow: deps.evalNow,
+    // Injectable self-improvement surface (Increment 3). Tests inject the isolated root + denied caps +
+    // a deterministic clock + (optionally) a stub improve/readEval; production reads the on-disk trace +
+    // eval, uses WORKSPACE_CAPS (improve.write), and the real engine. Pass-through only.
+    improve: deps.improve,
+    readEval: deps.readEval,
+    improveNow: deps.improveNow,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -1735,6 +1815,7 @@ export async function run(argv = [], deps = {}) {
     case 'capture': return cmdCapture(rest, d);
     case 'trace': return cmdTrace(rest, d);
     case 'eval': return cmdEval(rest, d);
+    case 'improve': return cmdImprove(rest, d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

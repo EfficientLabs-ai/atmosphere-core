@@ -42,8 +42,11 @@ export function getAgentName() {
  * `forPrompt` returns a terse version for the system prompt; the default is human-facing.
  */
 export function capabilitiesSummary(forPrompt = false) {
+  // Honest "runs on …" string. The conversational Telegram agent runs on the most-capable local model
+  // (gemma4:e4b by default, configurable via TELEGRAM_MODEL); other internal paths use a faster model.
+  const chatModel = (process.env.TELEGRAM_MODEL && process.env.TELEGRAM_MODEL.trim()) || 'gemma4:e4b';
   const real = [
-    'Answer using a local open-weights model (gemma2:2b via Ollama) running on YOUR hardware — no cloud, no API keys required, your data stays on your device.',
+    `Answer using a local open-weights model (${chatModel} via Ollama) running on YOUR hardware — no cloud, no API keys required, your data stays on your device.`,
     'Recall from a local semantic memory (LanceDB vector store) over your own files and past conversations.',
     'Run verified skills that are post-quantum-signed (ML-DSA-65 + Ed25519) inside a deny-by-default WASI sandbox — no network or file access unless you explicitly grant it.',
     'Reach you over Telegram and a local OpenAI-compatible HTTP endpoint (127.0.0.1).',

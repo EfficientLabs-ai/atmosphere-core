@@ -16,6 +16,16 @@ import { getAgentName, capabilitiesSummary } from '../../stratos-agent/src/core/
 import * as chatHistory from './chat-history.js';
 import { scanForSecrets, SECRET_REFUSAL } from './secret-guard.js';
 import { handleConfigIntent } from './config-intents.js';
+import { LocalInferenceEngine } from './local-inference.js';
+import { persistentTyping, streamOllamaChat, streamToTelegram } from './telegram-streamer.js';
+import { MODEL_NUM_CTX } from './memory-manager.js';
+
+// The conversational Telegram agent runs on the MOST-CAPABLE local model (gemma4:e4b by default),
+// over the fast gemma2:2b used elsewhere — the operator wants quality for chat. Configurable via env.
+// On this CPU-only host this model is genuinely slow (minutes for long answers); the persistent typing
+// indicator + token-by-token streaming below make that wait tolerable. Routing to a GPU mesh node for
+// speed is a separate, future concern.
+const TELEGRAM_MODEL = process.env.TELEGRAM_MODEL || 'gemma4:e4b';
 
 /**
  * Telegram Bot Bridge: Interfaces user phone commands
@@ -29,6 +39,11 @@ export class TelegramBridge {
     this.bot = null;
     this.verbose = options.verbose !== false;
     this.dispatcher = new UnifiedDispatcher({ verbose: this.verbose });
+    // Local inference engine reused for its RAG retrieval + identity/memory/user-model prompt
+    // compilation, so the STREAMED Telegram path keeps the SAME augmented prompt the gateway builds.
+    this.inference = new LocalInferenceEngine({ verbose: this.verbose });
+    this.ollamaHost = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+    this.telegramModel = options.telegramModel || TELEGRAM_MODEL;
 
     // 1. Attempt dynamic retrieval from Secrets Vault if no token environment exists
     if (!this.token) {
@@ -142,7 +157,7 @@ export class TelegramBridge {
               }
               const statusReply = `📡 <b>${getAgentName()} — status</b>:
 • <b>Gateway:</b> <code>127.0.0.1:${this.port}</code> (local)
-• <b>Local model:</b> <code>gemma2:2b via Ollama</code>
+• <b>Local model (chat):</b> <code>${escapeHtml(this.telegramModel)} via Ollama</code>
 • <b>Mesh:</b> ${meshLine}
 • <b>This host:</b> <code>${cpus.length} cores, ${(loadAvg).toFixed(2)} load, ${freeMemGB}/${totalMemGB} GB free</code>
 • <b>Crypto:</b> <code>X25519+ML-KEM-768 / Ed25519+ML-DSA-65 (real)</code>`;
@@ -206,29 +221,11 @@ export class TelegramBridge {
         }
 
         try {
-          // Per-chat memory: record the user turn, send the running conversation (Tier 0 windows it).
+          // Per-chat memory: record the user turn (FTS5/user-model hooks fire inside appendUser).
           chatHistory.appendUser(chatId, text);
-          const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...gatewayAuthHeaders() },
-            body: JSON.stringify({
-              model: 'qwen-2.5-vlm-telegram-local',
-              messages: chatHistory.getMessages(chatId),
-              conversationId: chatHistory.conversationId(chatId),
-              stream: false
-            })
-          });
-
-          if (!response.ok) {
-            throw new Error(`Completions request failed with status: ${response.status}`);
-          }
-
-          const data = await response.json();
-          const aiResponseText = data.choices[0].message.content;
-
+          // Stream the reply token-by-token with a persistent "typing…" indicator the whole time.
+          const aiResponseText = await this.streamReply(chatId, text);
           chatHistory.appendAssistant(chatId, aiResponseText); // remember the reply too
-          await this.sendFormattedMessage(chatId, aiResponseText);
-
         } catch (err) {
           console.error('❌ [Telegram Bridge] Completions processing error:', err.message);
           await this.bot.sendMessage(chatId, `⚠️  <b>Local Processing Error</b>: <code>${escapeHtml(err.message)}</code>`, { parse_mode: 'HTML' }).catch(() => {
@@ -384,6 +381,85 @@ export class TelegramBridge {
         this.bot.sendMessage(chatId, `⚠️  Voice Processing Error: ${err.message}`);
       });
     }
+  }
+
+  /**
+   * The ALIVE chat path: persistent "typing…" + token-by-token typewriter streaming on gemma4:e4b.
+   *
+   * Builds the SAME augmented prompt the gateway would (RAG + identity + memory window + per-conversation
+   * user-model), then streams Ollama's /api/chat directly so progress is visible during the multi-minute
+   * CPU generation. Fail-safe in layers (a reply is NEVER lost):
+   *   • typing indicator is cleared on every exit (finish AND throw) — no leaked intervals.
+   *   • streaming/edit failures fall back to a single full sendMessage inside streamToTelegram().
+   *   • if Ollama streaming itself can't start, we fall back to the existing non-streaming gateway call
+   *     (still under the persistent typing indicator) and send one formatted message.
+   * Returns the full assistant text (for chat-history persistence).
+   */
+  async streamReply(chatId, userText) {
+    const stopTyping = persistentTyping(this.bot, chatId);
+    try {
+      // Build the augmented prompt envelope (RAG + identity + Tier-0 windowed memory + user-model).
+      const conversationId = chatHistory.conversationId(chatId);
+      const messages = chatHistory.getMessages(chatId);
+      let augmented = messages;
+      try {
+        const ragContext = await this.inference.retrieveRagContext(userText, 2, conversationId);
+        augmented = this.inference.compileAugmentedPrompt(messages, ragContext, '', conversationId);
+      } catch (compErr) {
+        if (this.verbose) console.warn('[Telegram Bridge] prompt compile degraded (raw history):', compErr.message);
+      }
+
+      // Token stream from Ollama on the configured chat model.
+      const tokenStream = streamOllamaChat({
+        fetchImpl: fetch,
+        ollamaHost: this.ollamaHost,
+        model: this.telegramModel,
+        messages: augmented,
+        options: { num_ctx: MODEL_NUM_CTX },
+      });
+
+      const result = await streamToTelegram({
+        bot: this.bot,
+        chatId,
+        tokenStream,
+        formatFinal: (s) => this.dispatcher.formatResponseHTML(s),
+        parseModeOpts: { parse_mode: 'HTML' },
+      });
+
+      // If streaming produced no text at all, fall back to the non-streaming gateway path so the
+      // user still gets an answer (e.g. Ollama up but model not pulled → empty/early stream).
+      if (!result.text || !result.text.trim()) {
+        const full = await this._gatewayFullReply(chatId, conversationId);
+        await this.sendFormattedMessage(chatId, full);
+        return full;
+      }
+      return result.text;
+    } catch (streamErr) {
+      // Ollama streaming unusable → FAIL-SAFE: non-streaming gateway reply, still under typing.
+      if (this.verbose) console.warn('[Telegram Bridge] stream path failed, falling back to full reply:', streamErr.message);
+      const full = await this._gatewayFullReply(chatId, chatHistory.conversationId(chatId));
+      await this.sendFormattedMessage(chatId, full);
+      return full;
+    } finally {
+      stopTyping(); // ALWAYS clear the typing indicator — no leaked intervals.
+    }
+  }
+
+  /** Non-streaming fallback: the original gateway /v1/chat/completions call (returns the text). */
+  async _gatewayFullReply(chatId, conversationId) {
+    const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...gatewayAuthHeaders() },
+      body: JSON.stringify({
+        model: 'qwen-2.5-vlm-telegram-local',
+        messages: chatHistory.getMessages(chatId),
+        conversationId,
+        stream: false,
+      }),
+    });
+    if (!response.ok) throw new Error(`Completions request failed with status: ${response.status}`);
+    const data = await response.json();
+    return data.choices[0].message.content;
   }
 
   /**

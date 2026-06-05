@@ -28,6 +28,12 @@ const SUITES = {
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG
     // probe that needed a live vector store was removed in the consolidation):
     'test-task-router.js', 'test-classify-live.mjs',
+    // ALIVE Telegram chat path (this session) — hermetic: the Telegram bot (sendChatAction/sendMessage/
+    // editMessageText) and the Ollama NDJSON stream are mocked, with an injected clock + sleep. Covers the
+    // persistent typing indicator (re-fires on interval, clears with no leak), throttled typewriter edits,
+    // the >4096 split into a new message, the edit-failure → full-sendMessage fail-safe (reply never lost),
+    // 429 backoff, and the streamOllamaChat NDJSON parser (incl. throw-on-non-OK for the fallback).
+    'test-telegram-streamer.mjs',
     // EXCLUDED (not hermetic): test-evolution-seam.mjs depends on ambient Ollama — it passes locally
     // only because this dev box runs Ollama, and fails in the clean CI runner (no inference service).
     // test-chat-memory.mjs likewise fails in the clean GitHub runner. Both are integration tests; make

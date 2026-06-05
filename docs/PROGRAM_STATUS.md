@@ -24,8 +24,9 @@
 - **Council top-7 (after the receipt):** wired vertical-slice + "$0 bill" demo · honesty-matrix CI guard + public RSS · GSI signed-skill registry (`stratos skill add`) · 2-node same-owner mesh proof · "sovereign control plane over any model" positioning + router OSS under BSL · ops-orchestrator cron.
 
 ## 🤖 BUSINESS-AUTOMATION PIPELINE (council order — build outward from delivery)
-- **EXISTS:** delivery — Tally → n8n → Stripe → delivery-worker → Resend (AI Sovereignty Audit, $797). ⚠️ **Verify n8n is actually running before automating on it** (`~/.n8n` reported empty / no PM2 process — replace with a StratosAgent cron if dead).
-- **Build order:** ① Finance digest (Stripe → daily Telegram) — cheapest proof of the loop → ② Lead-gen (Apollo ICP → Clay enrich → Supabase `leads`) — the binding constraint → ③ Delivery-quality (real 9-section audit via StratosAgent vision+memory, human spot-check) → ④ Sales/outreach (approve-gated) → ⑤ Onboarding (Stripe webhook → Docusign + scheduler) → ⑥ Content (weekly honesty-moat post, approve-gated) → ⑦ Support (Telegram + FTS5 + Gmail drafts) → **meta-loop:** ops-orchestrator runs all stages, logs to the ledger, escalates only exceptions. Founder = approver, not operator. Token/economic layer stays deferred (correct).
+- **Monetization: product-led, TBD.** The current model is StratosAgent + The Atmosphere as the installable sovereign product, plus a personal-brand/content growth engine. The specific monetization mechanic is not yet decided.
+- **LEGACY / UNDER REVIEW:** the Tally → n8n → Stripe → delivery-worker → Resend "delivery pipeline" was built for a now-deprioritized paid-service flow — treat it as legacy infrastructure under review, **not** a current baseline. ⚠️ **Verify n8n is actually running before relying on it** (`~/.n8n` reported empty / no PM2 process).
+- **Build order (ops automation):** ① Finance digest (Stripe → daily Telegram) — cheapest proof of the loop → ② Lead/audience pipeline (enrich → Supabase) → ③ Sales/outreach (approve-gated) → ④ Onboarding (scheduler) → ⑤ Content (weekly honesty-moat post, approve-gated) → ⑥ Support (Telegram + FTS5 + Gmail drafts) → **meta-loop:** ops-orchestrator runs all stages, logs to the ledger, escalates only exceptions. Founder = approver, not operator. Token/economic layer stays deferred (correct).
 
 ## ⛔ PENDING OPERATOR
 - Merge `feat/phone-voice` (Codex-review→merge) → `pm2 reload`.
@@ -35,10 +36,10 @@
 - Decision: open-source the router/gateway under BSL (positioning Build #6).
 
 ## ⚠️ RISKS / FLAGS (do not forget)
-- **#1 existential (council): no revenue × solo bandwidth.** Mitigation: drive ~5 paid Audits via warm Apollo/Clay outbound; wire ONE vertical slice + record the demo; freeze breadth otherwise.
+- **#1 existential (council): no revenue × solo bandwidth.** Mitigation: monetization is product-led + TBD; wire ONE vertical slice + record the demo; freeze breadth otherwise.
 - **Honesty-moat fragility** — one inflated mesh claim detonates the brand → the CI guard (queued) blocks deploy on copy/README mismatch vs a status-enum source of truth. Mesh = R&D, not a launch claim, until the 2-node proof.
 - **Secret rotations still pending:** `ghp_` token (leak 2026-05-30), MEMCOMPUTE_BEARER / N8N_API_KEY / TALLY_API_KEY (trace leak 2026-05-26), OPS_PASSWORD (burned in chat — replaced).
 - Vercel billing: **resolved** (paid; deploys work).
 
 ## 💤 PARKED (earlier work — keep visible)
-Founder `/ops` dashboard (live, gated) · pricing (Audit $797 + node-gated tiers draft) · Supabase auth/dashboard scaffolds (need env + OAuth providers) · marketing film (delivered) · content-gold backlog (~46 pieces) · ghost-node/USB esports-cafe GPU idea · Higgsfield "Sovereign Founder" media empire (Phase 24).
+Founder `/ops` dashboard (live, gated) · pricing (product-led tiers draft, TBD) · Supabase auth/dashboard scaffolds (need env + OAuth providers) · marketing film (delivered) · content-gold backlog (~46 pieces) · node/USB esports-cafe GPU idea · Higgsfield "Sovereign Founder" media empire (Phase 24).

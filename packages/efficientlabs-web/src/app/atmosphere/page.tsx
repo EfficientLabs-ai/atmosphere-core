@@ -92,25 +92,25 @@ export default function AtmosphereMesh() {
         </div>
       </section>
 
-      {/* Ghost Node Fleet vs. Enterprise Maximus Nodes */}
+      {/* Mesh Node Fleet vs. Enterprise Nodes */}
       <section className="relative z-10 max-w-7xl mx-auto px-6 py-16">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           
-          {/* Card 1: Ghost Node Fleet */}
+          {/* Card 1: Mesh Node Fleet */}
           <div className="glassmorphism-cyan rounded-3xl p-8 border-glow-cyan relative overflow-hidden group">
             <div className="absolute -right-8 -top-8 w-28 h-28 bg-cyan/5 rounded-full filter blur-xl group-hover:bg-cyan/10 transition-colors" />
             <div className="bg-cyan/10 border border-cyan/20 w-12 h-12 rounded-2xl flex items-center justify-center mb-6">
               <Cpu className="w-6 h-6 text-cyan" />
             </div>
             <h3 className="font-sans font-black text-2xl text-white uppercase tracking-wider">
-              Ghost Node Fleet
+              Mesh Node Fleet
             </h3>
             <p className="text-sterling font-sans text-sm mt-4 leading-relaxed text-zinc-400">
               Proof-of-Compute node packages designed for idle household systems, consumer GPUs, and esports gaming lounges. Install on Windows or Linux with a simple PowerShell/Shell command, exchange idle computing cycles for compute credits, and support the decentralized network mesh.
             </p>
             <div className="bg-onyx-dark/80 p-4 rounded-2xl font-mono text-[10px] sm:text-xs text-sterling overflow-x-auto mt-6">
               <span className="text-sterling-dark"># Run local installer</span> <br />
-              powershell -c "irm https://install.efficientlabs.ai/ghost | iex"
+              powershell -c "irm https://install.efficientlabs.ai/node | iex"
             </div>
           </div>
 

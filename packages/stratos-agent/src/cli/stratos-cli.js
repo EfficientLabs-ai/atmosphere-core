@@ -591,9 +591,9 @@ function cmdMesh(deps) {
       `  ${C.d}What it is: a public-DHT, hole-punched (no inbound ports), post-quantum zero-trust mesh that lets`,
       `  your agent borrow/lend spare compute. Your data stays end-to-end encrypted; nodes are PQC-verified.${C.x}`,
       '',
-      `  ${C.d}To join: run a ghost-node bundle (built per platform) — it hole-punches outward, opening no ports.${C.x}`,
+      `  ${C.d}To join: run a node bundle (built per platform) — it hole-punches outward, opening no ports.${C.x}`,
       optIn
-        ? `  ${C.g}✓ You've opted in.${C.x} ${C.d}Build/run your ghost-node bundle to bring this device online.${C.x}`
+        ? `  ${C.g}✓ You've opted in.${C.x} ${C.d}Build/run your node bundle to bring this device online.${C.x}`
         : `  ${C.d}Opt in:${C.x} ${C.g}stratos init${C.x} ${C.d}(mesh step) — or set ATMOSPHERE_P2P_OPT_IN=true.${C.x}`,
     ],
   };

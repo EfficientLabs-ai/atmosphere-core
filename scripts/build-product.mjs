@@ -2,7 +2,7 @@
  * build-product.mjs — assemble a public Efficient Labs distributable FROM the private monorepo
  * (Codex CRITICAL #4 + HIGH #5). One parameterized pipeline, a registry of PRODUCTS:
  *   - @efficientlabs/stratos     — the agent (api-shim + stratos-agent), mesh-free
- *   - @efficientlabs/atmosphere  — the mesh node (atmos-core + vendored ghost-node verifier)
+ *   - @efficientlabs/atmosphere  — the mesh node (atmos-core + vendored node-runner verifier)
  *
  * For each product: allowlist-assemble the source package(s) as SIBLINGS (so existing relative
  * cross-imports resolve unchanged), vendor any extra files the bin needs, generate one root
@@ -61,7 +61,7 @@ const PRODUCTS = {
     name: '@efficientlabs/atmosphere',
     description: 'The Atmosphere — sovereign P2P compute mesh node. Joins the public Hyperswarm DHT via NAT hole-punch (no open ports) and runs ONLY post-quantum-verified skills (ML-DSA-65 + Ed25519).',
     sources: ['atmos-core'],
-    bin: { 'atmos-ghost': 'atmos-core/ghost-node/atmos-ghost.mjs' },
+    bin: { 'atmos-node': 'atmos-core/node-runner/mesh-node.mjs' },
     exports: { '.': './atmos-core/index.js' },
     deps: {
       '@solana/web3.js': '^1.98.4', autobase: '^6.0.0', b4a: '^1.6.4', corestore: '^6.0.0',
@@ -69,20 +69,20 @@ const PRODUCTS = {
     },
     optionalDeps: {},
     banned: ['express', 'node-telegram-bot-api', '@lancedb/lancedb', 'apache-arrow', 'playwright-core', 'playwright'],
-    // The ghost-node bin verifies seals via sibling ./quantum-crypto.js + ./wasm-sections.js, which the
+    // The mesh-node bin verifies seals via sibling ./quantum-crypto.js + ./wasm-sections.js, which the
     // platform-bundle build vendors from stratos-agent. Vendor them so the npm bin resolves too.
     vendor: [
-      { from: 'packages/stratos-agent/src/core/wasm-sections.js', to: 'atmos-core/ghost-node/wasm-sections.js' },
-      { from: 'packages/stratos-agent/src/security/quantum-crypto.js', to: 'atmos-core/ghost-node/quantum-crypto.js' },
+      { from: 'packages/stratos-agent/src/core/wasm-sections.js', to: 'atmos-core/node-runner/wasm-sections.js' },
+      { from: 'packages/stratos-agent/src/security/quantum-crypto.js', to: 'atmos-core/node-runner/quantum-crypto.js' },
       // p2p-network.js + lattice-messaging.js need these shared security primitives (full closure:
       // did-generator, quantum-crypto, vault-host — all self-contained on node + @noble).
       { from: 'packages/stratos-agent/src/security/did-generator.js', to: 'stratos-agent/src/security/did-generator.js' },
       { from: 'packages/stratos-agent/src/security/quantum-crypto.js', to: 'stratos-agent/src/security/quantum-crypto.js' },
       { from: 'packages/stratos-agent/src/security/vault-host.js', to: 'stratos-agent/src/security/vault-host.js' },
     ],
-    // Exclude ghost-node BUILD/OPS tooling (references build-host paths; produces the separate
+    // Exclude any build/ops tooling (references build-host paths; produces the separate
     // per-platform zip bundles, not needed to run a node via the npm bin).
-    skipExtra: (rel) => /(^|\/)ghost-node\/(build\.sh|sign-bundles\.sh|HA\.md|SIGNING\.md|install-unix\.sh|install-windows\.ps1|atmos-ghost\.(cmd|sh)|relay(\/|$))/.test(rel) || rel.endsWith('.ps1'),
+    skipExtra: (rel) => /(^|\/)node-runner\/(build\.sh|sign-bundles\.sh|HA\.md|SIGNING\.md|install-unix\.sh|install-windows\.ps1|relay(\/|$))/.test(rel) || rel.endsWith('.ps1'),
     // PROPRIETARY MOAT — the economic/settlement engine (business-model mechanics) stays private;
     // mesh-demo.mjs is a standalone demo that references private moat modules + cross-package files.
     excludePaths: (rel) => /(^|\/)atmos-core\/src\/billing(\/|$)/.test(rel) || /(^|\/)atmos-core\/mesh-demo\.mjs$/.test(rel),

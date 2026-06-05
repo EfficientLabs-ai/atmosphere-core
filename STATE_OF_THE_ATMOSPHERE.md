@@ -6,10 +6,10 @@ This document records the exact state of the **Atmosphere Core 1.0** and **Strat
 
 ## 📡 1. USB Flash Drive Verification Audit
 
-A local file system check on the dedicated external volume **D:\ (GhostNode)** verifies successful provisioning for edge deployment:
+A local file system check on the dedicated external volume **D:\ (MeshNode)** verifies successful provisioning for edge deployment:
 
 *   **Target Drive**: `D:\`
-*   **File Present**: `install-ghost-node.ps1` (Verified at root)
+*   **File Present**: `install-node.ps1` (Verified at root)
 *   **File Size**: `5,495 bytes` (5.36 KB)
 *   **Target Platform**: Windows 10/11 fleet environments (Esports cafe headless services)
 
@@ -39,8 +39,8 @@ We have fully developed, tested, committed, pushed, and hot-reloaded the followi
     *   `/balance` (Off-chain Solana state channels rollups check)
     *   `/compile` (Signed skill custom-section WASM compiles)
 
-### ⚙️ D. Headless Windows Ghost Node Script
-*   **Script Path**: `packages/atmos-core/scripts/install-ghost-node.ps1`
+### ⚙️ D. Headless Windows Mesh Node Script
+*   **Script Path**: `packages/atmos-core/scripts/install-node.ps1`
 *   **Features**:
     *   Headless execution running silently as an un-indexed Windows service (`New-Service`).
     *   Active resource throttling polling GPU and CPU loads via WMI; issues `PAUSE_INFERENCE` if host usage exceeds 40/60% thresholds.

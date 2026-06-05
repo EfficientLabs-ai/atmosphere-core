@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Atmosphere Ghost Node — sovereign mesh peer.
+ * Atmosphere Mesh Node — sovereign mesh peer.
  *
  * Joins the global Hyperswarm DHT on a shared topic via NAT hole-punching: it opens NO
  * listening port and exposes NO inbound internet surface — the DHT coordinates the punch.
@@ -9,8 +9,8 @@
  * Unsigned, tampered, or wrong-origin skills are refused and never executed.
  *
  * Zero-config: reads config.json (topic + pinned origin key) sitting next to this file.
- *   atmos-ghost.cmd            -> join the mesh and stand by for verified skills
- *   node atmos-ghost.mjs --input 21 --once   -> run one verified skill and exit (proof mode)
+ *   node mesh-node.mjs                       -> join the mesh and stand by for verified skills
+ *   node mesh-node.mjs --input 21 --once     -> run one verified skill and exit (proof mode)
  */
 import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
@@ -83,8 +83,8 @@ function getCapabilityOnce() {
   const cpus = os.cpus() || [];
   _cap = {
     type: 'CAPABILITY',
-    version: GHOST_VERSION,
-    nodeLabel: String(cfg.nodeLabel || 'ghost').slice(0, 64),
+    version: NODE_VERSION,
+    nodeLabel: String(cfg.nodeLabel || 'node').slice(0, 64),
     platform: process.platform,
     arch: process.arch,
     cpuModel: (cpus[0]?.model?.trim() || 'unknown').slice(0, 128),
@@ -108,7 +108,7 @@ function verifySignedSkill(wasm) {
   return verifyPayload(signedRegion, signatureBundle, pinnedPub);
 }
 
-const GHOST_VERSION = '1.2.0'; // bumped when the bundle changes; origin can flag stale nodes.
+const NODE_VERSION = '1.2.0'; // bumped when the bundle changes; origin can flag stale nodes.
 
 // Proof-of-capacity: the origin sends a random nonce + iteration count; we run a sha256 hash
 // CHAIN that many times (inherently sequential — can't be shortcut) and return the digest +
@@ -123,8 +123,8 @@ function proveCapacity(nonceHex, iters) {
   return { digest: h.toString('hex'), ms: Math.round(ms * 100) / 100, hashesPerSec: Math.round(iters / (ms / 1000)) };
 }
 
-console.log('👻 Atmosphere Ghost Node starting…');
-console.log(`   node id  : ${cfg.nodeLabel || 'ghost'}  (v${GHOST_VERSION})`);
+console.log('🛰️  Atmosphere Mesh Node starting…');
+console.log(`   node id  : ${cfg.nodeLabel || 'node'}  (v${NODE_VERSION})`);
 console.log(`   topic    : ${TOPIC_NAME}`);
 console.log('   transport: public Hyperswarm DHT, NAT hole-punch, no open ports');
 
@@ -151,7 +151,7 @@ swarm.on('connection', (socket, info) => {
           console.log(`🧮 proof-of-capacity: ${proof.hashesPerSec.toLocaleString()} H/s over ${iters.toLocaleString()} rounds (${proof.ms} ms).`);
           sendFrame(socket, Buffer.from(JSON.stringify({ type: 'PROOF', nonce: msg.nonce, iters, ...proof })));
         } else if (msg.type === 'UPDATE_AVAILABLE') {
-          console.log(`⬆️  update available: origin runs v${msg.latest}, this node is v${GHOST_VERSION}. Re-run the latest bundle when convenient.`);
+          console.log(`⬆️  update available: origin runs v${msg.latest}, this node is v${NODE_VERSION}. Re-run the latest bundle when convenient.`);
         } else if (msg.type === 'JOB' && Array.isArray(msg.inputs)) {
           // Distributed compute slice: run the already-verified skill over our assigned inputs.
           if (!computeFn) { sendFrame(socket, Buffer.from(JSON.stringify({ type: 'RESULT', jobId: msg.jobId, error: 'skill not ready' }))); return; }
@@ -198,4 +198,4 @@ swarm.join(topicKey, { server: true, client: true });
 swarm.flush().then(() => console.log('🌐 announced on the DHT — searching for the origin node…'));
 
 if (ONCE) setTimeout(() => { if (!executed) { console.log('⌛ no origin peer found (is the broadcaster up on this topic?).'); stop(3); } }, 90_000);
-process.on('SIGINT', () => { console.log('\n👻 ghost node leaving the mesh.'); stop(0); });
+process.on('SIGINT', () => { console.log('\n🛰️  mesh node leaving the mesh.'); stop(0); });

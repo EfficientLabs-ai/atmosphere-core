@@ -168,8 +168,8 @@ async function runTest() {
     console.log(`   - Drop-In Parity Verification:      ${configVerified ? '✅ PASSED' : '❌ FAILED'}`);
     console.log('-------------------------------------------------------------------------------------');
 
-    // 9. Ghost Node Hardware Throttle Check Audit
-    console.log('📊 [Step 7] Simulating Ghost Node DePIN compute throttle audits...');
+    // 9. Mesh Node Hardware Throttle Check Audit
+    console.log('📊 [Step 7] Simulating Mesh Node DePIN compute throttle audits...');
     const mockCpuLoad = 15; // idle
     const mockGpuLoad = 20; // idle
     const isHostIdle = mockCpuLoad < 40 && mockGpuLoad < 40;

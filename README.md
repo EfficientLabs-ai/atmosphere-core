@@ -57,7 +57,7 @@ They are deferred deliberately (several need legal/product groundwork — see
 
 | Area | Honest status |
 | :-- | :-- |
-| **On-chain settlement / Solana token / DePIN reward harvesting** | **Not real.** The payment engine's off-chain logic is real and stress-proven, but settlement is **offline-signed only, never broadcast** — no wallet movement, no devnet/mainnet tx. The "Ghost-Node" compute-harvesting service is a no-op loop. |
+| **On-chain settlement / Solana token / DePIN reward harvesting** | **Not real.** The payment engine's off-chain logic is real and stress-proven, but settlement is **offline-signed only, never broadcast** — no wallet movement, no devnet/mainnet tx. The peer compute-harvesting service is a no-op loop. |
 | **Multimodal (Whisper STT, TTS, Active Vision)** | **Mock.** No real offline speech-to-text, text-to-speech, or vision today. |
 | **WhatsApp / Viber** | **Roadmap.** Needs a sovereign blind-relay (design in [`docs/roadmap/whatsapp-sovereign-relay.md`](./docs/roadmap/whatsapp-sovereign-relay.md)) — we won't fake sovereignty for a checkmark. |
 | **ACP / DIDs / SD-JWT Verifiable Intent / Z3 SMT** | **Spec only** (PRD-level), not implemented in running code. |

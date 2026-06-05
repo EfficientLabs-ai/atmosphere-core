@@ -15,7 +15,7 @@ Build the signed, cross-machine attribution ledger — the **capability-receipt 
 7. **Ops-orchestrator cron (founder = approver)** — runs business stages on schedule, logs to the ledger, escalates only exceptions to Telegram. *M.* The self-running business IS the demo.
 
 ## 3. EXISTENTIAL RISKS (top 5 + mitigation)
-1. **No revenue × solo bandwidth (the actual killer)** → freeze mesh/evolution feature work ~30 days; drive 5 paid Audits ($797) via warm Apollo/Clay outbound to ~50 privacy-conscious SMBs.
+1. **No revenue × solo bandwidth (the actual killer)** → freeze mesh/evolution feature work ~30 days; monetization is product-led + TBD — wire the vertical slice + demo first, then settle the mechanic.
 2. **Breadth without a wired slice** → wire ONE vertical slice E2E (Build #2) + record the demo; shelve the rest.
 3. **Honesty-moat fragility** → CI guard (Build #3) blocking deploy on any mismatch vs the status enum.
 4. **Mesh chicken-egg + CPU-only** → reframe mesh as post-launch R&D; ship the single cross-machine job as a credibility artifact, not a launch claim.

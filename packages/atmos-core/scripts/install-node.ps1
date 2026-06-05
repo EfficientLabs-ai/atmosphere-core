@@ -1,15 +1,15 @@
-# 🪐 Atmos Ghost Node Headless Super-Admin Installer
+# 🪐 Atmos Mesh Node Headless Super-Admin Installer
 # Designed for Esports Cafes and Enterprise Fleet Silent GPU/CPU Idle Harvesting
 
 param (
     [string]$MasterWallet = "6GH6mS462pJ1ys286shV8dyka29DCwNZKACETBPRj27x",
     [int]$CpuThreshold = 40,
     [int]$GpuThreshold = 40,
-    [string]$InstallDir = "C:\ProgramData\AtmosGhostNode"
+    [string]$InstallDir = "C:\ProgramData\AtmosMeshNode"
 )
 
 Write-Host "==========================================================================" -ForegroundColor Cyan
-Write-Host "🪐 ATMOS GHOST NODE SUPER-ADMIN DEPLOYMENT STARTING..." -ForegroundColor Green
+Write-Host "🪐 ATMOS MESH NODE SUPER-ADMIN DEPLOYMENT STARTING..." -ForegroundColor Green
 Write-Host "==========================================================================" -ForegroundColor Cyan
 
 # 1. Check for Admin privileges
@@ -96,7 +96,7 @@ Write-Host "💳 Master Treasury configured: $MasterWallet (100% of DePIN fees c
 # 5. Silent Windows Background Service registration
 Write-Host "⚙️  Registering Atmosphere Core Daemon as persistent Windows Service..." -ForegroundColor Yellow
 
-$serviceName = "AtmosGhostNodeService"
+$serviceName = "AtmosMeshNodeService"
 $nodePath = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
 if (-not $nodePath) {
     $nodePath = "C:\Program Files\nodejs\node.exe"
@@ -112,13 +112,13 @@ if ($serviceCheck) {
 $serviceParams = @{
     Name = $serviceName
     BinaryPathName = "`"$nodePath`" `"$InstallDir\packages\api-shim\index.js`""
-    DisplayName = "Atmosphere Headless Ghost Node Service"
+    DisplayName = "Atmosphere Headless Mesh Node Service"
     StartupType = "Automatic"
     Description = "Sovereign DePIN compute mesh and P2P offline inference background service."
 }
 
 New-Service @serviceParams | Out-Null
 
-Write-Host "🚀 Silent Headless Ghost Node Service successfully created and started." -ForegroundColor Green
+Write-Host "🚀 Silent Headless Mesh Node Service successfully created and started." -ForegroundColor Green
 Write-Host "🎉 DEPLOYMENT SUCCEEDED! Headless CPU/GPU idle harvest is now active." -ForegroundColor Green
 Write-Host "==========================================================================" -ForegroundColor Cyan

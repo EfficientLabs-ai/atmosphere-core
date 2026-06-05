@@ -44,6 +44,9 @@ const SUITES = {
     'test-model-router.mjs', 'test-mesh-signal.mjs', 'test-stratos-route.mjs', 'test-stratos-id-ledger.mjs',
     'test-capability-gate.mjs', 'test-capability-enforcement.mjs', 'test-attribution-ledger.mjs',
     'test-identity-broker.mjs', 'test-trifecta-live.mjs', 'test-icm-workspace.mjs',
+    // FTS5 cross-session memory (this session) — hermetic: in-memory SQLite, injected summarizer,
+    // no network/Ollama; tests the search path, conversation filter, injection-safety, degrade, gate.
+    'test-fts-memory.mjs',
   ],
 };
 

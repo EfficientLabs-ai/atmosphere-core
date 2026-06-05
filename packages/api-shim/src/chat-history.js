@@ -11,8 +11,23 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import * as fts from '../../stratos-agent/src/memory/fts-memory.js';
 
 const DIR = path.join(process.cwd(), '.stratos-profile', 'chat-memory');
+
+// Cross-session FTS5 recall is COMPLEMENTARY to the bounded in-memory ring above: the ring is the
+// working set the model sees each turn; the FTS5 index is the durable, full-text-searchable record
+// of EVERY turn ("what did we decide about X last week?"). Best-effort + fail-open: initialization
+// is fired once, lazily, and never blocks or breaks the chat path.
+let _ftsInit = null; // memoized init promise (resolves once, used to order indexing after open)
+function ensureFtsInit() {
+  if (!_ftsInit) {
+    // Memoize; never throws into the chat path. indexTurn() is a no-op until this resolves, and a
+    // no-op forever if FTS5 is unavailable in this SQLite build (honest degrade).
+    _ftsInit = fts.initFtsMemory().catch(() => ({ available: false }));
+  }
+  return _ftsInit;
+}
 const MAX_RING = Math.max(8, parseInt(process.env.CHAT_RING_MAX || '60', 10) || 60); // bounded working set
 const cache = new Map(); // chatId -> { seq, messages, nextSeq }
 
@@ -40,10 +55,22 @@ function persist(chatId, state) {
 /** Append a turn (append-only: seq is monotonic and never reused, even after the ring trims). */
 function append(chatId, role, content) {
   const state = load(chatId);
-  state.messages.push({ role, content: String(content ?? ''), seq: state.seq++, ts: Date.now() });
+  const text = String(content ?? '');
+  state.messages.push({ role, content: text, seq: state.seq++, ts: Date.now() });
   // Bound the ring. (Tier 1 Part 2 will evict the trimmed overflow to LanceDB BEFORE dropping it.)
   if (state.messages.length > MAX_RING) state.messages = state.messages.slice(-MAX_RING);
   persist(chatId, state);
+  // Accrue durable cross-session full-text memory. Fail-open + non-blocking: we index AFTER init
+  // resolves (so the very first turns aren't dropped before the table exists), but we do NOT await
+  // here — the chat path returns immediately. indexTurn() catches internally; the .catch covers any
+  // init/import edge case. A memory hiccup can never break or slow serving.
+  try {
+    const cid = conversationId(chatId);
+    const ts = Date.now();
+    ensureFtsInit()
+      .then(() => fts.indexTurn({ conversationId: cid, role, content: text, ts }))
+      .catch(() => { /* best-effort: memory accrual never blocks serving */ });
+  } catch { /* best-effort */ }
   return state;
 }
 

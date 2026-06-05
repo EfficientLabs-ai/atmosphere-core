@@ -24,6 +24,8 @@ import { AttributionLedger } from '../ledger/attribution-ledger.js';
 import { originId } from '../memory/skill-seal.js';
 import { route as routeDecision, difficulty, autoEscalateEnabled } from '../routing/model-router.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
+import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
+import * as fts from '../memory/fts-memory.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -80,6 +82,7 @@ function helpText() {
     `  ${C.g}ledger${C.x}          Attribution: who contributed what — summary · verify · list (measured, not priced)`,
     `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
     `  ${C.g}route${C.x} <prompt>   Preview the sovereign router: local by default, cloud only on opt-in`,
+    `  ${C.g}memory${C.x}          Full-text recall over past conversations (local FTS5): search · recall`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
@@ -484,7 +487,69 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'memory', 'service', 'version', 'help'];
+
+// Reading local cross-session memory is itself a capability — declared minimally and gated
+// deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
+// only action this surface needs; it touches no network, no extra fs, no secrets.
+const MEMORY_CAPS = parseCapabilities({ capabilities: { actions: ['memory.read'] } });
+
+/**
+ * `stratos memory search|recall "<query>"` — sovereign full-text recall over past conversations.
+ * Capability-gated (deny-by-default): refuses unless the `memory.read` action is permitted. Honest:
+ * if FTS5 isn't available in the SQLite build it says so plainly instead of inventing results.
+ */
+async function cmdMemory(rest, d = {}) {
+  const sub = rest[0];
+  const query = rest.slice(1).join(' ').trim();
+  if (sub !== 'search' && sub !== 'recall') {
+    return { code: query || sub ? 1 : 0, lines: [
+      `${C.B}stratos memory${C.x} — full-text recall over past conversations (local, sovereign)`,
+      `  ${C.g}stratos memory search "<query>"${C.x}   ranked keyword hits (FTS5 bm25 + snippets)`,
+      `  ${C.g}stratos memory recall "<query>"${C.x}   search + local-model summary ("what did we decide about X?")`,
+      `  ${C.d}Keyword/exact recall — complementary to the semantic vector store. 100% local.${C.x}`,
+    ] };
+  }
+  if (!query) return { code: 1, lines: [`${C.r}Usage: stratos memory ${sub} "<query>"${C.x}`] };
+
+  // Capability gate: deny-by-default. A test/caller can inject denied caps to prove enforcement.
+  const caps = d.memoryCaps || MEMORY_CAPS;
+  try { assertStepAllowed(caps, { action: 'memory.read' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  // Injectable memory backend (tests pass a stub; production uses the real FTS5 module).
+  const mem = d.memory || fts;
+  await mem.initFtsMemory?.();
+  if (mem.available && !mem.available()) {
+    return { code: 0, lines: [
+      `${C.y}Full-text memory unavailable:${C.x} ${mem.unavailableReason?.() || 'FTS5 not compiled in this SQLite build'}`,
+      `${C.d}(Honest degrade — no results fabricated. Vector recall is unaffected.)${C.x}`,
+    ] };
+  }
+
+  if (sub === 'search') {
+    const hits = mem.search(query, { limit: 8 });
+    if (!hits.length) return { code: 0, lines: [`${C.d}No matches for "${query}".${C.x}`] };
+    const lines = [`${C.B}${hits.length} match(es) for "${query}":${C.x}`];
+    for (const h of hits) {
+      const when = h.ts ? new Date(h.ts).toISOString().slice(0, 16).replace('T', ' ') : '?';
+      lines.push(`  ${C.b}${h.role}${C.x} ${C.d}${when} · ${h.conversationId}${C.x}`);
+      lines.push(`    ${h.snippet || h.content}`);
+    }
+    return { code: 0, lines };
+  }
+
+  // recall: search + summarize via the local gateway (sovereign — never cloud).
+  const summarize = d.summarize || mem.localGatewaySummarizer?.({ port: d.port });
+  const out = await mem.recall(query, { limit: 6, summarize });
+  if (!out.hits.length) return { code: 0, lines: [`${C.d}No matches for "${query}".${C.x}`] };
+  const lines = [];
+  if (out.answer) lines.push(`${C.B}Recall:${C.x} ${out.answer}`, '');
+  else lines.push(`${C.y}(No summary — showing raw hits)${C.x}`);
+  lines.push(`${C.d}Based on ${out.hits.length} excerpt(s):${C.x}`);
+  for (const h of out.hits) lines.push(`  ${C.b}${h.role}${C.x} ${h.snippet || h.content}`);
+  return { code: 0, lines };
+}
 
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
@@ -507,6 +572,11 @@ export async function run(argv = [], deps = {}) {
     port: deps.port || process.env.PORT || 4099,
     ollamaHost: deps.ollamaHost || process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
     version: deps.version || '0.0.0',
+    // Injectable memory surface (tests pass stubs; production falls back to the real FTS5 module +
+    // declared MEMORY_CAPS inside cmdMemory). Pass-through only — undefined in normal use.
+    memory: deps.memory,
+    memoryCaps: deps.memoryCaps,
+    summarize: deps.summarize,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -522,6 +592,7 @@ export async function run(argv = [], deps = {}) {
     case 'ledger': return cmdLedger(rest);
     case 'id': return cmdId(rest);
     case 'route': return cmdRoute(rest);
+    case 'memory': return cmdMemory(rest, d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

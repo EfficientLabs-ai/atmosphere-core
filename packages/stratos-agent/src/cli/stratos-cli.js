@@ -27,6 +27,8 @@ import { meshAvailable } from '../routing/mesh-signal.js';
 import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
 import * as fts from '../memory/fts-memory.js';
 import * as voiceEngine from '../sensory/voice-engine.js';
+import { parseSkillMd, importSkillMd, exportSkillMd } from '../skills/skill-md.js';
+import { SkillStore } from '../skills/skill-store.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -85,6 +87,7 @@ function helpText() {
     `  ${C.g}route${C.x} <prompt>   Preview the sovereign router: local by default, cloud only on opt-in`,
     `  ${C.g}memory${C.x}          Full-text recall over past conversations (local FTS5): search · recall`,
     `  ${C.g}voice${C.x}           Native local talk/hear/see (Piper TTS · gemma audio/vision): say · hear · see · status`,
+    `  ${C.g}skill${C.x}           SKILL.md portability (agentskills.io-compatible): import · export · list`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
@@ -489,7 +492,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'memory', 'voice', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'memory', 'voice', 'skill', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -630,6 +633,100 @@ async function cmdVoice(rest, d = {}) {
   return { code: 0, lines: [`${C.b}👁️${C.x} ${res.text}`] };
 }
 
+// `stratos skill import|export|list` — SKILL.md portability (agentskills.io / clawhub compatible).
+// IMPORT is untrusted-by-default + deny-by-default capability-gated; EXPORT emits provenance. Network-effect
+// MOAT: interoperate with the open skill ecosystem WITHOUT shedding the sovereign PQC seal.
+//
+// Capability-gated through the SAME gate the skill runtime uses: importing a foreign skill is the
+// `skill.import` action; reading/exporting ours is `skill.read`. Deny-by-default.
+const SKILL_CAPS = parseCapabilities({ capabilities: { actions: ['skill.import', 'skill.read'] } });
+
+function skillsDir() {
+  if (process.env.STRATOS_SKILLS_DIR) return path.resolve(process.env.STRATOS_SKILLS_DIR);
+  const cands = [
+    path.join(_ROOT, 'packages', 'stratos-agent', 'dist', 'skills'),
+    path.join(_ROOT, 'dist', 'skills'),
+  ];
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+
+async function cmdSkill(rest, d = {}) {
+  const sub = (rest[0] || 'help').toLowerCase();
+  const caps = d.skillCaps || SKILL_CAPS;
+  const store = d.skillStore || new SkillStore(skillsDir());
+
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: rest[0] ? 0 : 0, lines: [
+      `${C.B}stratos skill${C.x} ${C.d}— SKILL.md portability (agentskills.io / clawhub compatible)${C.x}`,
+      `  ${C.g}import${C.x} <file.md>   Ingest a foreign SKILL.md ${C.d}(UNTRUSTED by default · deny-by-default caps)${C.x}`,
+      `  ${C.g}export${C.x} <id>        Emit one of your skills as portable SKILL.md ${C.d}(+ did:atmos provenance)${C.x}`,
+      `  ${C.g}list${C.x}              List imported skills + their honest trust label`,
+      '',
+      `  ${C.d}Imported skills are prose/instruction by default: stored + capability-gated, never auto-run.`,
+      `  Net/fs/secrets/compute are NEVER granted to a foreign .md — that requires local re-sealing.${C.x}`,
+    ] };
+  }
+
+  if (sub === 'list') {
+    try { assertStepAllowed(caps, { action: 'skill.read' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    let items;
+    try { items = store.list(); } catch (e) { return { code: 1, lines: [`${C.r}store error: ${e.message}${C.x}`] }; }
+    if (!items.length) {
+      return { code: 0, lines: [
+        `${C.B}Imported skills${C.x} ${C.d}— none yet${C.x}`,
+        `${C.d}Import one with: ${C.x}${C.g}stratos skill import <file.md>${C.x}`,
+      ] };
+    }
+    const lines = [`${C.B}Imported skills${C.x} ${C.d}(${items.length})${C.x}`];
+    for (const it of items) {
+      const trust = it.sealed ? `${C.g}sealed-locally${C.x}` : `${C.y}untrusted${C.x}`;
+      lines.push(`  ${C.b}${it.id}${C.x}  ${trust} ${C.d}· ${it.kind}${C.x}`);
+      if (it.description) lines.push(`    ${C.d}${String(it.description).slice(0, 80)}${C.x}`);
+    }
+    return { code: 0, lines };
+  }
+
+  if (sub === 'import') {
+    try { assertStepAllowed(caps, { action: 'skill.import' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const file = rest[1];
+    if (!file) return { code: 1, lines: [`${C.r}usage: stratos skill import <file.md>${C.x}`] };
+    let text;
+    try { text = fs.readFileSync(path.resolve(file), 'utf8'); }
+    catch (e) { return { code: 1, lines: [`${C.r}cannot read ${file}: ${e.message}${C.x}`] }; }
+    let rec;
+    try { rec = await importSkillMd(text, { store, source: d.skillSource || `file:${path.basename(file)}` }); }
+    catch (e) { return { code: 1, lines: [`${C.r}import rejected: ${e.message}${C.x}`] }; }
+    const lines = [
+      `${C.g}✓ imported${C.x} ${C.b}${rec.name}${C.x}  ${C.d}→ ${rec.id}${C.x}`,
+      `  ${C.d}trust    ${C.x}${rec.sealed ? C.g + 'sealed-locally' + C.x : C.y + 'UNTRUSTED' + C.x} ${C.d}(${rec.kind})${C.x}`,
+      `  ${C.d}granted  ${C.x}${rec.grantedCapabilities.length ? rec.grantedCapabilities.join(', ') : C.d + 'none — inert instruction skill' + C.x}`,
+    ];
+    if (rec.refusedCapabilities.length) {
+      lines.push(`  ${C.y}refused  ${C.x}${rec.refusedCapabilities.join(', ')} ${C.d}(deny-by-default: a foreign .md can't grant these)${C.x}`);
+    }
+    if (rec.provenance?.claimedAuthor) {
+      lines.push(`  ${C.d}author   ${C.x}${rec.provenance.claimedAuthor} ${C.y}(claimed, unverified)${C.x}`);
+    }
+    return { code: 0, lines };
+  }
+
+  if (sub === 'export') {
+    try { assertStepAllowed(caps, { action: 'skill.read' }); }
+    catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+    const id = rest[1];
+    if (!id) return { code: 1, lines: [`${C.r}usage: stratos skill export <id>${C.x}`] };
+    let md;
+    try { md = exportSkillMd(id, { store, originDid: d.originDid }); }
+    catch (e) { return { code: 1, lines: [`${C.r}export failed: ${e.message}${C.x}`] }; }
+    // Emit the raw SKILL.md to stdout so it can be piped/redirected to a file — portable by design.
+    return { code: 0, lines: md.split('\n') };
+  }
+
+  return { code: 1, lines: [`${C.r}Unknown skill subcommand: ${sub}${C.x}`, `${C.d}Try: import · export · list${C.x}`] };
+}
+
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
   return {
@@ -661,6 +758,12 @@ export async function run(argv = [], deps = {}) {
     voiceCaps: deps.voiceCaps,
     ollamaHost: deps.ollamaHost,
     sayOutPath: deps.sayOutPath,
+    // Injectable SKILL.md portability surface (tests pass a stub store + caps; production uses the
+    // file-backed SkillStore + declared SKILL_CAPS inside cmdSkill).
+    skillStore: deps.skillStore,
+    skillCaps: deps.skillCaps,
+    skillSource: deps.skillSource,
+    originDid: deps.originDid,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -678,6 +781,7 @@ export async function run(argv = [], deps = {}) {
     case 'route': return cmdRoute(rest);
     case 'memory': return cmdMemory(rest, d);
     case 'voice': return cmdVoice(rest, d);
+    case 'skill': return cmdSkill(rest, d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

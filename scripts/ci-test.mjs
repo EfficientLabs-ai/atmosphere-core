@@ -51,6 +51,10 @@ const SUITES = {
     // injected, so it tests the talk/hear/see honesty contract + `stratos voice` gate with no
     // binaries, no network, no live Ollama.
     'test-voice-engine.mjs',
+    // SKILL.md / agentskills.io portability (this session) — hermetic: pure parse/emit + deny-by-default
+    // import logic + CLI gating, no network, no crypto/live services. Covers round-trip, frontmatter edge
+    // cases, conservative least-privilege import, export provenance, injection/oversized guards.
+    'test-skill-md.mjs',
   ],
 };
 

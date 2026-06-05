@@ -19,6 +19,11 @@ import * as realConfig from '../core/agent-config.js';
 import * as realConnectors from '../connectors/connector-registry.js';
 import { languageName } from '../core/languages.js';
 import { realProbes } from './probes.js';
+import { scaffoldWorkspace, validateWorkspace, ICM_LAYERS } from '../context/icm-workspace.js';
+import { AttributionLedger } from '../ledger/attribution-ledger.js';
+import { originId } from '../memory/skill-seal.js';
+import { route as routeDecision, difficulty, autoEscalateEnabled } from '../routing/model-router.js';
+import { meshAvailable } from '../routing/mesh-signal.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -71,11 +76,241 @@ function helpText() {
     `  ${C.g}connect${C.x}         Onboard a connector/MCP server (credential → vault, sidecar pinned)`,
     `  ${C.g}connectors${C.x}      List onboarded connectors (metadata only; secrets stay in the vault)`,
     `  ${C.g}mesh${C.x}            The Atmosphere mesh — status + how to join (optional)`,
+    `  ${C.g}icm${C.x}             Context workspace contract (folders over agents): init · validate`,
+    `  ${C.g}ledger${C.x}          Attribution: who contributed what — summary · verify · list (measured, not priced)`,
+    `  ${C.g}id${C.x}              This node's self-sovereign identity (did:atmos): whoami · inspect`,
+    `  ${C.g}route${C.x} <prompt>   Preview the sovereign router: local by default, cloud only on opt-in`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
     `${C.d}Mesh (The Atmosphere) is an optional add-on — never required to use your agent.${C.x}`,
   ];
+}
+
+function cmdIcm(rest) {
+  const sub = (rest[0] || 'help').toLowerCase();
+  const dir = path.resolve(rest[1] || process.cwd());
+  if (sub === 'init') {
+    let r;
+    try { r = scaffoldWorkspace(dir); } catch (e) { return { code: 1, lines: [`${C.r}icm init failed: ${e.message}${C.x}`] }; }
+    const lines = [
+      `${C.B}ICM workspace${C.x} ${C.d}${dir}${C.x}  ${C.d}— folders over agents${C.x}`,
+      ...ICM_LAYERS.map((l) => `  ${C.b}${l.layer}${C.x} ${l.dir.padEnd(11)} ${C.d}${l.purpose}${l.live ? '' : C.y + ' (new)' + C.x}${C.x}`),
+      '',
+      r.created.length ? `${C.g}✓ created${C.x} ${r.created.join(', ')}` : `${C.d}nothing to create${C.x}`,
+      r.existed.length ? `${C.d}• kept   ${r.existed.join(', ')}${C.x}` : '',
+      '',
+      `${C.d}The folders are the contract — edit files, not the agent.${C.x}`,
+    ].filter(Boolean);
+    return { code: 0, lines };
+  }
+  if (sub === 'validate' || sub === 'check') {
+    const v = validateWorkspace(dir);
+    if (v.ok) return { code: 0, lines: [`${C.g}✓ valid ICM workspace${C.x} ${C.d}${dir}${C.x}`] };
+    return { code: 1, lines: [`${C.r}✗ incomplete ICM workspace${C.x} ${C.d}${dir}${C.x}`, ...v.missing.map((m) => `  ${C.y}missing${C.x} ${m}`), '', `${C.d}scaffold it with ${C.x}${C.g}stratos icm init${C.x}`] };
+  }
+  return { code: 0, lines: [
+    `${C.B}stratos icm${C.x} ${C.d}— the folders-over-agents context contract${C.x}`,
+    `  ${C.g}init${C.x} [dir]      Scaffold a 5-layer ICM workspace (idempotent; never overwrites)`,
+    `  ${C.g}validate${C.x} [dir]  Check a workspace is complete`,
+  ] };
+}
+
+// ---- ledger + id: observe the trust substrate (attribution + sovereign identity) -----------
+// Both default their paths the SAME way the daemon's self-evolution runtime does, so the CLI reads
+// the live node's identity + ledger when run from the repo root (env vars override).
+const _ROOT = path.resolve(process.cwd());
+const shortHash = (h) => (h ? String(h).slice(0, 12) : '—');
+const didShort = (d) => { const s = String(d || '—'); return s.length > 30 ? s.slice(0, 22) + '…' + s.slice(-6) : s; };
+
+function ledgerPath(arg) {
+  if (arg && !/^\d+$/.test(arg)) return path.resolve(arg);
+  if (process.env.STRATOS_LEDGER) return process.env.STRATOS_LEDGER;
+  const cands = [
+    process.env.STRATOS_SKILLS_DIR && path.join(process.env.STRATOS_SKILLS_DIR, 'attribution.jsonl'),
+    path.join(_ROOT, 'packages', 'stratos-agent', 'dist', 'skills', 'attribution.jsonl'),
+    path.join(_ROOT, 'dist', 'skills', 'attribution.jsonl'),
+    path.join(_ROOT, 'attribution.jsonl'),
+  ].filter(Boolean);
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+function nodeKeysPath(arg) {
+  if (arg) return path.resolve(arg);
+  if (process.env.STRATOS_NODE_KEYS) return process.env.STRATOS_NODE_KEYS;
+  const cands = [path.join(_ROOT, '.stratos-profile', 'node-keys.json'), path.join(_ROOT, 'node-keys.json')];
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+
+function cmdLedger(rest) {
+  const sub = (rest[0] || 'summary').toLowerCase();
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos ledger${C.x} ${C.d}— attribution: who contributed what (measured, never priced)${C.x}`,
+      `  ${C.g}summary${C.x} [path]   Measured units per contributor, broken out by kind (default)`,
+      `  ${C.g}verify${C.x}  [path]   Replay the tamper-evident hash chain end-to-end`,
+      `  ${C.g}list${C.x} [n] [path]  Show the last n entries (default 10)`,
+    ] };
+  }
+  const p = ledgerPath(rest.find((a, i) => i > 0 && !/^\d+$/.test(a)));
+  if (!fs.existsSync(p)) {
+    return { code: 0, lines: [
+      `${C.B}stratos ledger${C.x} ${C.d}— attribution (measured, never priced)${C.x}`,
+      `${C.y}no ledger yet${C.x} ${C.d}at ${p}${C.x}`,
+      `${C.d}The daemon records here once a verified skill runs — capability-gated + attributed to this node.${C.x}`,
+    ] };
+  }
+  let ledger;
+  try { ledger = new AttributionLedger({ path: p }); }
+  catch (e) { return { code: 1, lines: [`${C.r}could not read ledger: ${e.message}${C.x}`] }; }
+
+  if (sub === 'verify') {
+    const v = ledger.verify();
+    if (v.ok) return { code: 0, lines: [
+      `${C.g}✓ ledger intact${C.x} ${C.d}${ledger.length} entries · head ${shortHash(v.head)}${C.x}`,
+      `${C.d}tamper-evident hash chain verified end-to-end.${C.x}`,
+    ] };
+    return { code: 1, lines: [
+      `${C.r}✗ ledger BROKEN at entry ${v.brokenAt}: ${v.reason}${C.x}`,
+      `${C.d}an entry was edited or reordered — the chain no longer validates.${C.x}`,
+    ] };
+  }
+  if (sub === 'list' || sub === 'tail') {
+    const n = Math.max(1, parseInt(rest.find((a) => /^\d+$/.test(a)), 10) || 10);
+    const entries = ledger.entries().slice(-n);
+    if (!entries.length) return { code: 0, lines: [`${C.d}ledger is empty${C.x}`] };
+    const lines = [`${C.B}last ${entries.length} of ${ledger.length}${C.x} ${C.d}${p}${C.x}`];
+    for (const e of entries) {
+      lines.push(`  ${C.d}#${String(e.seq).padStart(3)}${C.x} ${C.b}${String(e.kind).padEnd(15)}${C.x} ${C.g}${String(e.units).padStart(4)}u${C.x} ${e.subject || `${C.d}—${C.x}`} ${C.d}${didShort(e.contributor)}${C.x}`);
+    }
+    return { code: 0, lines };
+  }
+  // default: summary
+  const sum = ledger.summarize();
+  const v = ledger.verify();
+  if (!sum.length) return { code: 0, lines: [`${C.d}ledger is empty (${ledger.length} entries)${C.x}`] };
+  const lines = [
+    `${C.B}Attribution summary${C.x} ${C.d}— measured units per contributor (NOT a payout)${C.x}`,
+    v.ok ? `${C.g}✓ chain intact${C.x} ${C.d}${ledger.length} entries${C.x}` : `${C.r}✗ chain broken at ${v.brokenAt}${C.x}`,
+    '',
+  ];
+  for (const c of sum) {
+    const kinds = Object.entries(c.byKind).map(([k, units]) => `${k}:${units}`).join(' ');
+    lines.push(`  ${C.b}${didShort(c.contributor)}${C.x}  ${C.g}${String(c.total).padStart(5)}u${C.x}  ${C.d}${kinds}${C.x}`);
+  }
+  lines.push('', `${C.d}Measurement before rewards: the attribution a future reward layer would read.${C.x}`);
+  return { code: 0, lines };
+}
+
+function cmdId(rest) {
+  const sub = (rest[0] || 'whoami').toLowerCase();
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos id${C.x} ${C.d}— this node's self-sovereign identity (did:atmos)${C.x}`,
+      `  ${C.g}whoami${C.x} [keyfile]   Show this node's did:atmos (default)`,
+      `  ${C.g}inspect${C.x} <token>    Decode a brokered id-jag assertion (claims + expiry)`,
+    ] };
+  }
+  if (sub === 'inspect' || sub === 'decode') {
+    const token = rest[1];
+    if (!token) return { code: 1, lines: [`${C.r}usage: stratos id inspect <token>${C.x}`] };
+    try {
+      const [h, pl] = String(token).split('.');
+      const dec = (s) => JSON.parse(Buffer.from(s, 'base64url').toString('utf8'));
+      const header = dec(h), payload = dec(pl);
+      const nowS = Math.floor(Date.now() / 1000);
+      const expired = payload.exp != null && nowS >= payload.exp;
+      const left = payload.exp != null ? payload.exp - nowS : null;
+      return { code: 0, lines: [
+        `${C.B}Brokered assertion${C.x} ${C.d}(id-jag) — decoded, ${C.y}NOT signature-verified${C.d} (the CLI holds no broker secret)${C.x}`,
+        `  ${C.d}alg     ${C.x}${header.alg || '?'} ${C.d}${header.typ || ''}${C.x}`,
+        `  ${C.d}subject ${C.x}${C.b}${didShort(payload.sub)}${C.x}`,
+        `  ${C.d}audience${C.x} ${payload.aud || '—'}`,
+        `  ${C.d}scope   ${C.x}${(payload.scope || []).join(', ') || '—'}`,
+        expired ? `  ${C.r}EXPIRED${C.x}` : `  ${C.g}valid for ${left}s${C.x} ${C.d}(short-lived by design)${C.x}`,
+      ] };
+    } catch (e) { return { code: 1, lines: [`${C.r}not a brokered token: ${e.message}${C.x}`] }; }
+  }
+  // default: whoami
+  const kf = nodeKeysPath(rest[1]);
+  if (!fs.existsSync(kf)) {
+    return { code: 0, lines: [
+      `${C.B}stratos id${C.x} ${C.d}— this node's sovereign identity${C.x}`,
+      `${C.y}no node identity yet${C.x} ${C.d}(${kf})${C.x}`,
+      `${C.d}The daemon mints a PQC node key (Ed25519 + ML-DSA) on first run; its did:atmos derives from the public half.${C.x}`,
+    ] };
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(kf, 'utf8'));
+    const dec = (o) => Object.fromEntries(Object.entries(o).map(([k, val]) => [k, Buffer.from(val, 'base64')]));
+    const did = originId(dec(raw.publicKey));
+    return { code: 0, lines: [
+      `${C.B}This node${C.x}`,
+      `  ${C.b}${C.B}${did}${C.x}`,
+      `  ${C.d}self-sovereign · content-addressed · hybrid PQC (Ed25519 + ML-DSA-65)${C.x}`,
+      '',
+      `${C.d}This id signs your skills and names you in the attribution ledger. The private half never leaves ${kf}.${C.x}`,
+    ] };
+  } catch (e) { return { code: 1, lines: [`${C.r}could not read node identity: ${e.message}${C.x}`] }; }
+}
+
+// `stratos route <prompt>` — preview the sovereign router's decision (the third observability
+// surface: id · ledger · route). Mirrors the live classify() path: /force-* + /private directives,
+// and a configured BYOK key is the standing opt-in to escalate hard prompts to cloud.
+const _FRONTIER_KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'GROQ_API_KEY'];
+const _envHasKey = () => _FRONTIER_KEYS.some((k) => !!process.env[k]);
+
+function cmdRoute(rest) {
+  const flags = new Set(rest.filter((a) => a.startsWith('--')));
+  const mi = rest.indexOf('--model');
+  const model = mi >= 0 ? rest[mi + 1] || null : null;
+  const prompt = rest.filter((a, i) => !a.startsWith('--') && !(mi >= 0 && i === mi + 1)).join(' ').trim();
+
+  if (!prompt && !model) {
+    return { code: 1, lines: [
+      `${C.r}usage: stratos route <prompt> [--private] [--model <m>] [--mesh] [--key] [--auto-escalate]${C.x}`,
+      `${C.d}Preview the sovereign router's decision. --key simulates a configured BYOK key; --mesh${C.x}`,
+      `${C.d}simulates a live fleet; --auto-escalate simulates STRATOS_CLOUD_AUTO_ESCALATE=true.${C.x}`,
+      `${C.d}/force-local · /force-cloud · /private work inline.${C.x}`,
+    ] };
+  }
+
+  const q = prompt.toLowerCase();
+  const priv = flags.has('--private') || q.includes('/private');
+  const keyed = flags.has('--key') || _envHasKey();
+  const autoEsc = flags.has('--auto-escalate') || autoEscalateEnabled();  // deploy-time opt-in
+  const escalate = keyed && autoEsc;                // both needed for difficulty-based escalation
+  const meshReal = meshAvailable();                 // the real, file-backed fleet signal
+  const mesh = flags.has('--mesh') || meshReal;     // --mesh forces a preview even with no fleet
+
+  let d;
+  if (q.includes('/force-local') || q.includes('/local')) {
+    d = { tier: 'local-strong', cloud: false, difficulty: difficulty(prompt), reason: 'explicit /force-local directive' };
+  } else if (q.includes('/force-cloud') || q.includes('/cloud')) {
+    d = { tier: 'frontier', cloud: true, difficulty: difficulty(prompt), reason: 'explicit /force-cloud directive (opt-in)' };
+  } else {
+    d = routeDecision({ prompt, model, private: priv, escalate }, { hasFrontierKey: keyed, meshAvailable: mesh });
+  }
+
+  const tierLabel = d.cloud
+    ? `${C.y}☁  CLOUD${C.x} ${C.d}(frontier, opt-in)${C.x}`
+    : d.tier === 'mesh'
+      ? `${C.b}⬡  MESH${C.x} ${C.d}(your hardware)${C.x}`
+      : `${C.g}🛡  LOCAL${C.x} ${C.d}(${d.tier})${C.x}`;
+  const shown = prompt.length > 60 ? prompt.slice(0, 57) + '…' : prompt;
+  const lines = [
+    `${C.B}stratos route${C.x} ${C.d}— what the one sovereign router would do (preview)${C.x}`,
+    `  ${C.d}prompt    ${C.x}"${shown}" ${C.d}(${prompt.length} chars)${C.x}`,
+    model ? `  ${C.d}model     ${C.x}${model}` : '',
+    `  ${C.d}difficulty${C.x} ${d.difficulty}/5`,
+    `  ${C.d}decision  ${C.x}${tierLabel}`,
+    `  ${C.d}reason    ${C.x}${d.reason}`,
+    `  ${C.d}context   ${C.x}key:${keyed ? `${C.g}set${C.x}` : `${C.d}none${C.x}`}  auto-escalate:${autoEsc ? `${C.y}on${C.x}` : `${C.g}off${C.x}`}  mesh:${mesh ? (meshReal ? `${C.b}live${C.x}` : `${C.y}simulated${C.x}`) : 'off'}  private:${priv ? `${C.b}on${C.x}` : 'off'}`,
+    '',
+    d.cloud
+      ? `${C.d}Cloud only because a key is configured (standing opt-in). ${C.x}/force-local${C.d} or ${C.x}--private${C.d} pins it local.${C.x}`
+      : `${C.d}Stays on your hardware — the sovereign default. Cloud needs a configured key AND a hard prompt, never silently.${C.x}`,
+  ].filter(Boolean);
+  return { code: 0, lines };
 }
 
 function cmdConnectors(deps) {
@@ -249,7 +484,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'ledger', 'id', 'route', 'service', 'version', 'help'];
 
 function cmdService(rest) {
   if ((rest[0] || 'status') === 'install') return { code: 0, lines: [], action: 'service-install' };
@@ -283,6 +518,10 @@ export async function run(argv = [], deps = {}) {
     case 'bind': return cmdBind(rest, d);
     case 'connectors': return cmdConnectors(d);
     case 'mesh': return cmdMesh(d);
+    case 'icm': return cmdIcm(rest);
+    case 'ledger': return cmdLedger(rest);
+    case 'id': return cmdId(rest);
+    case 'route': return cmdRoute(rest);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

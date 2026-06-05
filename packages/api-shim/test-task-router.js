@@ -1,92 +1,91 @@
 import assert from 'node:assert';
 import { TaskClassifierRouter } from './src/task-router.js';
 
+/**
+ * Task-router spec — SOVEREIGN routing (updated 2026-06-05 when classify() was consolidated onto the
+ * one sovereign model router). The philosophy changed deliberately and with approval:
+ *
+ *   OLD: complexity auto-escalated to cloud (and did so even with NO API key configured — a call that
+ *        would then fail), and a general prompt "defaulted to cloud for maximum intelligence".
+ *   NEW: LOCAL is the default. Cloud is OPT-IN only — via a `/force-cloud` directive, or a configured
+ *        BYOK key (the standing opt-in) on a genuinely hard prompt. With no key, everything stays
+ *        local (which is also the only honest option — without a key a cloud call can't succeed).
+ *
+ * A *named* model from an OpenAI-compatible client (e.g. "gpt-4o") is NOT a force-cloud — clients
+ * send a model on every call. Only an explicit LOCAL model name pins local.
+ */
 async function runTaskRouterTests() {
   console.log('========================================================================');
-  console.log('🌌 EFFICIENT LABS - THE ATMOSPHERE TASK CLASSIFIER & ROUTER');
-  console.log('🧪 RUNNING SYSTEMATIC ROUTING AND COMPLEXITY DECISION HARNESS');
+  console.log('🌌 EFFICIENT LABS — THE ATMOSPHERE TASK CLASSIFIER & ROUTER (sovereign)');
   console.log('========================================================================\n');
 
   const router = new TaskClassifierRouter({ verbose: true });
+  const ask = (content, model) => router.classify([{ role: 'user', content }], model);
+  const KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'GROQ_API_KEY'];
+  const clearKeys = () => KEYS.forEach((k) => delete process.env[k]);
+  clearKeys();
 
-  // --- TEST CASE 1: SIMPLE GREETINGS & SYNTAX QUESTIONS (EXPECT: LOCAL) ---
-  console.log('🔄 [Test 1] Simulating simple greetings and syntax references...');
-  
-  const greetRes = await router.classify([
-    { role: 'user', content: 'Hello! Good morning.' }
-  ], 'gpt-4o');
-  console.log(`   Prompt: "Hello! Good morning." -> Decision: [${greetRes.decision.toUpperCase()}] | Reason: "${greetRes.reason}"`);
-  assert.strictEqual(greetRes.decision, 'local');
+  // --- TEST 1: SIMPLE GREETINGS & SYNTAX (EXPECT: LOCAL — even when a cloud model is named) ---
+  console.log('🔄 [Test 1] Simple greetings + syntax (a named cloud model must NOT force cloud)...');
+  for (const p of ['Hello! Good morning.', 'How do I write a simple Array.map in JS?']) {
+    const r = await ask(p, 'gpt-4o');
+    console.log(`   "${p}" -> [${r.decision.toUpperCase()}] ${r.reason}`);
+    assert.strictEqual(r.decision, 'local');
+  }
+  console.log('✅ [Test 1] Simple prompts route local even with model="gpt-4o".\n');
 
-  const syntaxRes = await router.classify([
-    { role: 'user', content: 'How do I write a simple Array.map in JS?' }
-  ], 'gpt-4o');
-  console.log(`   Prompt: "How do I write a simple Array.map in JS?" -> Decision: [${syntaxRes.decision.toUpperCase()}] | Reason: "${syntaxRes.reason}"`);
-  assert.strictEqual(syntaxRes.decision, 'local');
+  // --- TEST 2: SOVEREIGN SYSTEM / LEDGER (EXPECT: LOCAL) ---
+  console.log('🔄 [Test 2] Sovereign system + ledger prompts...');
+  for (const p of ['Display my current P2P mesh network status', 'Check my off-chain state channel Solana balances']) {
+    const r = await ask(p, 'claude-3-5-sonnet');
+    console.log(`   "${p}" -> [${r.decision.toUpperCase()}] ${r.reason}`);
+    assert.strictEqual(r.decision, 'local');
+  }
+  console.log('✅ [Test 2] Sovereign system prompts route local.\n');
 
-  console.log('✅ [Test 1 Passed] Simple prompts successfully route to local open-weights!\n');
+  // --- TEST 3: HIGH COMPLEXITY (EXPECT: LOCAL by default; CLOUD only on opt-in) ---
+  console.log('🔄 [Test 3] High-complexity prompts — sovereign default is LOCAL, cloud is opt-in...');
+  const complex = 'Design a multi-threaded parallel sorting algorithm in Rust. Handle concurrency, prevent deadlocks and race conditions, and export performance metrics.';
 
+  const noKey = await ask(complex, 'gpt-4o');
+  console.log(`   complex, no key      -> [${noKey.decision.toUpperCase()}] ${noKey.reason}`);
+  assert.strictEqual(noKey.decision, 'local'); // was auto-cloud before; now sovereign-local (and a keyless cloud call couldn't succeed anyway)
 
-  // --- TEST CASE 2: SOVEREIGN SYSTEM & LEDGER AUDITS (EXPECT: LOCAL) ---
-  console.log('🔄 [Test 2] Simulating sovereign DePIN network and payment triggers...');
+  const forced = await ask(complex + ' /force-cloud', 'gpt-4o');
+  console.log(`   complex, /force-cloud -> [${forced.decision.toUpperCase()}] ${forced.reason}`);
+  assert.strictEqual(forced.decision, 'cloud'); // explicit opt-in honored
 
-  const systemRes = await router.classify([
-    { role: 'user', content: 'Display my current P2P mesh network status' }
-  ], 'claude-3-5-sonnet');
-  console.log(`   Prompt: "Display my current P2P mesh network status" -> Decision: [${systemRes.decision.toUpperCase()}] | Reason: "${systemRes.reason}"`);
-  assert.strictEqual(systemRes.decision, 'local');
+  // genuinely hard (difficulty >=4) + a configured key. SECURE-BY-DEFAULT: still LOCAL unless the
+  // deploy also opts in via STRATOS_CLOUD_AUTO_ESCALATE (closes the difficulty-injection vector).
+  const hard = 'Architect, refactor and prove the optimal multi-threaded distributed sorting algorithm; optimize it and reason through every step in detail. '.repeat(10) + ' ```rust\nfn main(){}\n``` ';
+  process.env.OPENAI_API_KEY = 'sk-test';
+  const keyedOff = await ask(hard, 'gpt-4o');
+  console.log(`   hard, key, auto-escalate OFF -> [${keyedOff.decision.toUpperCase()}] ${keyedOff.reason}`);
+  assert.strictEqual(keyedOff.decision, 'local'); // secure default — no auto-escalation from a key alone
+  process.env.STRATOS_CLOUD_AUTO_ESCALATE = 'true';
+  const keyedOn = await ask(hard, 'gpt-4o');
+  console.log(`   hard, key, auto-escalate ON  -> [${keyedOn.decision.toUpperCase()}] ${keyedOn.reason}`);
+  assert.strictEqual(keyedOn.decision, 'cloud'); // explicit deploy opt-in
+  delete process.env.STRATOS_CLOUD_AUTO_ESCALATE;
+  clearKeys();
+  console.log('✅ [Test 3] Complex stays local by default; cloud only on /force-cloud or deploy opt-in.\n');
 
-  const paymentRes = await router.classify([
-    { role: 'user', content: 'Check my off-chain state channel Solana balances' }
-  ], 'claude-3-5-sonnet');
-  console.log(`   Prompt: "Check my off-chain state channel Solana balances" -> Decision: [${paymentRes.decision.toUpperCase()}] | Reason: "${paymentRes.reason}"`);
-  assert.strictEqual(paymentRes.decision, 'local');
-
-  console.log('✅ [Test 2 Passed] Sovereign system and ledger prompts successfully route locally!\n');
-
-
-  // --- TEST CASE 3: HIGH COMPLEXITY LOGICAL REASONING (EXPECT: CLOUD) ---
-  console.log('🔄 [Test 3] Simulating high-complexity algorithmic coding queries...');
-
-  const complexRes = await router.classify([
-    { role: 'user', content: 'Design a multi-threaded parallel sorting algorithm in Rust. Handle concurrency, prevent deadlocks and race conditions, and export performance metrics.' }
-  ], 'gpt-4o');
-  console.log(`   Prompt: "Design a multi-threaded..." -> Decision: [${complexRes.decision.toUpperCase()}] | Reason: "${complexRes.reason}"`);
-  assert.strictEqual(complexRes.decision, 'cloud');
-
-  const cryptRes = await router.classify([
-    { role: 'user', content: 'Write a FIPS-compliant script that implements ML-KEM-768 post-quantum key encapsulation and ML-DSA-65 signatures.' }
-  ], 'claude-3-5-sonnet');
-  console.log(`   Prompt: "Write a FIPS-compliant script..." -> Decision: [${cryptRes.decision.toUpperCase()}] | Reason: "${cryptRes.reason}"`);
-  assert.strictEqual(cryptRes.decision, 'cloud');
-
-  console.log('✅ [Test 3 Passed] High-complexity tasks correctly require frontier cloud models!\n');
-
-
-  // --- TEST CASE 4: MANUAL DIRECTIVE ROUTE OVERRIDES (EXPECT: EXACT OVERRIDE) ---
-  console.log('🔄 [Test 4] Simulating manual override keywords...');
-
-  const forceCloudRes = await router.classify([
-    { role: 'user', content: 'What is Array.map /force-cloud' }
-  ], 'gpt-4o');
-  console.log(`   Prompt: "What is Array.map /force-cloud" -> Decision: [${forceCloudRes.decision.toUpperCase()}] | Reason: "${forceCloudRes.reason}"`);
-  assert.strictEqual(forceCloudRes.decision, 'cloud');
-
-  const forceLocalRes = await router.classify([
-    { role: 'user', content: 'Compile a multi-threaded Rust kernel /force-local' }
-  ], 'gpt-4o');
-  console.log(`   Prompt: "Compile a multi-threaded Rust... /force-local" -> Decision: [${forceLocalRes.decision.toUpperCase()}] | Reason: "${forceLocalRes.reason}"`);
-  assert.strictEqual(forceLocalRes.decision, 'local');
-
-  console.log('✅ [Test 4 Passed] Manual force directives successfully override automated routing!\n');
-
+  // --- TEST 4: MANUAL DIRECTIVES (EXPECT: EXACT OVERRIDE) ---
+  console.log('🔄 [Test 4] Manual override directives...');
+  const fc = await ask('What is Array.map /force-cloud', 'gpt-4o');
+  console.log(`   "...//force-cloud" -> [${fc.decision.toUpperCase()}] ${fc.reason}`);
+  assert.strictEqual(fc.decision, 'cloud');
+  const fl = await ask('Compile a multi-threaded Rust kernel /force-local', 'gpt-4o');
+  console.log(`   "...//force-local" -> [${fl.decision.toUpperCase()}] ${fl.reason}`);
+  assert.strictEqual(fl.decision, 'local');
+  console.log('✅ [Test 4] Force directives override automated routing.\n');
 
   console.log('========================================================================');
-  console.log('🎉 ALL TCR ROUTING & COMPLEXITY CLASSIFICATION TESTS PASSED (100% SUCCESS)');
+  console.log('🎉 ALL SOVEREIGN ROUTING TESTS PASSED — local by default, cloud opt-in only');
   console.log('========================================================================');
 }
 
-runTaskRouterTests().catch(err => {
-  console.error('\n❌ TASK ROUTER HARNESS ENCOUNTERED CRITICAL ERROR:', err);
+runTaskRouterTests().catch((err) => {
+  console.error('\n❌ TASK ROUTER HARNESS ERROR:', err.message);
   process.exit(1);
 });

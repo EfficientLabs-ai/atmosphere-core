@@ -15,6 +15,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import * as realConfig from '../core/agent-config.js';
 import * as realConnectors from '../connectors/connector-registry.js';
 import { languageName } from '../core/languages.js';
@@ -33,6 +35,7 @@ import * as userModelMem from '../memory/user-model.js';
 import * as voiceEngine from '../sensory/voice-engine.js';
 import { parseSkillMd, importSkillMd, exportSkillMd } from '../skills/skill-md.js';
 import { SkillStore } from '../skills/skill-store.js';
+import { generateBatch, resolveModelConfig, PLATFORMS, TONES } from '../content/content-engine.js';
 
 const C = { g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m', b: '\x1b[36m', d: '\x1b[2m', x: '\x1b[0m', B: '\x1b[1m' };
 const LOCAL_MODEL_RE = /^(qwen|gemma|llama|mistral|phi|deepseek)[a-z0-9.:_-]*$/i;
@@ -96,6 +99,7 @@ function helpText() {
     `  ${C.g}voice${C.x}           Native local talk/hear/see (Piper TTS · gemma audio/vision): say · hear · see · status`,
     `  ${C.g}skill${C.x}           SKILL.md portability (agentskills.io-compatible): import · export · list`,
     `  ${C.g}egress${C.x}          Policy-as-code egress firewall (default-DENY, anti-exfiltration): show · check`,
+    `  ${C.g}content${C.x}         Reusable content engine — private profile in, dated batch out (sovereign-default): generate`,
     `  ${C.g}version${C.x}         Print the version`,
     `  ${C.g}help${C.x}            This message`,
     '',
@@ -1142,6 +1146,104 @@ function cmdService(rest) {
   };
 }
 
+// `stratos content generate` — the GENERIC content engine. It reads a creator PROFILE + ANGLE BANK from a
+// PRIVATE content dir OUTSIDE the repo (CONTENT_DIR, default ~/founder-content), generates structured pieces
+// via the sovereign-default local gateway (configurable CONTENT_MODEL/CONTENT_ENDPOINT for a stronger model),
+// self-grows by mining the live build log (git commit subjects), marks angles used, and writes a dated batch.
+// Capability-gated deny-by-default like demo/receipt: it reads local files + makes a loopback model call, so
+// `content.generate` is the single action it declares. HONEST: no fabricated numbers; a down model degrades.
+const CONTENT_CAPS = parseCapabilities({ capabilities: { actions: ['content.generate'] } });
+
+function defaultContentDir() {
+  return process.env.CONTENT_DIR || path.join(os.homedir(), 'founder-content');
+}
+
+// Default build-log provider: recent commit subjects from the repo, so "everything we build is content".
+// Injected in tests; failures are non-fatal (the engine just gets no fresh angles this run).
+function defaultBuildLog() {
+  try {
+    const out = execFileSync('git', ['log', '-n', '25', '--pretty=%s'], { cwd: _ROOT, encoding: 'utf8', timeout: 5000 });
+    return out.split('\n').map((s) => s.trim()).filter(Boolean);
+  } catch { return []; }
+}
+
+async function cmdContent(rest, d = {}) {
+  const sub = rest[0];
+  if (!sub || sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: sub ? 0 : 1, lines: [
+      `${C.B}stratos content${C.x} ${C.d}— the reusable content engine (private profile in, dated batch out)${C.x}`,
+      `  ${C.g}stratos content generate${C.x} ${C.d}[--lane personal|labs|both] [--platform x|linkedin|short-video|carousel|all]${C.x}`,
+      `                           ${C.d}[--tone raw|cinematic|hybrid|all] [--n N]${C.x}`,
+      '',
+      `  ${C.d}Reads your PRIVATE profile + angle bank from ${C.x}${defaultContentDir()}${C.d} (CONTENT_DIR to change).${C.x}`,
+      `  ${C.d}Generates via your LOCAL sovereign gateway by default; set ${C.x}CONTENT_MODEL${C.d}/${C.x}CONTENT_ENDPOINT${C.d} for a`,
+      `  ${C.d}stronger model. Picks UNUSED angles, marks them used (re-run → fresh), and self-grows from the build log.${C.x}`,
+      `  ${C.d}Honest: output tracks the model; never ships fabricated metrics; a down model degrades, never fakes.${C.x}`,
+    ] };
+  }
+  if (sub !== 'generate') return { code: 1, lines: [`${C.r}usage: stratos content generate [--lane …] [--platform …] [--tone …] [--n N]${C.x}`] };
+
+  // Capability gate: deny-by-default (a test/caller can inject denied caps to prove enforcement).
+  const caps = d.contentCaps || CONTENT_CAPS;
+  try { assertStepAllowed(caps, { action: 'content.generate' }); }
+  catch (e) { return { code: 1, lines: [`${C.r}${e.message}${C.x}`] }; }
+
+  const flagVal = (name, def) => { const i = rest.indexOf(name); return i >= 0 && rest[i + 1] && !rest[i + 1].startsWith('--') ? rest[i + 1] : def; };
+  const lane = flagVal('--lane', 'both');
+  const platArg = flagVal('--platform', 'x');
+  const toneArg = flagVal('--tone', 'raw');
+  const n = Math.max(1, parseInt(flagVal('--n', '3'), 10) || 3);
+  const platforms = platArg === 'all' ? [...PLATFORMS] : [platArg];
+  const tones = toneArg === 'all' ? [...TONES] : [toneArg];
+
+  const contentDir = d.contentDir || defaultContentDir();
+  if (!fs.existsSync(path.join(contentDir, 'profile.md'))) {
+    return { code: 1, lines: [
+      `${C.B}stratos content${C.x}`,
+      `${C.r}✗ no profile at ${path.join(contentDir, 'profile.md')}${C.x}`,
+      `  ${C.d}Create your private profile + angles.json there first (or set CONTENT_DIR). Nothing is committed.${C.x}`,
+    ] };
+  }
+
+  const modelConfig = d.contentModelConfig || resolveModelConfig();
+  const commitSubjects = d.buildLog ? d.buildLog() : defaultBuildLog();
+  let res;
+  try {
+    res = await generateBatch({ contentDir, modelConfig, lane, platforms, tones, n, fetchImpl: d.contentFetch, commitSubjects, now: d.contentNow });
+  } catch (e) { return { code: 1, lines: [`${C.r}content engine error: ${e.message}${C.x}`] }; }
+
+  if (res.degraded) {
+    // Honest about WHY: an unreachable model vs a reachable model that returned unusable output are
+    // different failures with different fixes. Either way nothing was fabricated and no angle was consumed.
+    const unreachable = res.skipped.some((s) => /cannot reach|timed out|no fetch/.test(s.reason));
+    const badOutput = res.skipped.some((s) => /not valid JSON|no content|not JSON/.test(s.reason));
+    const why = unreachable
+      ? 'the content model is unreachable.'
+      : badOutput ? 'the model replied but produced no usable, schema-valid copy.' : 'no pieces produced.';
+    const fix = unreachable
+      ? 'start your local daemon (stratos start) or point CONTENT_ENDPOINT at a model.'
+      : 'this local model is too weak for clean structured copy — point CONTENT_MODEL/CONTENT_ENDPOINT at a stronger model for finished output.';
+    return { code: 1, lines: [
+      `${C.B}stratos content generate${C.x} ${C.d}— ${lane} · ${platforms.join(',')} · ${tones.join(',')}${C.x}`,
+      `${C.r}✗ no pieces produced — ${why}${C.x}`,
+      ...res.skipped.slice(0, 3).map((s) => `  ${C.d}${s.angle} ${s.platform}/${s.tone}: ${s.reason}${C.x}`),
+      `  ${C.y}→ ${fix}${C.x}`,
+      `  ${C.d}Nothing was fabricated. Angles were NOT consumed — re-run to retry.${C.x}`,
+    ] };
+  }
+
+  return { code: 0, lines: [
+    `${C.B}━━ stratos content generate ━━${C.x}`,
+    `  ${C.d}lane ${C.x}${lane}  ${C.d}platforms ${C.x}${platforms.join(', ')}  ${C.d}tones ${C.x}${tones.join(', ')}`,
+    `  ${C.d}model ${C.x}${res.model} ${C.d}@ ${res.endpoint}${C.x}`,
+    `  ${C.g}✓ ${res.produced} piece(s)${C.x} ${C.d}from ${res.angleIds.length} angle(s) [${res.angleIds.join(', ')}]${C.x}`,
+    res.freshAngles ? `  ${C.b}+${res.freshAngles} fresh angle(s) mined from the build log${C.x}` : `  ${C.d}no new build-log angles this run${C.x}`,
+    res.skipped.length ? `  ${C.y}${res.skipped.length} skipped (honest, not faked)${C.x}` : '',
+    `  ${C.g}→ ${res.batchPath}${C.x}`,
+    `  ${C.d}Private — under your content dir, never committed. Re-run for fresh pieces (no repeats).${C.x}`,
+  ].filter(Boolean) };
+}
+
 export async function run(argv = [], deps = {}) {
   const d = {
     config: deps.config || realConfig,
@@ -1183,6 +1285,14 @@ export async function run(argv = [], deps = {}) {
     demoKeyPair: deps.demoKeyPair,
     demoCaps: deps.demoCaps,
     demoModel: deps.demoModel,
+    // Injectable content-engine surface (tests inject a mock model fetch + build-log + clock + content dir +
+    // denied caps; production uses global fetch, `git log`, the real clock, CONTENT_DIR, and CONTENT_CAPS).
+    contentFetch: deps.contentFetch,
+    contentDir: deps.contentDir,
+    contentModelConfig: deps.contentModelConfig,
+    contentCaps: deps.contentCaps,
+    buildLog: deps.buildLog,
+    contentNow: deps.contentNow,
   };
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -1205,6 +1315,7 @@ export async function run(argv = [], deps = {}) {
     case 'voice': return cmdVoice(rest, d);
     case 'skill': return cmdSkill(rest, d);
     case 'egress': return cmdEgress(rest, d);
+    case 'content': return cmdContent(rest, d);
     case 'connect': return { code: 0, lines: [], action: 'connect' }; // interactive — handled by bin
     case 'channels': return { code: 0, lines: [], action: 'channels' }; // interactive — handled by bin
     case 'service': return cmdService(rest);

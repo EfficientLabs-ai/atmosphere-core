@@ -81,6 +81,13 @@ const SUITES = {
     // caps∩policy intersection both directions, hot-reload on mtime change, the env-allowlist discipline,
     // and the capability-gated CLI (deny-by-default).
     'test-egress-policy.mjs', 'test-egress-sandbox.mjs', 'test-stratos-egress.mjs',
+    // REUSABLE CONTENT ENGINE (this session) — the personal-brand + company content pipeline. Hermetic:
+    // a TEMP private content dir, an INJECTED model fetch (no live daemon/Ollama/network), injected
+    // build-log + clock. Covers angle selection skipping used angles, per-platform structure assembly from
+    // the mocked model JSON, used.json updates (re-run → fresh, no repeats), build-log self-grow, the
+    // capability gate (deny-by-default), the honest fail-open degrade when the model is down (no fabrication),
+    // and the missing-profile/help guards. The tool is generic; the profile + batches stay PRIVATE off-repo.
+    'test-content-engine.mjs',
   ],
 };
 

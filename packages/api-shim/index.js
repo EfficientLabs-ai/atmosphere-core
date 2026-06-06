@@ -51,8 +51,8 @@ if (evolutionEnabled()) {
 }
 
 // Handle graceful shutdown procedures
-const shutdown = (signal) => {
-  console.log(`\n🛑 Received ${signal}. Shutting down Atmos API Shim gracefully...`);
+const shutdown = (sig) => {
+  console.log(`\n🛑 Received ${sig}. Shutting down Atmos API Shim gracefully...`);
   
   if (telegramBridge) {
     telegramBridge.stop();

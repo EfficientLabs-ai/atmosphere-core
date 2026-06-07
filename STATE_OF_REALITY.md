@@ -97,7 +97,7 @@ with the economy and the AGI narrative still aspirational. Lead with what's real
 
 ## Infrastructure reality
 - **Compute:** VPS is **CPU-only** (4 vCPU / 16 GB, no GPU) → ~100 s per reply. The mesh is now a **real, verified multi-node fleet** — VPS (origin, PM2 service) + 16-core Ryzen mini-desktop + 4-core N150 laptop, PQC-verified, with proof-of-capacity + a working job scheduler. *Not* a "global supercompute mesh" yet (3 of the operator's own machines; the real `node` bundle replaces the old no-op loop, but a large public fleet is future).
-- **"Cloud" tier:** unimplemented in-repo; complex prompts fall back to local. (Planned: a clean Universal Model Manager — BYOK + local open-weights — *without* the dropped headless-subscription-scraping path.)
+- **"Cloud" tier / Universal Model Manager:** ✅ **BUILT + tested** (2026-06-08 verify). BYOK to OpenAI/Gemini/Anthropic natively + **OpenRouter** (one key → 100+ models via `vendor/model` slugs); real `fetch()` to the official endpoints (`api-shim/src/routers/cloud-byok.js` + `anthropic-adapter.js`), raw-body pass-through, keys read from env/vault and **never logged**. Sovereign: LOCAL is default; cloud only on opt-in (`/force-cloud` or a genuinely hard prompt) **AND** a configured BYOK key, behind the **402 cost-approval gate**. Tests: `test-model-manager` (22) + `test-compliance-gateway` (25) pass. Without a key it falls back to local **by design (not a stub)**; a real end-to-end frontier call requires the user's BYOK key. *(This line previously said "unimplemented" — that was stale.)*
 
 ## Recommended build order (make things *real*, one at a time)
 1. ~~**Fix the RAG-injection hallucination**~~ ✅ **DONE 2026-05-31.**

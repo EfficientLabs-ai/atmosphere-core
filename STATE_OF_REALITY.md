@@ -90,7 +90,8 @@ with the economy and the AGI narrative still aspirational. Lead with what's real
 | **Multimodal** (Whisper STT, TTS, Active Vision) | **MOCK.** GDI mock display buffer, mock transcription. Voice confirmed "1990s robot," scrapped. |
 | **Omni-channel adapters** (Slack/Discord/WhatsApp) | **SCAFFOLD.** Not connected to live platforms. |
 | **ACP / MCP gateway, DIDs, SD-JWT Verifiable Intent, Z3 SMT** | **SPEC ONLY** (PRD-level). Not implemented in running code. |
-| **Solana token, on-chain settlement, peer compute harvesting** | **NOT REAL.** The peer compute "service" is a no-op background loop; no real compute is harvested or paid. |
+| **Peer compute / mesh** | ✅ **REAL** (reconciled w/ §Infrastructure): the no-op loop was replaced by the real `node` bundle — a PQC-verified 3-machine fleet with proof-of-capacity + a working job scheduler. Not a global supercompute mesh yet (operator's own machines). |
+| **Solana token + on-chain settlement / rewards** | **INTENTIONALLY NOT LIVE** (by design, not a stub): measurement/attribution exists (capability receipts, per-wallet aggregation), but rewards/payouts are counsel-gated and labeled "Payouts not live" everywhere. No fake "earning" code. |
 | **"Triple-layer superintelligence / federated LoRA training"** | **CONCEPTUAL.** Not implemented. |
 
 ---

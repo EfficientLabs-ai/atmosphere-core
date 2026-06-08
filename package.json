@@ -7,8 +7,9 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node packages/stratos-agent/test-deepscan-telegram.js",
-    "test:fips": "node --enable-fips packages/stratos-agent/test-deepscan-telegram.js",
+    "test": "node scripts/ci-test.mjs",
+    "test:deepscan": "node packages/stratos-agent/test-deepscan-telegram.js",
+    "test:deepscan:fips": "node --enable-fips packages/stratos-agent/test-deepscan-telegram.js",
     "test:all": "npm run test --workspaces --if-present",
     "start:shim": "node packages/api-shim/index.js",
     "start:shim:fips": "node --enable-fips packages/api-shim/index.js",

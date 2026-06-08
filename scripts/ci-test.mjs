@@ -23,6 +23,7 @@ const SUITES = {
     'test-compliance-gateway.mjs', 'test-compliance-router.mjs', 'test-language-gateway.mjs', 'test-secret-guard.mjs',
     'test-anthropic-adapter.mjs', 'test-model-manager.mjs', 'test-memory-window.mjs', 'test-config-intents.mjs',
     'test-content-orchestrator.mjs', 'test-standalone-graph.mjs',
+    'test-local-inference-model.mjs',
     'test-acp.mjs', 'test-mcp-rce.mjs', 'test-v1-messages-route.mjs', 'test-gate-failclosed.mjs', 'test-approval-flow.mjs',
     'test-gateway-auth.mjs',
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG

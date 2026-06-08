@@ -24,6 +24,15 @@ function ensureUserModelInit() {
   return _umInitPromise;
 }
 
+export function normalizeOllamaModelName(model, fallback = process.env.LOCAL_MODEL_DEFAULT || 'gemma2:2b') {
+  const safeFallback = String(fallback || 'gemma2:2b').trim() || 'gemma2:2b';
+  const raw = String(model || '').replace(/^local:/i, '').trim();
+  if (!raw || raw === 'local') return safeFallback;
+  // Legacy gateway aliases are routing labels, not guaranteed Ollama tags.
+  if (/quantized/i.test(raw) || /-local$/i.test(raw)) return safeFallback;
+  return raw;
+}
+
 export class LocalInferenceEngine {
   constructor(options = {}) {
     this.modelName = options.modelName || 'Qwen-2.5-7B-Quantized-Local';
@@ -194,12 +203,14 @@ Answer the user's actual message directly and conversationally. Only use the ref
     let text = '';
     let servedFromSkill = false;
     let receiptRef = model || this.modelName; // the model/skill that produced the answer (for the receipt)
+    let responseModel = receiptRef;
     try {
       const served = await evolutionTryServe(lastUserMsg);
       if (served && served.text != null) {
         text = served.text;
         servedFromSkill = true;
         receiptRef = served.skillId ? `skill:${served.skillId}` : receiptRef;
+        responseModel = receiptRef;
         if (this.verbose) {
           console.log(`⚡ [Local Model] served by verified skill ${served.skillId} (dist=${served.distance?.toFixed?.(3)}) — bypassing LLM.`);
         }
@@ -247,17 +258,12 @@ Answer the user's actual message directly and conversationally. Only use the ref
     // 5. Generate dynamic response using the actual local Ollama open-weights engine
     try {
       const ollamaEndpoint = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
-      // Local inference runs on the installed open-weights model. Any cloud/alias
-      // name that reaches the local path (e.g. 'qwen-2.5-vlm-telegram-local', which
-      // Ollama 404s on) is normalized to the installed model so we never silently
-      // fall back to a mock. Only gemma2:2b is installed on this host.
-      let targetModel = model || 'gemma2:2b';
-      const t = targetModel.toLowerCase();
-      if (!(t.includes('qwen') || t.includes('local') || t.includes('llama'))) {
-        if (this.verbose) console.warn(`⚠️ [Local Model] "${targetModel}" is not a local model; normalizing to installed gemma2:2b.`);
-      }
-      targetModel = 'gemma2:2b';
+      // server.js has already selected an installed concrete local model for normal
+      // requests. Direct callers may still pass legacy gateway aliases; those fall
+      // back to the configured local default instead of hitting Ollama with fake tags.
+      const targetModel = normalizeOllamaModelName(model);
       receiptRef = targetModel; // the model that actually produced the answer (for the capability receipt)
+      responseModel = targetModel;
       if (this.verbose) {
         console.log(`🤖 [Local Model] Querying real Ollama model [${targetModel}] at ${ollamaEndpoint}...`);
       }
@@ -329,7 +335,7 @@ Answer the user's actual message directly and conversationally. Only use the ref
           id: completionId,
           object: 'chat.completion.chunk',
           created: createdTime,
-          model: model || this.modelName,
+          model: responseModel,
           choices: [{
             index: 0,
             delta: { content: deltaText },
@@ -344,7 +350,7 @@ Answer the user's actual message directly and conversationally. Only use the ref
         id: completionId,
         object: 'chat.completion',
         created: createdTime,
-        model: model || this.modelName,
+        model: responseModel,
         choices: [{
           index: 0,
           message: {

@@ -51,24 +51,25 @@ if (evolutionEnabled()) {
 }
 
 // Handle graceful shutdown procedures
+function stopComponent(name, component) {
+  if (!component || typeof component.stop !== 'function') return;
+  try {
+    Promise.resolve(component.stop()).catch((err) => {
+      console.warn(`⚠️  [${name}] shutdown warning:`, err.message);
+    });
+  } catch (err) {
+    console.warn(`⚠️  [${name}] shutdown warning:`, err.message);
+  }
+}
+
 const shutdown = (sig) => {
   console.log(`\n🛑 Received ${sig}. Shutting down Atmos API Shim gracefully...`);
   
-  if (telegramBridge) {
-    telegramBridge.stop();
-  }
-  if (discord) {
-    discord.stop();
-  }
-  if (slack) {
-    slack.stop();
-  }
-  if (matrix) {
-    matrix.stop();
-  }
-  if (signal) {
-    signal.stop();
-  }
+  stopComponent('Telegram Bridge', telegramBridge);
+  stopComponent('Discord', discord);
+  stopComponent('Slack', slack);
+  stopComponent('Matrix', matrix);
+  stopComponent('Signal', signal);
 
   server.close(() => {
     console.log('💤 Server connection pool closed. Exiting process safely.\n');

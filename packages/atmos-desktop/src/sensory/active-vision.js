@@ -99,7 +99,21 @@ export class ActiveVisionEngine {
       focusedProcess = 'code';
     }
 
-    // High-fidelity local VLM visual element mapping
+    // HONESTY CONTRACT: we do NOT run a real VLM over the captured frame on this path, so we MUST NOT
+    // fabricate an analysis and feed it to the model as if it were real screen contents. The detailed
+    // bounding-box "analysis" below is SYNTHETIC and only emitted when an operator explicitly opts into
+    // demo mode via STRATOS_SYNTHETIC_VISION (same opt-in convention as STRATOS_EVOLUTION). Default:
+    // emit nothing, so a screen question gets no invented context. Real, per-image vision lives in
+    // stratos-agent/src/sensory/voice-engine.js `see()` (returns {ok:false,reason} on failure).
+    const SYNTHETIC = process.env.STRATOS_SYNTHETIC_VISION === '1' || process.env.STRATOS_SYNTHETIC_VISION === 'true';
+    if (!SYNTHETIC) {
+      if (this.verbose) {
+        console.log('👁️ [Active Vision] No real VLM wired on this path — returning no visual context (set STRATOS_SYNTHETIC_VISION=1 for labeled demo output).');
+      }
+      return '';
+    }
+
+    // High-fidelity local VLM visual element mapping (SYNTHETIC DEMO — clearly labeled as such)
     const elementsParsed = [
       { element: 'window_title_bar', text: activeWindow, bounds: { x: 0, y: 0, w: 1920, h: 40 } },
       { element: 'editor_canvas', text: 'import { KeyringManager } from \'atmos-core\';', bounds: { x: 300, y: 80, w: 1200, h: 800 } },
@@ -107,19 +121,19 @@ export class ActiveVisionEngine {
       { element: 'system_tray_clock', text: new Date().toLocaleTimeString(), bounds: { x: 1800, y: 1040, w: 120, h: 40 } }
     ];
 
-    const descriptiveAnalysis = `[Local Vision-Language Model Analysis]
+    const descriptiveAnalysis = `[SYNTHETIC DEMO — NOT a real screen capture]
 Active UI Display Profile:
   - Focused Application Process: "${focusedProcess}"
   - Active Display Frame: "${activeWindow}"
   - Visual Resolution: 1920x1080
-  
+
 Structural Screen Bounding Elements Detected:
 ${elementsParsed.map(el => `    * [Element: ${el.element}] Bounds: [X:${el.bounds.x}, Y:${el.bounds.y}, W:${el.bounds.w}, H:${el.bounds.h}] -> Text: "${el.text}"`).join('\n')}
-  
-Context Verdict: The developer is currently working inside a sovereign VS Code IDE environment, executing local multimodal test files.`;
+
+Context Verdict: SYNTHETIC demo placeholder. No real vision model analyzed this frame.`;
 
     if (this.verbose) {
-      console.log('👁️ [Active Vision VLM] Spatial display frame parsing complete.');
+      console.log('👁️ [Active Vision VLM] Synthetic demo frame parsing complete.');
     }
     return descriptiveAnalysis;
   }

@@ -166,21 +166,12 @@ export class TelegramBridge {
             }
 
             if (command === '/vision') {
-              const visionReply = `👁️ <b>Active Vision Trigger</b>:\n\nCapturing primary display GDI buffer natively and executing spatial VLM hierarchy classification...`;
+              // HONEST: this bridge cannot see your screen, and there is no live screen-capture VLM
+              // wired to Telegram — the previous behavior fabricated a screen "analysis". Real, local
+              // vision works per-image via gemma (STRATOS_SENSORY_MODEL, e.g. gemma4:e4b): send a photo,
+              // or run `stratos voice see <image>` on the host. We won't invent what's on your screen.
+              const visionReply = `👁️ <b>Vision — no live screen capture</b>\n\nI can't see your screen from this chat, and I won't make one up. Local, sovereign image vision (gemma via Ollama) is real and works per-image: <b>send me a photo</b> and I'll describe it, or run <code>stratos voice see &lt;image&gt;</code> on the host.`;
               await this.bot.sendMessage(chatId, visionReply, { parse_mode: 'HTML' });
-              
-              // Trigger vision completions call
-              const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...gatewayAuthHeaders() },
-                body: JSON.stringify({
-                  model: 'qwen-2.5-vlm-telegram-local',
-                  messages: [{ role: 'user', content: 'What is currently active on my display screen?' }],
-                  stream: false
-                })
-              });
-              const data = await response.json();
-              await this.sendFormattedMessage(chatId, data.choices[0].message.content);
               return;
             }
 

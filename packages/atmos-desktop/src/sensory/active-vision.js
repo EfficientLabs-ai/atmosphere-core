@@ -71,8 +71,19 @@ export class ActiveVisionEngine {
    * and spatial bounding boxes to a system prompt injection.
    */
   async parseActiveVisualContext(screenshotPath) {
+    // GUARD FIRST (honesty + null-safety): no real VLM is wired on this path. Default = return '' before
+    // ANY capture/window/path work, so the method is safe to call with no args and never injects invented
+    // context. Synthetic demo output is opt-in only (STRATOS_SYNTHETIC_VISION) and clearly labeled below.
+    const SYNTHETIC = process.env.STRATOS_SYNTHETIC_VISION === '1' || process.env.STRATOS_SYNTHETIC_VISION === 'true';
+    if (!SYNTHETIC) {
+      if (this.verbose) {
+        console.log('👁️ [Active Vision] No real VLM wired on this path — returning no visual context (set STRATOS_SYNTHETIC_VISION=1 for labeled demo output).');
+      }
+      return '';
+    }
+
     if (this.verbose) {
-      console.log(`👁️ [Active Vision VLM] Processing displays buffer ${path.basename(screenshotPath)}...`);
+      console.log(`👁️ [Active Vision VLM] Processing displays buffer ${screenshotPath ? path.basename(screenshotPath) : '(no frame)'}...`);
     }
 
     let activeWindow = 'Unknown Active Window';
@@ -97,20 +108,6 @@ export class ActiveVisionEngine {
     } catch (e) {
       activeWindow = 'OpenAtmos - Visual Studio Code';
       focusedProcess = 'code';
-    }
-
-    // HONESTY CONTRACT: we do NOT run a real VLM over the captured frame on this path, so we MUST NOT
-    // fabricate an analysis and feed it to the model as if it were real screen contents. The detailed
-    // bounding-box "analysis" below is SYNTHETIC and only emitted when an operator explicitly opts into
-    // demo mode via STRATOS_SYNTHETIC_VISION (same opt-in convention as STRATOS_EVOLUTION). Default:
-    // emit nothing, so a screen question gets no invented context. Real, per-image vision lives in
-    // stratos-agent/src/sensory/voice-engine.js `see()` (returns {ok:false,reason} on failure).
-    const SYNTHETIC = process.env.STRATOS_SYNTHETIC_VISION === '1' || process.env.STRATOS_SYNTHETIC_VISION === 'true';
-    if (!SYNTHETIC) {
-      if (this.verbose) {
-        console.log('👁️ [Active Vision] No real VLM wired on this path — returning no visual context (set STRATOS_SYNTHETIC_VISION=1 for labeled demo output).');
-      }
-      return '';
     }
 
     // High-fidelity local VLM visual element mapping (SYNTHETIC DEMO — clearly labeled as such)

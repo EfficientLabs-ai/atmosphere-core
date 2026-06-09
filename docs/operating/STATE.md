@@ -10,16 +10,20 @@
 
 ## NOW — in flight
 
-| # | Item | Stage | Owner |
+> This durable board tracks **what exists and what's next** — *not* transitory per-PR review/CI
+> status. Live PR, CI, and Codex-review state lives on GitHub (the PRs themselves) and in
+> [`BACKLOG.md`](BACKLOG.md); it is deliberately kept off this board so the board can't go stale.
+
+| # | Milestone | Stage | Owner |
 |---|---|---|---|
-| 1 | Operating system stood up (OPERATING-MODEL + this board + PARALLEL runbook) | DONE | Orchestrator |
+| 1 | Operating system stood up (OPERATING-MODEL + this board + PARALLEL + BACKLOG) | DONE | Orchestrator |
 | 2 | **Claude audit → [`ISSUES.md`](ISSUES.md)** — 18 issues (0 crit / 6 high / 5 med / 7 low) | DONE | Audit team |
 | 3 | Codex independent full-VPS audit → 16 GitHub issues + 7 comments | DONE | Codex |
 | 4 | Merge both audits → [`BACKLOG.md`](BACKLOG.md) (two-agent-agreement = promote) | DONE | Orchestrator |
-| 5 | PR #64 (this operating-docs PR) → resolves core#61 | IN CODEX REVIEW (REQUEST-CHANGES → fixing) | Claude→Codex |
-| 6 | Tier-0 remediation fix-PRs (CI/#59, honesty.yml/#5, model truth, mesh-node claims) | NEXT | Claude→Codex |
 
-**After Tier-0/1:** **Discord/Slack integration** sprint (the chosen next build).
+**In flight:** Tier-0/1 remediation fix-PRs are being shipped per [`BACKLOG.md`](BACKLOG.md) and
+reviewed by Codex on GitHub — per-PR status lives there, not here. **Next build after Tier-0/1:**
+Discord/Slack integration.
 
 **Verified-urgent from the audit (checked live against disk):** EFL-001 — `qwen2.5:7b` is **not
 on the box**; agent runs `gemma2:2b` + `gemma4:e4b`. Flagship "local qwen" claim is false across

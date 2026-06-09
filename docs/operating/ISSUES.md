@@ -25,7 +25,7 @@ Dedup notes: `STATE_OF_REALITY.md:24` ("falls through to qwen") was merged into 
 
 ## Critical
 
-None found by this audit. The headline trust-core (offline fail-closed hybrid PQC seal in `TheAtmosphere`, the WASI deny-by-default sandbox, the VaultHost seed wipe, and the hermetic 76/76 CI suite) were all verified as genuinely sound — see the "Verified closed / honest" appendix.
+None found by this audit. The headline trust-core (offline fail-closed hybrid PQC seal in `TheAtmosphere`, the WASI deny-by-default sandbox, the VaultHost seed wipe, and the hermetic suite — 76 tests, green **locally**) were all verified as genuinely sound — see the "Verified closed / honest" appendix. *(Caveat: GitHub Actions CI itself is RED — 1/76 fails in CI; see #59 below. "Sound locally" ≠ "CI green.")*
 
 ---
 
@@ -187,7 +187,7 @@ These efficientlabs-web and security-hygiene items are real but low; folded into
 - **TheAtmosphere offline PQC proof** — `verify.mjs` + `npm test` both 5/5 pass, EXIT 0; all 4 tamper cases fail-closed (`quantum-crypto.js:137-165` requires both Ed25519 and ML-DSA-65). Real Hyperswarm `swarm.join` with no mock and no inbound `.listen()` — "no open ports" claim accurate. (L4 cross-machine DHT-join could not be independently reproduced in-sandbox due to the exec/mmap restriction; rests on team hardware.)
 - **WASI sandbox** (`wasi-sandbox.js:95-105`) — deny-by-default env allowlist, egress DENY_ALL; the prior caller-env-leak gap is closed. (Optional: denylist `/KEY|SECRET|TOKEN|KEYPAIR/`.)
 - **VaultHost** (`vault-host.js`) — decrypted seed/passcode/salt/key all zeroized; only the long-lived PQC `secretKey` persists (inherent to an in-process signer, by design).
-- **Hermetic CI** — `npm run test:ci` → 76/76 pass, honestly scoped (explicit allowlist; live-Ollama integration tests documented as excluded). Inverse risk: evolution-seam + chat-memory are never automated → see misc test-coverage note.
+- **Hermetic suite (LOCAL only)** — `npm run test:ci` → 76/76 pass **locally**, honestly scoped (explicit allowlist; live-Ollama integration tests excluded). **GitHub Actions CI is RED**, though: `test-composio-sovereign.mjs` fails (1/76) on BOTH Node 20 and 22 — passes locally, so it is env/network-dependent (not hermetic) → #59. Inverse risk: evolution-seam + chat-memory are never automated → see misc test-coverage note.
 - **No committed secrets** — `git grep`/`git log -p` over both repos found only test-fixture dummy values; `.gitignore` correct. (Operator must confirm previously-noted leaked tokens were rotated out-of-band.)
 - **efficientlabs-web build GREEN** — `npm run build` compiles all 49 routes, TS clean, honesty-guard passes 55 surfaces. The `/app/*` "stub pages" premise is outdated: they are 10 fully-built, honesty-gated preview modules that degrade safely signed-out.
 - **Deploy blocker is external** — `.vercel/project.json` links `efficient-labs`; build is green locally; the hold is a Vercel account/email verification issue requiring Vercel support, not an engineering fix. → tracked under **web deploy** (ops escalation).

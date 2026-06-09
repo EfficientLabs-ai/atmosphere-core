@@ -13,11 +13,13 @@
 | # | Item | Stage | Owner |
 |---|---|---|---|
 | 1 | Operating system stood up (OPERATING-MODEL + this board + PARALLEL runbook) | DONE | Orchestrator |
-| 2 | **Comprehensive audit → [`ISSUES.md`](ISSUES.md)** — 18 issues (0 crit / 6 high / 5 med / 7 low) | DONE | Audit team |
-| 3 | Codex independent full-VPS audit → issue list | RUNNING (external, Codex) | Codex |
+| 2 | **Claude audit → [`ISSUES.md`](ISSUES.md)** — 18 issues (0 crit / 6 high / 5 med / 7 low) | DONE | Audit team |
+| 3 | Codex independent full-VPS audit → 16 GitHub issues + 7 comments | DONE | Codex |
+| 4 | Merge both audits → [`BACKLOG.md`](BACKLOG.md) (two-agent-agreement = promote) | DONE | Orchestrator |
+| 5 | PR #64 (this operating-docs PR) → resolves core#61 | IN CODEX REVIEW (REQUEST-CHANGES → fixing) | Claude→Codex |
+| 6 | Tier-0 remediation fix-PRs (CI/#59, honesty.yml/#5, model truth, mesh-node claims) | NEXT | Claude→Codex |
 
-**On deck (chosen):** merge [`ISSUES.md`](ISSUES.md) with Codex's list into one master backlog
-(two-agent agreement = promote to sprint) → then **Discord/Slack integration** sprint.
+**After Tier-0/1:** **Discord/Slack integration** sprint (the chosen next build).
 
 **Verified-urgent from the audit (checked live against disk):** EFL-001 — `qwen2.5:7b` is **not
 on the box**; agent runs `gemma2:2b` + `gemma4:e4b`. Flagship "local qwen" claim is false across
@@ -59,7 +61,7 @@ Ordered by leverage. Each is one full pipeline run with a gate at the end.
 - 🟡 **Skill execution** — executor real + test-verified; **not wired into live daemon path.**
 - ⛔ **Multimodal** (Whisper/TTS/vision) — mock buffers in `atmos-desktop/src/sensory/`.
 - ⛔ **Economy** (token, on-chain settlement, DePIN rewards) — designed, intentionally deferred by legal gate.
-- Tests: `npm run test:ci` → 88 hermetic test files run green locally; honest (mocked paths are labeled). Working tree `main` clean — **BUT GitHub Actions CI is RED** on the last 3 commits (Node-20 vs deps requiring Node ≥22 — Codex atmosphere-core#59, a P0). `efficientlabs-web` `honesty.yml` CI also RED (web#5). *Local-green ≠ CI-green; both must go green before "production-ready."*
+- Tests: `npm run test:ci` → **76 hermetic tests across ~43 files pass LOCALLY**; honest (mocked paths labeled). Working tree `main` clean — **BUT GitHub Actions CI is RED** on the last 3 commits: **1/76 fails — `test-composio-sovereign.mjs` (exit 1) on BOTH Node 20 and Node 22.** It passes locally but fails in CI → it's env/network-dependent, NOT hermetic, and NOT merely a Node-version gap (Codex atmosphere-core#59, P0). `efficientlabs-web` `honesty.yml` CI also RED (web#5). *Local-green ≠ CI-green; both must go green before "production-ready."*
 
 ### StratosAgent (PUBLIC, BSL 1.1)
 - ✅ `@efficientlabs/stratos@1.1.0` on npm. README, 145 hermetic assertions, Node ≥20.19 floor. `stratos init` / `stratos complete` CLI. Capability receipts, signed skills, local-default router.
@@ -70,9 +72,9 @@ Ordered by leverage. Each is one full pipeline run with a gate at the end.
 
 ### efficientlabs-web (private, Vercel-linked `efficient-labs`)
 - ✅ 11 substantive pages: `/`, `/pricing`, `/status`, `/install`, `/stratos`, `/architecture`, `/atmosphere`, `/docs`, `/updates`, `/login`, `/signup`, `/app`, `/ops`.
-- ✅ **`/status` is genuinely live** — GitHub API, ISR `revalidate=300`, tracks all 4 repos, merges committed baseline, scrubs PII. Public repos surface within 5 min of a push.
-- ✅ Supabase auth wired + env-gated (`authReady`); renders only enabled OAuth providers. Founder `/ops` HMAC-cookie gate.
-- ✅ Live Stripe checkout + public install flow (`efficientlabs.ai/install.sh`).
+- 🟡 **`/status` — route-live, data-conditional.** Page renders and the GitHub-fetch + ISR(300s) code path is real, BUT with no `GITHUB_READ_TOKEN` it 404s the private repos and serves the committed baseline (`isLive=false`); only the 2 public repos can surface live. On-page copy says "live" → overstated until a token is set or all repos are public (EFL-010 / web#6). *(Separate the four states: route-live ✅ / data-live ⚠ conditional / env-ready ⛔ / checkout-ready ⛔.)*
+- 🟡 **Stripe checkout — code-live, not key-live.** Checkout flow + public install (`install.sh`) are built; needs live Stripe keys deployed to actually transact (env not deployed).
+- 🟡 Supabase auth + founder `/ops` HMAC gate — code-wired, env-gated (`authReady`), renders only enabled OAuth providers; **not deployed with live keys.**
 - ✅ `/app/*` are **10 fully-built, honesty-gated preview modules** that degrade safely when signed-out (audit corrected my earlier "stubs" call — `npm run build` is green across 49 routes, honesty-guard passes 55 surfaces).
 - 🟡 Not deployed with live env keys; **deploy blocker is external** — a Vercel account/email-verification hold needing Vercel support, not an engineering fix (EFL-010 / web-deploy).
 

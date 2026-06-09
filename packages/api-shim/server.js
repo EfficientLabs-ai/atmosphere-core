@@ -15,6 +15,7 @@ import { complianceApprovalGate } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 import { requireGatewaySecret, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
+import { upstreamUnavailable, recordSuccess, recordFailure, breakerSnapshot } from './src/upstream-breaker.js';
 
 const localInference = new LocalInferenceEngine();
 const taskRouter = new TaskClassifierRouter({ verbose: true });
@@ -287,10 +288,14 @@ app.post('/v1/chat/completions', requireGatewaySecret, async (req, res) => {
 
   let shouldFallback = false;
   let response;
+  // EFL-014 circuit breaker: if the upstream has been failing, skip the proxy entirely
+  // and fail fast to the SAME fallback path below — no 8s timeout wait, no heap pile-up.
+  const breakerOpen = upstreamUnavailable();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), STRATOS_TIMEOUT);
 
   try {
+    if (breakerOpen) throw new Error('upstream-breaker-open');
     const proxyHeaders = { ...req.headers };
     delete proxyHeaders['x-atmos-gateway']; // never forward the gateway secret upstream
     // If the caller authenticated to the gateway via `Authorization: Bearer <gateway-secret>`
@@ -315,13 +320,20 @@ app.post('/v1/chat/completions', requireGatewaySecret, async (req, res) => {
     if (!response.ok) {
       console.warn(`[API-SHIM] ⚠️ Upstream StratosAgent returned non-OK status: ${response.status}. Initiating fallback...`);
       shouldFallback = true;
+      recordFailure();
+    } else {
+      recordSuccess();
     }
   } catch (err) {
     clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
+    if (err.message === 'upstream-breaker-open') {
+      console.warn(`[API-SHIM] ⛔ Upstream breaker OPEN for ${STRATOS_AGENT_URL}; skipping proxy, failing fast to fallback.`);
+    } else if (err.name === 'AbortError') {
       console.warn(`[API-SHIM] ⏱️ Upstream StratosAgent timed out after ${STRATOS_TIMEOUT}ms. Rerouting to local fallback...`);
+      recordFailure();
     } else {
       console.warn(`[API-SHIM] ❌ Upstream StratosAgent connection error: ${err.message}. Rerouting to local fallback...`);
+      recordFailure();
     }
     shouldFallback = true;
   }
@@ -435,10 +447,14 @@ app.post('/v1/messages', requireGatewaySecret, async (req, res) => {
 
   let shouldFallback = false;
   let response;
+  // EFL-014 circuit breaker: if the upstream has been failing, skip the proxy entirely
+  // and fail fast to the SAME fallback path below — no 8s timeout wait, no heap pile-up.
+  const breakerOpen = upstreamUnavailable();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), STRATOS_TIMEOUT);
 
   try {
+    if (breakerOpen) throw new Error('upstream-breaker-open');
     const proxyHeaders = { ...req.headers };
     delete proxyHeaders['x-atmos-gateway']; // never forward the gateway secret upstream
     // If the caller authenticated to the gateway via `Authorization: Bearer <gateway-secret>`
@@ -463,13 +479,20 @@ app.post('/v1/messages', requireGatewaySecret, async (req, res) => {
     if (!response.ok) {
       console.warn(`[API-SHIM] ⚠️ Upstream StratosAgent returned non-OK status: ${response.status}. Initiating fallback...`);
       shouldFallback = true;
+      recordFailure();
+    } else {
+      recordSuccess();
     }
   } catch (err) {
     clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
+    if (err.message === 'upstream-breaker-open') {
+      console.warn(`[API-SHIM] ⛔ Upstream breaker OPEN for ${STRATOS_AGENT_URL}; skipping proxy, failing fast to fallback.`);
+    } else if (err.name === 'AbortError') {
       console.warn(`[API-SHIM] ⏱️ Upstream StratosAgent timed out after ${STRATOS_TIMEOUT}ms. Rerouting to local fallback...`);
+      recordFailure();
     } else {
       console.warn(`[API-SHIM] ❌ Upstream StratosAgent connection error: ${err.message}. Rerouting to local fallback...`);
+      recordFailure();
     }
     shouldFallback = true;
   }
@@ -816,7 +839,8 @@ app.get('/health', (req, res) => {
     shim: 'Atmos Sovereign API Gateway',
     binding: '127.0.0.1',
     port: PORT,
-    upstream: STRATOS_AGENT_URL
+    upstream: STRATOS_AGENT_URL,
+    upstreamBreaker: breakerSnapshot()
   });
 });
 

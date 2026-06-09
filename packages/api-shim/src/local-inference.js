@@ -77,7 +77,7 @@ export class LocalInferenceEngine {
       }
 
       // 1. Search cognitive_skills
-      const skills = keep(await queryCognitiveSkill(prompt, limit).catch(() => []));
+      const skills = keep(await queryCognitiveSkill(prompt, limit, contextTag).catch(() => []));
       for (const item of skills) {
         try {
           const parsedAst = JSON.parse(item.ast_graph);
@@ -98,7 +98,7 @@ export class LocalInferenceEngine {
       }
 
       // 2. Search intercepted_reasoning
-      const reasoning = keep(await queryInterceptedReasoning(prompt, limit).catch(() => []));
+      const reasoning = keep(await queryInterceptedReasoning(prompt, limit, contextTag).catch(() => []));
       for (const item of reasoning) {
         contextBlocks.push({
           source: 'Intercepted Reasoning Trace',

@@ -66,7 +66,7 @@ classifies model/destination, not yet workspace placement).
   **TARGET** (NORTH_STAR refactor #5 / roadmap Phase 2).
 
 ### Execute
-- Local inference: Ollama `qwen2.5:7b` via the daemon (CURRENT; CPU-only VPS → ~100 s/reply).
+- Local inference: Ollama `gemma2:2b`/`gemma4:e4b` via the daemon (CURRENT; CPU-only VPS).
 - Skill execution: `src/evolution/skill-executor.js` — verify-before-execute; computational wasm
   skills really run; automation skills are signed replayable manifests; tampered skills refused
   (CURRENT).

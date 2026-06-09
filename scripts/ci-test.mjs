@@ -24,6 +24,7 @@ const SUITES = {
     'test-anthropic-adapter.mjs', 'test-model-manager.mjs', 'test-memory-window.mjs', 'test-config-intents.mjs',
     'test-content-orchestrator.mjs', 'test-standalone-graph.mjs',
     'test-local-inference-model.mjs',
+    'test-no-fake-model-ids.mjs',
     'test-acp.mjs', 'test-mcp-rce.mjs', 'test-v1-messages-route.mjs', 'test-gate-failclosed.mjs', 'test-approval-flow.mjs',
     'test-gateway-auth.mjs', 'test-active-vision-honesty.mjs',
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG

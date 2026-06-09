@@ -35,7 +35,7 @@ export function normalizeOllamaModelName(model, fallback = process.env.LOCAL_MOD
 
 export class LocalInferenceEngine {
   constructor(options = {}) {
-    this.modelName = options.modelName || 'Qwen-2.5-7B-Quantized-Local';
+    this.modelName = normalizeOllamaModelName(options.modelName); // honest: LOCAL_MODEL_DEFAULT (gemma2:2b), never a fake qwen id on receipts/responseModel
     this.verbose = options.verbose !== false;
   }
 

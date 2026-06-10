@@ -40,9 +40,9 @@ the durable substrate. **No code calls a model SDK outside the model-abstraction
   (`TaskClassifierRouter.classify()`) now delegates to this one router — no second divergent policy.
 
 ### CURRENT — local model ladder
-The local model manager selects among installed open-weight models (e.g. `qwen2.5:7b` via Ollama;
-Gemma 4 added as preferred-when-installed with fallback-safe behavior — it correctly falls through to
-`qwen2.5:7b` when not pulled). Local inference is verified real (`STATE_OF_REALITY.md`).
+The local model manager selects among installed open-weight models: `gemma2:2b` (fast default) +
+`gemma4:e4b` (chat/vision) via Ollama, fallback-safe (`qwen2.5:7b` was removed — see
+`docs/PROGRAM_STATUS.md`). Local inference is verified real (`STATE_OF_REALITY.md`).
 
 ### CURRENT — mesh as a routing target
 `../stratos-agent/src/routing/mesh-signal.js` lets the router send heavy work to the fleet **only if

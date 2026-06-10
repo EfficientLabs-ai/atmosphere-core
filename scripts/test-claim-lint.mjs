@@ -41,6 +41,27 @@ assert.ok(!v.some((x) => x.file.includes('operating')), 'out-of-scope dirs not s
 const v2 = lintClaims({ root, surfaces: ['docs/doctrine'] });
 assert.equal(v2.length, 0, 'doctrine fixture is clean');
 
+// New rules (#88/#95): live-qwen claim shapes caught; HISTORICAL/keyword mentions pass.
+w('NORTH_STAR.md', [
+  'round-trip verified: "double of 8" → qwen "16"',            // banned: arrow-qwen live shape
+  'qwen2.5:7b is now running on the box',                       // banned: live-claim verb shape
+  'served by the then-installed qwen2.5:7b; HISTORICAL — removed in task #43', // OK: no live shape
+  'routing keywords include qwen/llama for compat',             // OK: keyword mention
+].join('\n'));
+const v3 = lintClaims({ root, surfaces: ['NORTH_STAR.md'] });
+assert.equal(v3.length, 2, `qwen live shapes: want 2, got ${v3.length}: ${JSON.stringify(v3)}`);
+assert.ok(v3.every((x) => /qwen/i.test(x.why)));
+
+// Count reconciliation (#95): stale counts flagged against the real allowlist.
+import { lintCounts, actualSuiteCount } from './claim-lint.mjs';
+fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+fs.writeFileSync(path.join(root, 'scripts/ci-test.mjs'), "const S=['test-a.mjs','test-b.mjs','test-c.js'];");
+assert.equal(actualSuiteCount(root), 3);
+w('MODEL_ROUTING.md', ['covered by 99 hermetic tests', 'suite: 3 hermetic tests pass', 'historic note 77/77 suites claim-lint:allow'].join('\n'));
+const vc = lintCounts({ root, surfaces: ['MODEL_ROUTING.md'] });
+assert.equal(vc.length, 1, `want 1 stale count, got ${vc.length}: ${JSON.stringify(vc)}`);
+assert.ok(/99/.test(vc[0].text) && /actually has 3/.test(vc[0].why));
+
 // Banned list sanity: every rule has a why.
 for (const b of BANNED) assert.ok(b.why && b.re instanceof RegExp);
 

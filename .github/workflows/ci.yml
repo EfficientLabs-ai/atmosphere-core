@@ -38,3 +38,8 @@ jobs:
 
       - name: Run hermetic test suite
         run: node scripts/ci-test.mjs
+        env:
+          # The full MIT Composio catalog (services/composio/…, ~17 MB) is gitignored, so it is absent
+          # in CI — point the loader at the small committed fixture so the sovereign-Composio test is
+          # hermetic here. Local runs (with the real catalog present) leave this unset.
+          STRATOS_COMPOSIO_DATA: ${{ github.workspace }}/packages/stratos-agent/test/fixtures/composio-catalog.ci.json

@@ -25,7 +25,7 @@ const SUITES = {
     'test-content-orchestrator.mjs', 'test-standalone-graph.mjs',
     'test-local-inference-model.mjs',
     'test-acp.mjs', 'test-mcp-rce.mjs', 'test-v1-messages-route.mjs', 'test-gate-failclosed.mjs', 'test-approval-flow.mjs',
-    'test-gateway-auth.mjs',
+    'test-gateway-auth.mjs', 'test-active-vision-honesty.mjs',
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG
     // probe that needed a live vector store was removed in the consolidation):
     'test-task-router.js', 'test-classify-live.mjs',

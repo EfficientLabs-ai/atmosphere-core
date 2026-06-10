@@ -51,9 +51,9 @@ the honest current state; flips true when a real mesh node writes a fleet with `
 
 ### The local model ladder — CURRENT
 `packages/api-shim/src/model-manager.js` (+ tests) manages the local open-weight ladder. Today:
-**Ollama `qwen2.5:7b`** is the live local model. **Gemma 4** is in the ladder as preferred-when-installed
-with fallback-safe degradation, but `gemma4` is **not pulled on this box**, so it correctly falls
-through to `qwen2.5:7b`. The "cloud" upstream (`:5001`) is currently a **local-Ollama-backed stand-in**,
+**Ollama `gemma2:2b`** is the live local fast-default model and **`gemma4:e4b`** is the installed
+chat/vision model (`qwen2.5:7b` was removed — see `docs/PROGRAM_STATUS.md`); the ladder is
+fallback-safe with degradation. The "cloud" upstream (`:5001`) is currently a **local-Ollama-backed stand-in**,
 not a real frontier endpoint (STATE_OF_REALITY 🟡).
 
 ## Routing decision flow (today, honest)
@@ -66,7 +66,7 @@ prompt ──► task-router.js (classify) ──► model-router.js (sovereign 
        hard prompt + BYOK key configured ─┤ allow CLOUD (opt-in)
        /force-cloud ──────────────────────┤ allow CLOUD
        else ──────────────────────────────► LOCAL (default)  ──► model-manager.js ladder
-                                                                  (qwen2.5:7b live; gemma4 if pulled)
+                                                                  (gemma2:2b fast-default; gemma4:e4b chat/vision)
        heavy + live fleet (mesh-signal) ──► route to mesh (CURRENT gate; live mesh on path = TARGET)
 ```
 

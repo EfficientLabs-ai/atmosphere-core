@@ -97,7 +97,7 @@ StratosAgent never calls a vendor directly. Inference flows through the **Atmosp
 - **BYOK Universal Model Manager** (SoR ✅ built + tested 2026-06-08): OpenAI / Gemini / Anthropic natively + OpenRouter; real `fetch()` to official endpoints; keys read from env/vault and **never logged**. Without a key it falls back to local *by design*, not as a stub. A real end-to-end frontier call requires the user's own key.
 - **Mesh signal** (`routing/mesh-signal.js`, SoR real code): the router may route heavy work to the compute mesh **only if a real `fleet.json` reports nodes>0** — deny-by-default, **never invents peers**. It honestly returns "no mesh" until a live node writes a real fleet.
 
-The verified local inference path today is **Ollama `qwen2.5:7b`** on a CPU-only VPS (SoR: ~100 s per reply). Frontier-quality reasoning at low latency is a routing/compute concern, not a capability StratosAgent claims to own.
+The verified local inference path today is **Ollama `gemma2:2b`** (fast default; `gemma4:e4b` for chat/vision) on a CPU-only VPS. Frontier-quality reasoning at low latency is a routing/compute concern, not a capability StratosAgent claims to own.
 
 ---
 
@@ -145,9 +145,9 @@ The execution layer is not a greenfield spec — it maps to code in `packages/st
 
 | Doctrine concept | Real module(s) | Status — see SoR |
 |---|---|---|
-| Operating core / live bridge | `packages/api-shim` (PM2 `atmos-secure-bridge`, :4099) | ✅ daemon online, Telegram inbound, real `qwen2.5:7b` |
+| Operating core / live bridge | `packages/api-shim` (PM2 `atmos-secure-bridge`, :4099) | ✅ daemon online, Telegram inbound, real `gemma2:2b` |
 | Agent identity / self-awareness | `src/core/identity.js`, `src/security/did-generator.js` | ✅ introduces as StratosAgent + zero-ambient-authority model; fabricated readouts removed |
-| Reason/Execute via local model | Ollama `qwen2.5:7b` + `src/routing/model-router.js` | ✅ real local inference; ~100 s/reply (CPU-only) |
+| Reason/Execute via local model | Ollama `gemma2:2b`/`gemma4:e4b` + `src/routing/model-router.js` | ✅ real local inference (CPU-only) |
 | Sovereign model routing | `routing/model-router.js`, `api-shim/src/task-router.js` | ✅ LOCAL-default consolidated into live path (fixed a real sovereignty bug) |
 | BYOK cloud (opt-in) | `api-shim/src/routers/cloud-byok.js`, `anthropic-adapter.js` | ✅ built + tested 2026-06-08; falls back to local without a key |
 | Mesh routing signal | `routing/mesh-signal.js` | real code; honestly "no mesh" until a real `fleet.json` exists |

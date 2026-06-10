@@ -147,7 +147,7 @@ These are the Phase-1 / GTM-Rung-1 building blocks that `STATE_OF_REALITY.md` re
 and which we are *therefore permitted to lead with*:
 
 - **Local-first execution** — a running StratosAgent answering from a real local model (Ollama
-  `qwen2.5:7b`), with sovereign **local-default routing** and opt-in BYOK cloud behind a cost-approval
+  `gemma2:2b`), with sovereign **local-default routing** and opt-in BYOK cloud behind a cost-approval
   gate. *(Substrate for Rung 1 "Save Time" + Rung 2 routing.)*
 - **Conversation memory / context persistence** — durable per-chat memory and honest context-window
   management. The first concrete proof of the Context Doctrine: *nothing disappears.* *(Compounding.)*

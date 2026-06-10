@@ -27,6 +27,13 @@ A change merges only when ALL hold:
 2. **Codex verification on record** — an independent `mcp__codex__codex` review verdict
    (APPROVE / APPROVE_WITH_NOTES). Codex blocks the merge until clean; Gemini is the fallback
    verifier when Codex is unreachable. Two perspectives beat one perspective twice.
+   **Strictest-verdict-wins (#96):** Codex speaks through TWO surfaces — the MCP session and the
+   GitHub-side reviewer. Before ANY merge, check the PR for standing verdicts from BOTH; an
+   unresolved `REQUEST CHANGES` from either surface blocks the merge regardless of the other's
+   APPROVE. When the surfaces conflict, the stricter verdict holds and the founder decides.
+   Codex verdicts are verification evidence; merge authorization comes from ADR-0003's founder
+   mandate — and that mandate's scope is itself founder-adjustable at any time (pending question
+   queued to the founder via ShadowsAgent, 2026-06-11).
 3. **Behavioral check** — the thing was run and observed, not merely compiled.
 4. Reason + test + rollback note in the PR; docs reflect the new reality.
 

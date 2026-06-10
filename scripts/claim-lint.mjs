@@ -31,6 +31,9 @@ export const BANNED = [
   { re: /\bAI Sovereignty Audit\b(?!.*\b(deprecated|legacy|historical|archived)\b)/i, why: 'audit-consulting offer is deprecated (ADR-0001) — only mention as legacy/historical' },
   // Honesty: never claim an unconditional live/real-time feed where a fallback exists (EFL-010 class).
   { re: /\bpulled in real[- ]time\b/i, why: 'unconditional real-time claim (EFL-010 class) — use honest two-state framing' },
+  // #88/#95: qwen presented as the running/live model — it was removed (task #43). Vendor lists,
+  // routing keywords, and HISTORICAL-annotated mentions are fine; live-claim shapes are not.
+  { re: /(?:→|->)\s*qwen|qwen[\w.:-]*\s+(?:is\s+(?:now\s+)?|now\s+)(?:running|live|serving|installed|answering)/i, why: 'qwen presented as live/current — removed in task #43 (mark HISTORICAL or use the real model)' },
 ];
 
 /** Public-facing surfaces to lint (relative to repo root). */
@@ -53,6 +56,36 @@ function* filesUnder(p) {
   }
 }
 
+/**
+ * #95: suite/test-count reconciliation — doc claims like "82 hermetic tests" or "82/82" must match
+ * the actual ci-test.mjs allowlist (stale counts were exactly the drift the audit flagged).
+ */
+export function actualSuiteCount(root = ROOT) {
+  const m = fs.readFileSync(path.join(root, 'scripts/ci-test.mjs'), 'utf8');
+  return (m.match(/'test-[^']+\.(?:mjs|js)'/g) || []).length;
+}
+
+export function lintCounts({ root = ROOT, surfaces = SURFACES } = {}) {
+  const actual = actualSuiteCount(root);
+  const violations = [];
+  const shapes = [/(\d+)\s+hermetic\s+(?:tests?|suites?|assertions?)/i, /(\d+)\/(\d+)\s*(?:hermetic|tests?|suites?)?\s*(?:pass|green|suites)/i];
+  for (const s of surfaces) {
+    for (const f of filesUnder(path.join(root, s))) {
+      if (!/\.(md|mdx|txt)$/i.test(f)) continue;
+      fs.readFileSync(f, 'utf8').split('\n').forEach((text, i) => {
+        if (text.includes(ALLOW_MARKER)) return;
+        for (const re of shapes) {
+          const m = text.match(re);
+          if (m && parseInt(m[1], 10) !== actual) {
+            violations.push({ file: path.relative(root, f), line: i + 1, text: text.trim().slice(0, 120), why: `stale test/suite count ${m[1]} — the ci-test allowlist actually has ${actual}` });
+          }
+        }
+      });
+    }
+  }
+  return violations;
+}
+
 /** Lint the given surfaces. Returns [{file, line, text, why}] violations. */
 export function lintClaims({ root = ROOT, surfaces = SURFACES, banned = BANNED } = {}) {
   const violations = [];
@@ -73,7 +106,7 @@ export function lintClaims({ root = ROOT, surfaces = SURFACES, banned = BANNED }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  const v = lintClaims();
+  const v = [...lintClaims(), ...lintCounts()];
   if (v.length) {
     console.error(`❌ claim-lint: ${v.length} banned/false claim(s) on public surfaces:\n`);
     for (const x of v) console.error(`  ${x.file}:${x.line}  ${x.text}\n      → ${x.why}\n`);

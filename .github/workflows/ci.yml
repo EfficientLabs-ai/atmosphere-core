@@ -50,3 +50,11 @@ jobs:
         run: node scripts/check-carve-sync.mjs
         env:
           CARVE_SYNC_STRICT: '1'
+
+      - name: Honesty / claim gate (#77)
+        # Banned or known-false claims on public doc surfaces fail the build (ADR-0001/0002,
+        # EFL-007/EFL-010 classes). Allow marker for docs ABOUT a banned term: claim-lint:allow
+        run: node scripts/claim-lint.mjs
+
+      - name: Anonymization gate — public-surface staging (#77)
+        run: node scripts/check-anonymization.mjs org-flagship

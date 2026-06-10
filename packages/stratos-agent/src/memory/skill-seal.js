@@ -10,8 +10,10 @@
  * The seal binds skillId + wasmHash + metadata, so tampering ANY of them (including swapping the WASM
  * the hash points at) breaks verification. Fail-closed throughout.
  *
- * INTEGRATION (follow-up): P2pSkillSync.getSynchronizedSkills() should filter through verifySkillBlock()
- * against each peer's pinned origin bundle before returning blocks to the executor.
+ * INTEGRATION (done): P2pSkillSync routes every block through verifySkillBlock() — fail-closed
+ * requireSeal default, pinned trustedOrigins, provenance-based selfAuthored (never an in-band bit).
+ * See p2p-skill-sync.js verifyBlock()/filterVerifiedSkills() + test-p2p-skill-ingest.mjs (15 checks).
+ * NB: the PUBLIC StratosAgent copy keeps the "follow-up" wording — the caller is private-only there.
  */
 import crypto from 'node:crypto';
 import { signPayload, verifyPayload } from '../security/quantum-crypto.js';

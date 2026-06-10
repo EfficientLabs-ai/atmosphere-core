@@ -304,7 +304,7 @@ export class TelegramBridge {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...gatewayAuthHeaders() },
         body: JSON.stringify({
-          model: 'qwen-2.5-vlm-telegram-local',
+          model: this.telegramModel,
           messages: chatHistory.getMessages(chatId),
           conversationId: chatHistory.conversationId(chatId),
           stream: false
@@ -442,7 +442,7 @@ export class TelegramBridge {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...gatewayAuthHeaders() },
       body: JSON.stringify({
-        model: 'qwen-2.5-vlm-telegram-local',
+        model: this.telegramModel,
         messages: chatHistory.getMessages(chatId),
         conversationId,
         stream: false,

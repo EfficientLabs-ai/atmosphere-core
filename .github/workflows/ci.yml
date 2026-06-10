@@ -43,3 +43,11 @@ jobs:
           # in CI — point the loader at the small committed fixture so the sovereign-Composio test is
           # hermetic here. Local runs (with the real catalog present) leave this unset.
           STRATOS_COMPOSIO_DATA: ${{ github.workspace }}/packages/stratos-agent/test/fixtures/composio-catalog.ci.json
+
+      - name: Honesty / claim gate (#77)
+        # Banned or known-false claims on public doc surfaces fail the build (ADR-0001/0002,
+        # EFL-007/EFL-010 classes). Allow marker for docs ABOUT a banned term: claim-lint:allow
+        run: node scripts/claim-lint.mjs
+
+      - name: Anonymization gate — public-surface staging (#77)
+        run: node scripts/check-anonymization.mjs org-flagship

@@ -162,7 +162,7 @@ const SUITES = {
 // Hermetic suites that live in scripts/ (not packages/) — business-automation jobs. Mocked external
 // I/O (Stripe fetch + Telegram send injected), no live services, no real keys.
 const SCRIPTS_SUITES = {
-  'scripts': ['test-finance-digest.mjs'],
+  'scripts': ['test-finance-digest.mjs', 'test-claim-lint.mjs'],
 };
 
 const TIMEOUT_MS = 90_000;

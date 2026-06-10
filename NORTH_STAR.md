@@ -85,7 +85,7 @@ Honest status tags: **[LIVE]** wired and running · **[REAL/STANDALONE]** built 
 ├─────────────────────────────────────────────────────────────────────┤
 │ L1  NODE           sovereign local-first node: pipeline engine,       │
 │                    skill seal + PQC, broker, LanceDB RAG, Ollama      │
-│       Telegram→qwen2.5:7b [LIVE] · self-evolution OBS/LEARN/EXEC      │
+│       Telegram→gemma2:2b [LIVE] · self-evolution OBS/LEARN/EXEC       │
 │       [LIVE, flags ON, 5 wasm skills] · pipeline engine               │
 │       [REAL/STANDALONE] · broker/ACP [REAL/STANDALONE]               │
 ├─────────────────────────────────────────────────────────────────────┤

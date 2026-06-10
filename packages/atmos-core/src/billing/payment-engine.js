@@ -31,7 +31,8 @@ export class PaymentEngine {
 
   /**
    * Fetches the actual on-chain SOL balance for a given wallet address.
-   * If network is down or rate-limited, falls back to a simulated ledger amount.
+   * Fail-CLOSED: if the RPC is down/rate-limited this THROWS — it never fabricates a balance.
+   * A provenance/economic rail must not invent funds; callers handle the error explicitly.
    */
   async getLiveBalance(publicKeyStr) {
     try {
@@ -40,8 +41,9 @@ export class PaymentEngine {
       console.log(`📡 [x402 PaymentEngine] Live balance for ${publicKeyStr.slice(0, 8)}...: ${balance / LAMPORTS_PER_SOL} SOL`);
       return balance;
     } catch (err) {
-      console.warn(`⚠️ [x402 PaymentEngine] Live RPC balance query failed: ${err.message}. Falling back to offline balance.`);
-      return 1000000000; // 1 SOL mock fallback
+      // FAIL-CLOSED: never return a synthetic balance (was `return 1 SOL`). The economic layer is
+      // offline-only; a caller that needs a real balance must handle this error, not an invented number.
+      throw new Error(`[x402 PaymentEngine] live RPC balance query failed (${err.message}); refusing to fabricate a balance`);
     }
   }
 

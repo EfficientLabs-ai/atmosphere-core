@@ -14,7 +14,7 @@ This README leads with what is verified and working today, and marks everything 
 
 ## ✅ What's real today (verified)
 
-- **Local sovereign agent.** StratosAgent answers from a **real local `qwen2.5:7b`** (via Ollama) — zero
+- **Local sovereign agent.** StratosAgent answers from a **real local model** (`gemma2:2b` fast default, `gemma4:e4b` for chat/vision; via Ollama) — zero
   external API calls by default. It knows it is StratosAgent, runs a zero-ambient-authority permission
   model, and **remembers each conversation across turns** (durable per-chat memory, `/forget`).
 - **Messaging where you are.** A real two-way **Telegram** bridge, plus **Discord, Slack, Matrix, and
@@ -75,7 +75,7 @@ otherwise.
 graph TD
     subgraph Your Node (sovereign, local-first)
         CH[Telegram / Discord / Slack / Matrix / Signal] -->|owner-gated, secret-guarded| GW[Local API Gateway :4099]
-        GW -->|simple/automatable work| LI[Local open-weight model (Ollama qwen2.5:7b)]
+        GW -->|simple/automatable work| LI[Local open-weight model (Ollama gemma2:2b)]
         GW -->|heavier work, with cost-approval| BYOK[Your OWN provider key (BYOK)]
         GW --> MEM[(LanceDB semantic memory)]
     end

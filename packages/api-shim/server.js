@@ -15,7 +15,7 @@ import { complianceApprovalGate } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 import { requireGatewaySecret, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
-import { upstreamUnavailable, recordSuccess, recordFailure, breakerSnapshot } from './src/upstream-breaker.js';
+import { beginUpstreamAttempt, recordSuccess, recordFailure, isAvailabilityFailureStatus, breakerSnapshot } from './src/upstream-breaker.js';
 
 const localInference = new LocalInferenceEngine();
 const taskRouter = new TaskClassifierRouter({ verbose: true });
@@ -290,12 +290,14 @@ app.post('/v1/chat/completions', requireGatewaySecret, async (req, res) => {
   let response;
   // EFL-014 circuit breaker: if the upstream has been failing, skip the proxy entirely
   // and fail fast to the SAME fallback path below — no 8s timeout wait, no heap pile-up.
-  const breakerOpen = upstreamUnavailable();
+  // The attempt is generation-stamped so a stale in-flight completion can never flip
+  // the breaker after newer traffic already settled it (Codex review, PR #74).
+  const attempt = beginUpstreamAttempt();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), STRATOS_TIMEOUT);
 
   try {
-    if (breakerOpen) throw new Error('upstream-breaker-open');
+    if (!attempt.allowed) throw new Error('upstream-breaker-open');
     const proxyHeaders = { ...req.headers };
     delete proxyHeaders['x-atmos-gateway']; // never forward the gateway secret upstream
     // If the caller authenticated to the gateway via `Authorization: Bearer <gateway-secret>`
@@ -320,9 +322,12 @@ app.post('/v1/chat/completions', requireGatewaySecret, async (req, res) => {
     if (!response.ok) {
       console.warn(`[API-SHIM] ⚠️ Upstream StratosAgent returned non-OK status: ${response.status}. Initiating fallback...`);
       shouldFallback = true;
-      recordFailure();
+      // Availability accounting: 5xx/429 = unhealthy; any other response (incl. 4xx)
+      // proves the upstream is ALIVE even though this request falls back.
+      if (isAvailabilityFailureStatus(response.status)) recordFailure(attempt.gen);
+      else recordSuccess(attempt.gen);
     } else {
-      recordSuccess();
+      recordSuccess(attempt.gen);
     }
   } catch (err) {
     clearTimeout(timeoutId);
@@ -330,10 +335,10 @@ app.post('/v1/chat/completions', requireGatewaySecret, async (req, res) => {
       console.warn(`[API-SHIM] ⛔ Upstream breaker OPEN for ${STRATOS_AGENT_URL}; skipping proxy, failing fast to fallback.`);
     } else if (err.name === 'AbortError') {
       console.warn(`[API-SHIM] ⏱️ Upstream StratosAgent timed out after ${STRATOS_TIMEOUT}ms. Rerouting to local fallback...`);
-      recordFailure();
+      recordFailure(attempt.gen);
     } else {
       console.warn(`[API-SHIM] ❌ Upstream StratosAgent connection error: ${err.message}. Rerouting to local fallback...`);
-      recordFailure();
+      recordFailure(attempt.gen);
     }
     shouldFallback = true;
   }
@@ -449,12 +454,14 @@ app.post('/v1/messages', requireGatewaySecret, async (req, res) => {
   let response;
   // EFL-014 circuit breaker: if the upstream has been failing, skip the proxy entirely
   // and fail fast to the SAME fallback path below — no 8s timeout wait, no heap pile-up.
-  const breakerOpen = upstreamUnavailable();
+  // The attempt is generation-stamped so a stale in-flight completion can never flip
+  // the breaker after newer traffic already settled it (Codex review, PR #74).
+  const attempt = beginUpstreamAttempt();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), STRATOS_TIMEOUT);
 
   try {
-    if (breakerOpen) throw new Error('upstream-breaker-open');
+    if (!attempt.allowed) throw new Error('upstream-breaker-open');
     const proxyHeaders = { ...req.headers };
     delete proxyHeaders['x-atmos-gateway']; // never forward the gateway secret upstream
     // If the caller authenticated to the gateway via `Authorization: Bearer <gateway-secret>`
@@ -479,9 +486,12 @@ app.post('/v1/messages', requireGatewaySecret, async (req, res) => {
     if (!response.ok) {
       console.warn(`[API-SHIM] ⚠️ Upstream StratosAgent returned non-OK status: ${response.status}. Initiating fallback...`);
       shouldFallback = true;
-      recordFailure();
+      // Availability accounting: 5xx/429 = unhealthy; any other response (incl. 4xx)
+      // proves the upstream is ALIVE even though this request falls back.
+      if (isAvailabilityFailureStatus(response.status)) recordFailure(attempt.gen);
+      else recordSuccess(attempt.gen);
     } else {
-      recordSuccess();
+      recordSuccess(attempt.gen);
     }
   } catch (err) {
     clearTimeout(timeoutId);
@@ -489,10 +499,10 @@ app.post('/v1/messages', requireGatewaySecret, async (req, res) => {
       console.warn(`[API-SHIM] ⛔ Upstream breaker OPEN for ${STRATOS_AGENT_URL}; skipping proxy, failing fast to fallback.`);
     } else if (err.name === 'AbortError') {
       console.warn(`[API-SHIM] ⏱️ Upstream StratosAgent timed out after ${STRATOS_TIMEOUT}ms. Rerouting to local fallback...`);
-      recordFailure();
+      recordFailure(attempt.gen);
     } else {
       console.warn(`[API-SHIM] ❌ Upstream StratosAgent connection error: ${err.message}. Rerouting to local fallback...`);
-      recordFailure();
+      recordFailure(attempt.gen);
     }
     shouldFallback = true;
   }

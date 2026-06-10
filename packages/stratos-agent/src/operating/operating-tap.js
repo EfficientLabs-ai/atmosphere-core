@@ -209,7 +209,9 @@ export async function observe(o = {}) {
     let ended = null;
     try {
       const endOpts = { result: threw ? 'error' : 'ok', now };
-      const def = inj.receiptLog ? null : await defaultReceiptLog();
+      // ATOMIC default (Codex note on #98): used only when NEITHER field is injected —
+      // partial injection never mixes default signer with injected actor or vice versa.
+      const def = (inj.receiptLog || inj.actor_id) ? null : await defaultReceiptLog();
       endOpts.receiptLog = inj.receiptLog || (def && def.log) || undefined;
       endOpts.actor_id = inj.actor_id || (def && def.actor_id) || undefined;
       ended = core.endTrace(handle, endOpts);

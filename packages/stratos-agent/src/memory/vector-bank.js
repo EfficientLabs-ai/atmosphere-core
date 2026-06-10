@@ -97,7 +97,8 @@ export async function initializeMemorySchema() {
       new Field('trigger_intent', new Utf8()),
       new Field('vector', new FixedSizeList(VECTOR_DIM, new Field('item', new Float32()))),
       new Field('ast_graph', new Utf8()),
-      new Field('success_rate', new Float32())
+      new Field('success_rate', new Float32()),
+      new Field('context_tag', new Utf8())
     ]);
     await db.createEmptyTable('cognitive_skills', skillsSchema);
     console.log('✅ Created Table: cognitive_skills');
@@ -109,14 +110,42 @@ export async function initializeMemorySchema() {
       new Field('prompt_hash', new Utf8()),
       new Field('model_source', new Utf8()),
       new Field('reasoning_trace', new Utf8()),
-      new Field('vector', new FixedSizeList(VECTOR_DIM, new Field('item', new Float32())))
+      new Field('vector', new FixedSizeList(VECTOR_DIM, new Field('item', new Float32()))),
+      new Field('context_tag', new Utf8())
     ]);
     await db.createEmptyTable('intercepted_reasoning', reasoningSchema);
     console.log('✅ Created Table: intercepted_reasoning');
   }
+
+  // EFL-003 migration: tables created before the channel-isolation fix lack the `context_tag`
+  // column. Add it (default '' = global) so the live daemon's store self-migrates on boot —
+  // channel-tagged inserts/queries then work without losing any learned skills or traces.
+  for (const t of ['cognitive_skills', 'intercepted_reasoning']) {
+    if (!tableNames.includes(t)) continue; // a table freshly created above already has the column
+    try {
+      const table = await db.openTable(t);
+      const fields = (await table.schema()).fields.map((f) => f.name);
+      if (!fields.includes('context_tag')) {
+        await table.addColumns([{ name: 'context_tag', valueSql: "''" }]);
+        console.log(`✅ Migrated ${t}: added context_tag (EFL-003 channel isolation)`);
+      }
+    } catch (e) {
+      console.warn(`⚠️ context_tag migration on ${t} skipped: ${e.message}`);
+    }
+  }
 }
 
 // ==================== Layer 1: Ambient Memory API ====================
+
+// Cross-channel isolation (EFL-003): when a caller passes a channel/context tag (the per-channel
+// isolatedContextTag / conversationId from the chat path), restrict retrieval to rows stored under
+// THAT tag OR untagged/global rows ('') — so one channel/user's data can never bleed into another's.
+// A null/empty tag (internal callers like self-evolution) means "no filter" → global access preserved.
+function channelClause(col, contextTag) {
+  if (contextTag == null || contextTag === '') return null;
+  const safe = String(contextTag).replace(/'/g, "''");
+  return `${col} = '${safe}' OR ${col} = ''`;
+}
 
 export async function insertAmbientMemory({ source, content, tags = '' }) {
   const db = await getDatabase();
@@ -141,21 +170,14 @@ export async function queryAmbientMemory(queryText, limit = 5, contextTag = null
   const queryVector = await generateEmbedding(queryText);
 
   let search = table.vectorSearch(queryVector).limit(limit);
-
-  // Hard channel isolation: when a caller supplies the channel/context tag
-  // (e.g. the Slack/Discord/Telegram isolatedContextTag), restrict retrieval to
-  // vectors stored under that exact tag so context cannot bleed across channels.
-  if (contextTag) {
-    const safeTag = String(contextTag).replace(/'/g, "''");
-    search = search.where(`tags = '${safeTag}'`);
-  }
-
+  const clause = channelClause('tags', contextTag);
+  if (clause) search = search.where(clause);
   return await search.toArray();
 }
 
 // ==================== Layer 2: Cognitive Skills API ====================
 
-export async function insertCognitiveSkill({ skillId, triggerIntent, astGraph, successRate = 1.0 }) {
+export async function insertCognitiveSkill({ skillId, triggerIntent, astGraph, successRate = 1.0, contextTag = '' }) {
   const db = await getDatabase();
   const table = await db.openTable('cognitive_skills');
   const vector = await generateEmbedding(triggerIntent);
@@ -165,7 +187,8 @@ export async function insertCognitiveSkill({ skillId, triggerIntent, astGraph, s
     trigger_intent: triggerIntent,
     vector,
     ast_graph: typeof astGraph === 'string' ? astGraph : JSON.stringify(astGraph),
-    success_rate: parseFloat(successRate)
+    success_rate: parseFloat(successRate),
+    context_tag: contextTag || ''
   };
 
   // Upsert by skill_id: a skill is identified by its id, not by row count. Without this,
@@ -190,20 +213,20 @@ export async function getCognitiveSkillById(skillId) {
   return rows && rows.length ? rows[0] : null;
 }
 
-export async function queryCognitiveSkill(queryText, limit = 5) {
+export async function queryCognitiveSkill(queryText, limit = 5, contextTag = null) {
   const db = await getDatabase();
   const table = await db.openTable('cognitive_skills');
   const queryVector = await generateEmbedding(queryText);
 
-  return await table
-    .vectorSearch(queryVector)
-    .limit(limit)
-    .toArray();
+  let search = table.vectorSearch(queryVector).limit(limit);
+  const clause = channelClause('context_tag', contextTag);
+  if (clause) search = search.where(clause);
+  return await search.toArray();
 }
 
 // ==================== Layer 3: Intercepted Reasoning API ====================
 
-export async function insertInterceptedReasoning({ promptHash, modelSource, reasoningTrace }) {
+export async function insertInterceptedReasoning({ promptHash, modelSource, reasoningTrace, contextTag = '' }) {
   const db = await getDatabase();
   const table = await db.openTable('intercepted_reasoning');
   const vector = await generateEmbedding(reasoningTrace);
@@ -212,20 +235,21 @@ export async function insertInterceptedReasoning({ promptHash, modelSource, reas
     prompt_hash: promptHash,
     model_source: modelSource,
     reasoning_trace: reasoningTrace,
-    vector
+    vector,
+    context_tag: contextTag || ''
   };
 
   await table.add([record]);
   return record;
 }
 
-export async function queryInterceptedReasoning(queryText, limit = 5) {
+export async function queryInterceptedReasoning(queryText, limit = 5, contextTag = null) {
   const db = await getDatabase();
   const table = await db.openTable('intercepted_reasoning');
   const queryVector = await generateEmbedding(queryText);
 
-  return await table
-    .vectorSearch(queryVector)
-    .limit(limit)
-    .toArray();
+  let search = table.vectorSearch(queryVector).limit(limit);
+  const clause = channelClause('context_tag', contextTag);
+  if (clause) search = search.where(clause);
+  return await search.toArray();
 }

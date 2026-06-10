@@ -16,7 +16,7 @@
 | `STRATOS_EVOLUTION_EXECUTE` | EXECUTE: serve a PQC-verified learned skill before the LLM | OFF | **ON (=1)** | matching prompt answered from a verified skill (logged) |
 | `LOCAL_FALLBACK_ENABLED` | local inference fallback when the upstream agent is down | OFF | **ON (=true)** | upstream down → local answer, not 502 |
 | `ATMOS_UPSTREAM_BREAKER` | EFL-014 circuit breaker (default ON; `off` disables) | ON | **ON** | `/health` → `upstreamBreaker.state` |
-| `ATMOS_GATEWAY_SECRET` | gateway auth enforcement on spend + /mcp routes | unset = warn+allow (loopback) | **UNSET — founder-gated (#58)** | set → requests without the secret get 401 |
+| `ATMOS_GATEWAY_SECRET` | gateway auth enforcement on spend + /mcp routes | unset = warn+allow (loopback) | **SET — enforced 2026-06-11 (vault-hydrated #101; #58 CLOSED)** | set → requests without the secret get 401 |
 | `STRATOS_CLOUD_AUTO_ESCALATE` | router may auto-escalate to BYOK cloud on difficulty | OFF | **OFF** | cloud requires explicit opt-in + key |
 | `STRATOS_USER_MODEL` | dialectic per-conversation user model | ON | **ON** | `.stratos-user-model.db` WAL grows |
 | `STRATOS_MESH_AVAILABLE` / `STRATOS_FLEET` | mesh routing signal (deny-by-default, never invents peers) | OFF/unset | **OFF** | `meshAvailable()` false absent a live fleet.json |

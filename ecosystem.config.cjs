@@ -31,6 +31,15 @@
  * from the vault at deploy time (issue #58). This config only passes through process.env;
  * it never embeds a secret value.
  */
+// #58: hydrate ATMOS_GATEWAY_SECRET from the founder's vault at config-load time — the secret is
+// NEVER embedded in this file, never in shell history, and agents never generate/read it. The
+// founder creates the file (0600); if absent, the gateway stays in warn-and-allow loopback mode.
+const fs = require('node:fs');
+let GATEWAY_SECRET;
+try {
+  GATEWAY_SECRET = fs.readFileSync('/home/neo/vault/secrets/atmos-gateway-secret', 'utf8').trim() || undefined;
+} catch { GATEWAY_SECRET = undefined; }
+
 module.exports = {
   apps: [
     {
@@ -43,6 +52,8 @@ module.exports = {
       env: {
         PORT: '4099',
         LOCAL_FALLBACK_ENABLED: 'true',
+        // injected only when the founder has provisioned the vault file (see hydration header):
+        ...(GATEWAY_SECRET ? { ATMOS_GATEWAY_SECRET: GATEWAY_SECRET } : {}),
       },
     },
   ],

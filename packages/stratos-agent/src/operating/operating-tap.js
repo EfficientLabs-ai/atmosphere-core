@@ -53,6 +53,60 @@ async function loadCore() {
   return _core;
 }
 
+/**
+ * DEFAULT live receipt log (SPRINT_002 priority #2 / adversarial-audit bottleneck #2): the daemon
+ * previously minted NO receipts because endTrace only got a receiptLog when a caller injected one.
+ * Now the tap lazily builds a signed, append-only log at STRATOS_RECEIPTS (or
+ * <STRATOS_PROFILE_DIR|.stratos-profile>/live-receipts.jsonl) using this node's persisted keys.
+ * Fail-open like everything else here: ANY error → null → trace still lands, no receipt, side-logged.
+ */
+let _receipt = null; // { log, actor_id } | 'failed'
+async function defaultReceiptLog() {
+  if (_receipt === 'failed') return null;
+  if (_receipt) return _receipt;
+  try {
+    // NOTE: deliberately NOT importing evolution/self-evolution.js for its key loader — that module
+    // drags the full engine (LanceDB, compiler) and holds handles. Same persisted bundle shape, local.
+    const [led, fsMod, pathMod, qc] = await Promise.all([
+      import('../ledger/capability-receipt.js'),
+      import('node:fs'),
+      import('node:path'),
+      import('../security/quantum-crypto.js'),
+    ]);
+    const profile = process.env.STRATOS_PROFILE_DIR || '.stratos-profile';
+    const keyFile = process.env.STRATOS_NODE_KEYS || pathMod.join(profile, 'node-keys.json');
+    const dec = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
+    const enc = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
+    let keys;
+    try {
+      const raw = JSON.parse(fsMod.readFileSync(keyFile, 'utf8'));
+      keys = { publicKey: dec(raw.publicKey), privateKey: dec(raw.privateKey) };
+    } catch {
+      keys = qc.generateHybridKeyPair();
+      fsMod.mkdirSync(pathMod.dirname(keyFile), { recursive: true });
+      fsMod.writeFileSync(keyFile, JSON.stringify({ publicKey: enc(keys.publicKey), privateKey: enc(keys.privateKey) }), { mode: 0o600 });
+    }
+    const rp = process.env.STRATOS_RECEIPTS || pathMod.join(profile, 'live-receipts.jsonl');
+    const { originId } = await import('../memory/skill-seal.js');
+    const actor_id = originId(keys.publicKey);
+    const log = new led.ReceiptLog({
+      path: rp,
+      signer: led.makeReceiptSigner(keys.privateKey),
+      verifier: led.makeReceiptVerifier(keys.publicKey),
+      nodeId: actor_id,
+    });
+    _receipt = { log, actor_id };
+    return _receipt;
+  } catch (e) {
+    tapLog('default-receipt-log', e);
+    _receipt = 'failed';
+    return null;
+  }
+}
+
+/** Test-only: reset the cached default receipt log. */
+export function _resetTapReceiptLog() { _receipt = null; }
+
 /** Derive a stable per-day task path "live/<workspace>/<workflow>/<YYYY-MM-DD>" from meta. */
 function dayTaskPath(meta = {}, now = Date.now) {
   const day = new Date(now()).toISOString().slice(0, 10); // YYYY-MM-DD
@@ -155,8 +209,11 @@ export async function observe(o = {}) {
     let ended = null;
     try {
       const endOpts = { result: threw ? 'error' : 'ok', now };
-      if (inj.receiptLog) endOpts.receiptLog = inj.receiptLog;
-      if (inj.actor_id) endOpts.actor_id = inj.actor_id;
+      // ATOMIC default (Codex note on #98): used only when NEITHER field is injected —
+      // partial injection never mixes default signer with injected actor or vice versa.
+      const def = (inj.receiptLog || inj.actor_id) ? null : await defaultReceiptLog();
+      endOpts.receiptLog = inj.receiptLog || (def && def.log) || undefined;
+      endOpts.actor_id = inj.actor_id || (def && def.actor_id) || undefined;
       ended = core.endTrace(handle, endOpts);
     } catch (e) { tapLog('end-trace', e); }
 

@@ -110,7 +110,7 @@ Runtime that reads the graph, negotiates with the authority layer, and chooses t
 **user-owned policy.** MCP = default agent↔tool; A2A = default agent↔agent; Composio for integration breadth
 (Capability Registry, not thousands of hand-built connectors).
 
-- Local-first agent loop (Telegram bridge, real local `qwen2.5:7b` via Ollama, self-aware as StratosAgent,
+- Local-first agent loop (Telegram bridge, real local model `gemma2:2b`/`gemma4:e4b` via Ollama, self-aware as StratosAgent,
   honest readouts): ✅ shipped.
 - Folder-stage pipeline engine (ICM "folders over agents"; hash-freshness, human-editable intermediates): ✅ shipped.
 - Self-evolution loop (OBSERVE → LEARN → EXECUTE) for the **deterministic numeric-transform class only**, behind
@@ -243,7 +243,7 @@ This PRD is a **Vision + Architecture** document. The list below is a pointer, n
 audited truth is `STATE_OF_REALITY.md`. Nothing here may be described as "live" / "done" unless that file's
 ✅ WORKING column says so.
 
-**✅ Real today (per `STATE_OF_REALITY.md`):** local-first StratosAgent on the live bridge (real `qwen2.5:7b`),
+**✅ Real today (per `STATE_OF_REALITY.md`):** local-first StratosAgent on the live bridge (real `gemma2:2b`),
 agent self-awareness + honest readouts, per-chat conversation memory, real LanceDB + semantic embeddings
 (relevance-gated), real hybrid post-quantum crypto (FIPS 203/204), the folder-stage pipeline engine, the
 deterministic-class self-evolution loop (flag-gated), the real cross-machine P2P mesh on the operator's own fleet

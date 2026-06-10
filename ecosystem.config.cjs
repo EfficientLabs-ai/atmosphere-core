@@ -52,6 +52,12 @@ module.exports = {
       env: {
         PORT: '4099',
         LOCAL_FALLBACK_ENABLED: 'true',
+        // Live activation flags (ACTIVATION.md) — pinned so ANY --update-env reload is self-contained
+        // and can never silently regress the operating core / evolution loop (Codex #101 high):
+        STRATOS_OPERATING_CORE: '1',
+        STRATOS_EVOLUTION: '1',
+        STRATOS_EVOLUTION_OBSERVE: '1',
+        STRATOS_EVOLUTION_EXECUTE: '1',
         // injected only when the founder has provisioned the vault file (see hydration header):
         ...(GATEWAY_SECRET ? { ATMOS_GATEWAY_SECRET: GATEWAY_SECRET } : {}),
       },

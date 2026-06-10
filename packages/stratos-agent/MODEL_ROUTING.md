@@ -68,8 +68,8 @@ node writes `nodes>0 + cores>0`.
 - `routing: { saveApiSpend, costApproval: 'ask' | 'auto-local' | 'always-spend' }` — the cost-approval
   posture read by the gateway.
 
-The local-model ladder includes Gemma 4 as preferred-when-installed, fallback-safe (falls through to
-`qwen2.5:7b` when not pulled) — see `STATE_OF_REALITY.md`.
+The local-model ladder runs `gemma2:2b` (fast default) + `gemma4:e4b` (chat/vision), fallback-safe
+(`qwen2.5:7b` was removed) — see `STATE_OF_REALITY.md`.
 
 ---
 

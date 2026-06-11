@@ -172,10 +172,15 @@ export function computeReceiptVerify(trace, o = {}) {
       const v = verifier ? log.verify({ requireSig: true }) : log.verify();
       result.chainOk = v.ok === true;
       if (!v.ok) result.reason = v.reason || 'chain verify failed';
-      // If a verifier exists but we never compared the hash (no receipt object passed), use the log head.
+      // If a verifier exists but we never compared the hash (no receipt object passed), find the
+      // TRACE'S OWN receipt in the chain (ref === task_id, newest match) — the log head is wrong
+      // the moment newer traffic lands, and doubly wrong once rotation has moved older receipts
+      // into segments. The head remains the last-resort fallback for chains without matching refs.
       if (result.inputHashMatches === null && log.chain.length) {
-        const head = log.chain[log.chain.length - 1];
-        if (head && typeof head.input_hash === 'string') result.inputHashMatches = traceInputHash(trace) === head.input_hash;
+        const tid = trace && trace.task_id;
+        const own = tid ? [...log.chain].reverse().find((r) => r && r.ref === tid) : null;
+        const cand = own || log.chain[log.chain.length - 1];
+        if (cand && typeof cand.input_hash === 'string') result.inputHashMatches = traceInputHash(trace) === cand.input_hash;
       }
     } else if (receipt) {
       // We have a receipt but no way to check its signature — input-hash only (honest partial).

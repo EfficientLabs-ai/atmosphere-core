@@ -1608,11 +1608,17 @@ function cmdEval(rest, d = {}) {
   // the trace-integrity criterion honestly reports "unverified" rather than fabricating a pass.
   const pub = d.evalPublicKeyBundle || loadNodePublicBundle(nodeKeysPath());
   const verifier = pub ? makeReceiptVerifier(pub) : undefined;
-  // If the trace's receipt lives in a JSONL log on disk, hand the log so the REAL chain is replayed.
+  // If the trace's receipt lives in a JSONL log on disk, hand the FULL history (rotation segments +
+  // active file, genesis-rooted) so the REAL chain is replayed — a receipt that rotation has moved
+  // into a *.segment is still found and verified. receipt_path records the log BASE path; segments
+  // derive from it.
   let receiptLog;
   const rp = trace.receipt_path;
-  if (verifier && rp && !String(rp).startsWith('(in-memory)') && fs.existsSync(rp)) {
-    try { receiptLog = new ReceiptLog({ path: rp, verifier }); } catch { receiptLog = undefined; }
+  if (verifier && rp && !String(rp).startsWith('(in-memory)')) {
+    try {
+      const entries = ReceiptLog.loadChainEntries(String(rp));
+      if (entries.length) { receiptLog = new ReceiptLog({ verifier }); receiptLog.chain = entries; }
+    } catch { receiptLog = undefined; }
   }
 
   let out;

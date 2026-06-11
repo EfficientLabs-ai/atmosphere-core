@@ -5,11 +5,13 @@
 //   2. pairing request: self-certifying + signed; tamper/did-mismatch fail closed.
 //   3. approve: REFUSES without a fingerprint, REFUSES a wrong fingerprint (the comparison IS the
 //      ceremony — no blind TOFU), signs a grant on the correct one.
-//   4. grant verification: ok-path; field tamper fails; a FOREIGN owner key fails; a pinned owner
-//      mismatch fails even for an internally-valid grant; pinned match passes.
+//   4. grant verification: SYMMETRIC — owner fingerprint required on first accept (MITM grant
+//      fails the human comparison); node binding refuses replay to another device; field tamper
+//      and foreign owners fail closed; a pinned owner overrides and needs no fingerprint.
 //   5. runtime storage (agent-config): owner identity + paired nodes round-trip; re-pair replaces.
-//   6. END-TO-END through the real CLI: device B requests → owner approves (fingerprint) →
-//      device B accepts + pins. Two separate profile dirs = two devices.
+//   6. END-TO-END through the real CLI: device B requests → owner approves (node fingerprint) →
+//      device B accepts (owner fingerprint) + pins in the SEPARATE pairedOwner slot; replay to a
+//      third device refused. Separate profile dirs = separate devices.
 import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -74,24 +76,40 @@ await ok('approve: refuses without/with-wrong fingerprint; correct fingerprint �
   assert.ok(approvePairing({ ownerKeys: owner, request: req, expectedFingerprint: fpLoose, now }));
 });
 
-await ok('grant verification: ok · tamper fails · foreign owner fails · pin enforced', () => {
+await ok('grant verification: SYMMETRIC ceremony — owner fingerprint required on first accept; node binding; pin enforced', () => {
   const req = createPairingRequest({ nodeKeys: nodeB, now });
   const grant = approvePairing({ ownerKeys: owner, request: req, expectedFingerprint: fingerprint(nodeB.publicKey), now });
-  assert.strictEqual(verifyPairingGrant(grant).ok, true);
-  // tamper any signed field
+  const ownerFp = fingerprint(owner.publicKey);
+  // NO blind TOFU in the accept direction either: without pin AND without the owner fingerprint → refused.
+  assert.strictEqual(verifyPairingGrant(grant).ok, false, 'first accept without owner fingerprint refused');
+  assert.match(verifyPairingGrant(grant).reason, /no blind TOFU/i);
+  // wrong owner fingerprint → refused; right one → ok.
+  assert.strictEqual(verifyPairingGrant(grant, { expectedOwnerFingerprint: 'dead-beef-dead-beef' }).ok, false);
+  assert.strictEqual(verifyPairingGrant(grant, { expectedOwnerFingerprint: ownerFp }).ok, true);
+  // node binding: a grant for node B refuses to verify as node C (replay protection).
+  const nodeC = generateHybridKeyPair();
+  assert.strictEqual(
+    verifyPairingGrant(grant, { expectedOwnerFingerprint: ownerFp, expectedNodeDid: originId(nodeC.publicKey) }).ok,
+    false, 'grant replayed to a different node refused');
+  assert.strictEqual(
+    verifyPairingGrant(grant, { expectedOwnerFingerprint: ownerFp, expectedNodeDid: originId(nodeB.publicKey) }).ok,
+    true, 'grant accepted on the node it was minted for');
+  // tamper any signed field → refused even with the right fingerprint.
   const g1 = JSON.parse(JSON.stringify(grant)); g1.granted_at += 1;
-  assert.strictEqual(verifyPairingGrant(g1).ok, false);
-  // a FOREIGN owner forges a grant claiming the real owner's did → did/key mismatch
+  assert.strictEqual(verifyPairingGrant(g1, { expectedOwnerFingerprint: ownerFp }).ok, false);
+  // a FOREIGN owner claiming the real owner's did → did/key mismatch.
   const mallory = generateHybridKeyPair();
+  const malloryFp = fingerprint(mallory.publicKey);
   const forged = approvePairing({ ownerKeys: { ...mallory, ownerDid: originId(mallory.publicKey) }, request: req, expectedFingerprint: fingerprint(nodeB.publicKey), now });
   forged.owner_did = owner.ownerDid; // claim to be the real owner
-  assert.strictEqual(verifyPairingGrant(forged).ok, false, 'did does not match embedded key');
-  // pin: a grant from a DIFFERENT (internally valid) owner is refused when the pin is set
+  assert.strictEqual(verifyPairingGrant(forged, { expectedOwnerFingerprint: malloryFp }).ok, false, 'did does not match embedded key');
+  // an interceptor self-issuing a grant fails the OWNER-fingerprint comparison (the MITM case).
   const forged2 = approvePairing({ ownerKeys: { ...mallory, ownerDid: originId(mallory.publicKey) }, request: req, expectedFingerprint: fingerprint(nodeB.publicKey), now });
-  assert.strictEqual(verifyPairingGrant(forged2).ok, true, 'internally valid on its own');
+  assert.strictEqual(verifyPairingGrant(forged2, { expectedOwnerFingerprint: ownerFp }).ok, false, 'MITM grant fails the human comparison');
+  // pin: a foreign (internally-valid) owner is refused once the real owner is pinned.
   const pinned = Object.fromEntries(Object.entries(owner.publicKey).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
   assert.strictEqual(verifyPairingGrant(forged2, { pinnedOwnerPublicKey: pinned }).ok, false, 'pin rejects a foreign owner');
-  assert.strictEqual(verifyPairingGrant(grant, { pinnedOwnerPublicKey: pinned }).ok, true, 'pin accepts the real owner');
+  assert.strictEqual(verifyPairingGrant(grant, { pinnedOwnerPublicKey: pinned }).ok, true, 'pin accepts the real owner (no fingerprint needed once pinned)');
 });
 
 await ok('runtime storage: owner identity + paired nodes round-trip; re-pair replaces', async () => {
@@ -109,6 +127,10 @@ await ok('runtime storage: owner identity + paired nodes round-trip; re-pair rep
     const nodes = mod.getPairedNodes();
     assert.strictEqual(nodes.length, 2);
     assert.strictEqual(nodes.find((n) => n.node_did === 'did:atmos:b1').node_public_key.x, 'k1-rotated');
+    // The PIN lives in its own slot: setting a LOCAL owner identity never clobbers it.
+    mod.setPairedOwner('did:atmos:pinned', { x: 'pin' });
+    mod.setOwnerIdentity('did:atmos:local-owner', { x: 'local' });
+    assert.strictEqual(mod.getPairedOwner().owner_did, 'did:atmos:pinned', 'local owner identity cannot clobber the pin');
   } finally { process.chdir(prev); }
 });
 
@@ -148,12 +170,37 @@ await ok('END-TO-END via the real CLI: request → approve(fingerprint) → acce
   const rList = run(devOwner, ownerEnv, ['pair', 'list']);
   assert.match(rList.stdout, /did:atmos/, 'paired node listed');
 
-  // device B: accept verifies + pins the owner
-  const rAcc = run(devNew, { STRATOS_NODE_KEYS: newKeys }, ['pair', 'accept', grantFile]);
+  // the OWNER's fingerprint, read off the owner device ('stratos owner')
+  const rOwner = run(devOwner, ownerEnv, ['owner']);
+  assert.strictEqual(rOwner.status, 0, rOwner.stderr);
+  const ownerFp = /([0-9a-f]{4}(?:-[0-9a-f]{4}){3})/.exec(rOwner.stdout)?.[1];
+  assert.ok(ownerFp, 'owner fingerprint printed');
+
+  // device B: accept WITHOUT the owner fingerprint refuses (symmetric ceremony, first accept)
+  const rAccNoFp = run(devNew, { STRATOS_NODE_KEYS: newKeys }, ['pair', 'accept', grantFile]);
+  assert.strictEqual(rAccNoFp.status, 1, 'first accept without owner fingerprint refused');
+  // with the WRONG owner fingerprint refuses
+  const rAccBadFp = run(devNew, { STRATOS_NODE_KEYS: newKeys }, ['pair', 'accept', grantFile, '--owner-fingerprint', '0000-0000-0000-0000']);
+  assert.strictEqual(rAccBadFp.status, 1, 'wrong owner fingerprint refused');
+  // with the fingerprint the human read off the owner device → verifies + PINS (pairedOwner slot)
+  const rAcc = run(devNew, { STRATOS_NODE_KEYS: newKeys }, ['pair', 'accept', grantFile, '--owner-fingerprint', ownerFp]);
   assert.strictEqual(rAcc.status, 0, rAcc.stdout + rAcc.stderr);
   assert.match(rAcc.stdout, /paired to owner/, 'accept confirms');
   const runtime = JSON.parse(fs.readFileSync(path.join(devNew, '.stratos-profile', 'runtime-state.json'), 'utf8'));
-  assert.ok(runtime.ownerIdentity?.owner_did?.startsWith('did:atmos:'), 'owner PINNED on the new device');
+  assert.ok(runtime.pairedOwner?.owner_did?.startsWith('did:atmos:'), 'owner PINNED in its own slot on the new device');
+
+  // once pinned, a re-accept needs no fingerprint (the pin is the authority)
+  const rAcc2 = run(devNew, { STRATOS_NODE_KEYS: newKeys }, ['pair', 'accept', grantFile]);
+  assert.strictEqual(rAcc2.status, 0, 'pinned re-accept works without fingerprint');
+
+  // REPLAY: the same grant on a THIRD device (different node keys) is refused
+  const devThird = path.join(TMP, 'cli-third'); fs.mkdirSync(devThird, { recursive: true });
+  const thirdNode = generateHybridKeyPair();
+  const thirdKeys = path.join(devThird, 'node-keys.json');
+  fs.writeFileSync(thirdKeys, JSON.stringify({ publicKey: e(thirdNode.publicKey), privateKey: e(thirdNode.privateKey) }));
+  const rReplay = run(devThird, { STRATOS_NODE_KEYS: thirdKeys }, ['pair', 'accept', grantFile, '--owner-fingerprint', ownerFp]);
+  assert.strictEqual(rReplay.status, 1, 'grant replay to a different node refused');
+  assert.match(rReplay.stdout + rReplay.stderr, /different node/, 'replay refusal names the reason');
 
   // a tampered grant is refused on accept
   const bad = JSON.parse(fs.readFileSync(grantFile, 'utf8')); bad.granted_at += 1;

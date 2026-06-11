@@ -226,6 +226,18 @@ export function setOwnerIdentity(ownerDid, ownerPublicKeyB64) {
     return s.ownerIdentity;
   });
 }
+// The PINNED owner this device accepted a pairing-grant from — a SEPARATE slot from
+// ownerIdentity (which records the LOCAL owner identity created by `stratos owner`). Keeping them
+// apart means running `stratos owner` on a paired node can never clobber the pin (Codex finding).
+export function getPairedOwner() { return loadRuntime().pairedOwner || null; }
+export function setPairedOwner(ownerDid, ownerPublicKeyB64) {
+  return withLock(() => {
+    const s = loadRuntime();
+    s.pairedOwner = { owner_did: String(ownerDid), owner_public_key: ownerPublicKeyB64 };
+    saveRuntime(s);
+    return s.pairedOwner;
+  });
+}
 export function getPairedNodes() { return loadRuntime().pairedNodes || []; }
 export function addPairedNode(entry) {
   if (!entry?.node_did) throw new Error('paired-node entry needs node_did');

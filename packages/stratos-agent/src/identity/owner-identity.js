@@ -12,8 +12,11 @@
  *            → the request's signature is verified, the fingerprint MUST match what the human
  *              supplied (no TOFU — the comparison is the ceremony), and the owner key signs a
  *              pairing-grant. The pairing is recorded in runtime state.
- *   node B:  `stratos pair accept <grant>`      → verifies the grant (both signature halves), PINS
- *            the owner's public key; future grants/commands must verify against the pinned owner.
+ *   node B:  `stratos pair accept <grant> --owner-fingerprint <fp>`
+ *            → verifies the grant is for THIS node (replay protection), verifies both signature
+ *              halves, compares the OWNER's fingerprint (read off the owner device — required on
+ *              first accept; the ceremony is symmetric, no blind trust in EITHER direction), then
+ *              PINS the owner's public key; future grants must verify against the pin.
  *
  * FAIL-CLOSED everywhere: a malformed request, a DID that doesn't match its embedded key, a missing
  * or wrong fingerprint, a bad signature half — each refuses loudly. Nothing here touches the
@@ -64,6 +67,7 @@ export function loadOrCreateOwnerKeys({
   const keyFile = file || path.join(profileDir, 'owner-keys.json');
   let keys;
   if (fs.existsSync(keyFile)) {
+    try { fs.chmodSync(keyFile, 0o600); } catch { /* permission hygiene is best-effort on foreign FS */ }
     const raw = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
     keys = { publicKey: dec(raw.publicKey), privateKey: dec(raw.privateKey) };
   } else {
@@ -124,8 +128,7 @@ export function approvePairing({ ownerKeys, request, expectedFingerprint, now = 
   if (!expectedFingerprint) {
     throw new Error('refusing to approve without a fingerprint — read it off the requesting device and pass it (the comparison IS the ceremony)');
   }
-  const norm = (s) => String(s).toLowerCase().replace(/[^a-f0-9]/g, '');
-  if (norm(expectedFingerprint) !== norm(v.nodeFingerprint)) {
+  if (normFp(expectedFingerprint) !== normFp(v.nodeFingerprint)) {
     throw new Error(`fingerprint mismatch: expected ${v.nodeFingerprint}, got "${expectedFingerprint}" — wrong device or an interception attempt; NOT pairing`);
   }
   const g = {
@@ -140,20 +143,38 @@ export function approvePairing({ ownerKeys, request, expectedFingerprint, now = 
   return g;
 }
 
+const normFp = (s) => String(s).toLowerCase().replace(/[^a-f0-9]/g, '');
+
 /**
- * Verify a pairing grant. With `pinnedOwnerPublicKey` (node B after first accept, or any node that
- * already knows its owner) the grant must be signed by THAT owner — a different owner key is
- * rejected even if its grant is internally valid. Without a pin (first accept), the embedded owner
- * key is used and the CALLER must pin it after the human confirms the OWNER fingerprint.
+ * Verify a pairing grant — the ceremony is SYMMETRIC, no blind trust in either direction:
+ *  - `expectedNodeDid` binds the grant to THIS device: a grant minted for node B replayed onto
+ *    node C is refused (the accepting CLI always passes its own node identity).
+ *  - First accept (no pin yet) REQUIRES `expectedOwnerFingerprint` — the value the human read off
+ *    the owner device (`stratos owner`). Without it, an interceptor who saw the request could
+ *    self-issue a grant and become the pinned owner; the human comparison closes that, exactly
+ *    like the request-side fingerprint closes the reverse direction.
+ *  - With `pinnedOwnerPublicKey` (already paired), the grant must be signed by THAT owner — a
+ *    different owner key is rejected even if its grant is internally valid.
  */
-export function verifyPairingGrant(grant, { pinnedOwnerPublicKey = null } = {}) {
+export function verifyPairingGrant(grant, { pinnedOwnerPublicKey = null, expectedOwnerFingerprint = null, expectedNodeDid = null } = {}) {
   try {
     if (!grant || grant.kind !== 'pairing-grant' || !grant.owner_public_key || !grant.node_public_key || !grant.sig) {
       return { ok: false, reason: 'malformed pairing grant' };
     }
+    if (expectedNodeDid && grant.node_did !== expectedNodeDid) {
+      return { ok: false, reason: `grant is for a different node (${grant.node_did}) — refusing to accept it here (replay protection)` };
+    }
     const ownerPub = pinnedOwnerPublicKey
       ? (typeof pinnedOwnerPublicKey.ed25519Der === 'string' ? dec(pinnedOwnerPublicKey) : pinnedOwnerPublicKey)
       : dec(grant.owner_public_key);
+    if (!pinnedOwnerPublicKey) {
+      if (!expectedOwnerFingerprint) {
+        return { ok: false, reason: 'no pinned owner and no owner fingerprint supplied — refusing first accept without the human comparison (no blind TOFU in either direction)' };
+      }
+      if (normFp(expectedOwnerFingerprint) !== normFp(fingerprint(ownerPub))) {
+        return { ok: false, reason: `owner fingerprint mismatch: grant is signed by ${fingerprint(ownerPub)} — wrong owner or an interception attempt` };
+      }
+    }
     if (originId(ownerPub) !== grant.owner_did) {
       return { ok: false, reason: pinnedOwnerPublicKey ? 'grant owner_did does not match the PINNED owner key' : 'owner_did does not match the embedded owner key' };
     }

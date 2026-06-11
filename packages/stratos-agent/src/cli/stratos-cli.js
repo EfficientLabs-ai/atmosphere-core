@@ -876,7 +876,10 @@ function cmdPair(rest, deps) {
       `  ${C.g}approve${C.x} <request.json> --fingerprint <fp>  On the OWNER node: verify + sign the grant.`,
       `      ${C.y}Refuses without --fingerprint${C.x} ${C.d}— pass the value the human read off the new device;`,
       `      the comparison IS the ceremony (no blind trust-on-first-use).${C.x}`,
-      `  ${C.g}accept${C.x}  <grant.json>                       On the NEW node: verify the grant + PIN the owner key`,
+      `  ${C.g}accept${C.x}  <grant.json> --owner-fingerprint <fp>`,
+      `      On the NEW node: verify the grant is for THIS node, compare the OWNER's fingerprint`,
+      `      (read off the owner device — ${C.y}required on first accept${C.x}${C.d}), then PIN the owner key.`,
+      `      Once pinned, later grants verify against the pin and need no fingerprint.${C.x}`,
       `  ${C.g}list${C.x}                                       Nodes paired on this device`,
       '',
       `  ${C.d}Honest scope: identity + ceremony + pinning are live; mesh-side command enforcement and`,
@@ -912,15 +915,30 @@ function cmdPair(rest, deps) {
     }
     if (sub === 'accept') {
       const file = rest[1];
-      if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair accept <grant.json>${C.x}`] };
+      const ofpIdx = rest.indexOf('--owner-fingerprint');
+      const ownerFp = ofpIdx >= 0 ? rest[ofpIdx + 1] : null;
+      if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair accept <grant.json> [--owner-fingerprint <fp>]${C.x}`] };
       const grant = readJson(file);
-      const pinned = deps.config.getOwnerIdentity?.();
-      const v = ownerIdentity.verifyPairingGrant(grant, { pinnedOwnerPublicKey: pinned ? pinned.owner_public_key : null });
-      if (!v.ok) return { code: 1, lines: [`${C.r}✗ grant REFUSED: ${v.reason}${C.x}`] };
-      // First accept PINS the owner; later grants must verify against the pin (enforced above).
-      try { deps.config.setOwnerIdentity?.(v.ownerDid, grant.owner_public_key); } catch { /* runtime store optional in minimal deps */ }
+      // Bind acceptance to THIS device's node identity — a grant minted for another node is
+      // refused here (replay protection). The accepting device must hold its node keys.
+      const myDid = originId(loadNodeKeypair().publicKey);
+      // The PIN lives in its own slot (pairedOwner) — a LOCAL owner identity created by
+      // 'stratos owner' on this device can never clobber it.
+      const pinned = deps.config.getPairedOwner?.();
+      const v = ownerIdentity.verifyPairingGrant(grant, {
+        pinnedOwnerPublicKey: pinned ? pinned.owner_public_key : null,
+        expectedOwnerFingerprint: ownerFp, // REQUIRED on first accept — the verifier refuses without it
+        expectedNodeDid: myDid,
+      });
+      if (!v.ok) {
+        const hint = /no pinned owner and no owner fingerprint/.test(v.reason)
+          ? [`${C.d}First pairing: run ${C.x}stratos owner${C.d} on the OWNER device, read its fingerprint aloud, then re-run with --owner-fingerprint <fp> — the human comparison is the ceremony, in BOTH directions.${C.x}`]
+          : [];
+        return { code: 1, lines: [`${C.r}✗ grant REFUSED: ${v.reason}${C.x}`, ...hint] };
+      }
+      try { deps.config.setPairedOwner?.(v.ownerDid, grant.owner_public_key); } catch { /* runtime store optional in minimal deps */ }
       return { code: 0, lines: [
-        `${C.g}✓ paired to owner ${didShort(v.ownerDid)}${C.x} ${C.d}(owner fingerprint ${v.ownerFingerprint} — confirm with the owner once)${C.x}`,
+        `${C.g}✓ paired to owner ${didShort(v.ownerDid)}${C.x} ${C.d}(owner fingerprint ${v.ownerFingerprint})${C.x}`,
         `${C.d}owner key ${pinned ? 'matched the existing pin' : 'PINNED on this device'}; future grants must verify against it.${C.x}`,
       ] };
     }

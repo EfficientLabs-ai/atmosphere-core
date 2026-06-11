@@ -255,7 +255,9 @@ function cmdReceipt(rest, d = {}) {
     ] };
   }
 
-  // export + summary read the live receipts.jsonl.
+  // export + summary read the FULL receipt history: archived rotation segments (oldest first) +
+  // the active file — rotation never silently shrinks what this surface reports (segment-aware
+  // since the rotation feature landed; control lines are lineage, not receipts, and are skipped).
   const pArg = rest.find((a, i) => i > 0 && a !== '--since' && !/^\d+$/.test(a) && rest[i - 1] !== '--since');
   const p = receiptsPath(sub === 'export' ? undefined : pArg);
   const kf = nodeKeysPath();
@@ -263,8 +265,10 @@ function cmdReceipt(rest, d = {}) {
   const verifier = pub ? makeReceiptVerifier(pub) : null;
 
   let log;
-  try { log = new ReceiptLog({ path: fs.existsSync(p) ? p : null, verifier }); }
-  catch (e) { return { code: 1, lines: [`${C.r}could not read receipts: ${e.message}${C.x}`] }; }
+  try {
+    log = new ReceiptLog({ verifier });
+    log.chain = ReceiptLog.loadChainEntries(p); // genesis-rooted full history across segments
+  } catch (e) { return { code: 1, lines: [`${C.r}could not read receipts: ${e.message}${C.x}`] }; }
 
   if (sub === 'export') {
     if (!log.length) {
@@ -1604,11 +1608,17 @@ function cmdEval(rest, d = {}) {
   // the trace-integrity criterion honestly reports "unverified" rather than fabricating a pass.
   const pub = d.evalPublicKeyBundle || loadNodePublicBundle(nodeKeysPath());
   const verifier = pub ? makeReceiptVerifier(pub) : undefined;
-  // If the trace's receipt lives in a JSONL log on disk, hand the log so the REAL chain is replayed.
+  // If the trace's receipt lives in a JSONL log on disk, hand the FULL history (rotation segments +
+  // active file, genesis-rooted) so the REAL chain is replayed — a receipt that rotation has moved
+  // into a *.segment is still found and verified. receipt_path records the log BASE path; segments
+  // derive from it.
   let receiptLog;
   const rp = trace.receipt_path;
-  if (verifier && rp && !String(rp).startsWith('(in-memory)') && fs.existsSync(rp)) {
-    try { receiptLog = new ReceiptLog({ path: rp, verifier }); } catch { receiptLog = undefined; }
+  if (verifier && rp && !String(rp).startsWith('(in-memory)')) {
+    try {
+      const entries = ReceiptLog.loadChainEntries(String(rp));
+      if (entries.length) { receiptLog = new ReceiptLog({ verifier }); receiptLog.chain = entries; }
+    } catch { receiptLog = undefined; }
   }
 
   let out;

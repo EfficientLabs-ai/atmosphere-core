@@ -172,10 +172,19 @@ export function computeReceiptVerify(trace, o = {}) {
       const v = verifier ? log.verify({ requireSig: true }) : log.verify();
       result.chainOk = v.ok === true;
       if (!v.ok) result.reason = v.reason || 'chain verify failed';
-      // If a verifier exists but we never compared the hash (no receipt object passed), use the log head.
+      // If a verifier exists but we never compared the hash (no receipt object passed), locate the
+      // TRACE'S OWN receipt precisely — never by log head (stale the moment newer traffic lands;
+      // doubly wrong after rotation) and never by leaf task_id (not unique across tasks/days):
+      //   1. by the receipt_id the trace recorded at minting (traces written since rotation landed);
+      //   2. else by exact content binding: does ANY receipt in this VERIFIED chain carry this
+      //      trace's input hash? A tampered trace hashes differently → nothing matches → false.
       if (result.inputHashMatches === null && log.chain.length) {
-        const head = log.chain[log.chain.length - 1];
-        if (head && typeof head.input_hash === 'string') result.inputHashMatches = traceInputHash(trace) === head.input_hash;
+        const want = traceInputHash(trace);
+        const byId = trace && trace.receipt_id
+          ? log.chain.find((r) => r && r.receipt_id === trace.receipt_id) : null;
+        result.inputHashMatches = byId
+          ? byId.input_hash === want
+          : log.chain.some((r) => r && typeof r.input_hash === 'string' && r.input_hash === want);
       }
     } else if (receipt) {
       // We have a receipt but no way to check its signature — input-hash only (honest partial).

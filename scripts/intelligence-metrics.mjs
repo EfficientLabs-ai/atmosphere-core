@@ -65,8 +65,17 @@ export async function collectMetrics() {
     return n;
   });
   out.trust_events = honest(() => {
+    // Segment-aware: rotated archives (*.segment) count too, and a rotation control line
+    // ({_prev_head: ...} lineage marker) is NOT a receipt — never counted.
     let n = 0;
-    for (const f of walk(PROFILE)) if (f.endsWith('.receipt.jsonl') || f.endsWith('live-receipts.jsonl')) n += fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).length;
+    const isReceiptLine = (l) => {
+      try { return typeof JSON.parse(l)._prev_head !== 'string'; } catch { return false; }
+    };
+    for (const f of walk(PROFILE)) {
+      if (f.endsWith('.receipt.jsonl') || f.endsWith('live-receipts.jsonl') || /live-receipts\.jsonl\..*\.segment$/.test(f)) {
+        n += fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).filter(isReceiptLine).length;
+      }
+    }
     return n;
   });
   out.execution_traces = honest(() => {

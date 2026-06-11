@@ -229,7 +229,7 @@ export function createRevocation({ ownerKeys, nodeDid, now = Date.now } = {}) {
  * Verify a revocation — fail-closed, and (with a pin) bound to the pinned owner so a foreign owner
  * cannot revoke a node it never paired. Returns {ok, nodeDid, ownerDid}.
  */
-export function verifyRevocation(rev, { pinnedOwnerPublicKey = null } = {}) {
+export function verifyRevocation(rev, { pinnedOwnerPublicKey = null, expectedOwnerFingerprint = null } = {}) {
   try {
     if (!rev || rev.kind !== 'pairing-revocation' || !rev.owner_public_key || !rev.node_did || !rev.sig) {
       return { ok: false, reason: 'malformed revocation' };
@@ -239,6 +239,17 @@ export function verifyRevocation(rev, { pinnedOwnerPublicKey = null } = {}) {
       : dec(rev.owner_public_key);
     if (pinnedOwnerPublicKey && originId(dec(rev.owner_public_key)) !== originId(ownerPub)) {
       return { ok: false, reason: 'revocation signed by a different owner than the pin — refusing' };
+    }
+    // No blind trust on an UNPINNED device (Codex finding): a revocation only means something
+    // relative to an owner you already trust. Without a pin, require the human-compared owner
+    // fingerprint — otherwise any self-consistent owner key could revoke any node.
+    if (!pinnedOwnerPublicKey) {
+      if (!expectedOwnerFingerprint) {
+        return { ok: false, reason: 'no pinned owner and no owner fingerprint — refusing to apply a revocation from an untrusted owner (fail-closed)' };
+      }
+      if (normFp(expectedOwnerFingerprint) !== normFp(fingerprint(ownerPub))) {
+        return { ok: false, reason: `owner fingerprint mismatch: revocation signed by ${fingerprint(ownerPub)}` };
+      }
     }
     if (originId(ownerPub) !== rev.owner_did) return { ok: false, reason: 'owner_did does not match the owner key' };
     if (!verifyPayload(revocationBody(rev), decSig(rev.sig), ownerPub)) {

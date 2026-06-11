@@ -79,11 +79,18 @@ export function authorizeMeshCommand(envelope, trust, opts = {}) {
     try { pub = dec(known.pub); } catch { return { ok: false, reason: 'unusable pinned key for sender' }; }
     if (originId(pub) !== sender_did) return { ok: false, reason: 'pinned key does not match sender_did (state corruption)' };
 
-    // (5) freshness — reject envelopes outside the skew window or a replayed nonce.
+    // (5) freshness — reject envelopes outside the skew window.
     if (typeof ts !== 'number' || !Number.isFinite(ts)) return { ok: false, reason: 'envelope missing/invalid ts' };
     const skew = Math.abs(now() - ts);
     if (skew > maxSkewMs) return { ok: false, reason: `envelope outside freshness window (${Math.round(skew / 1000)}s > ${maxSkewMs / 1000}s)` };
-    if (opts.seenNonces && envelope.nonce != null) {
+
+    // (5b) REPLAY protection is MANDATORY (fail-closed): a command must carry a nonce AND the caller
+    // must supply a replay store (Set or {has,add}). The only escape is an EXPLICIT opts.idempotent
+    // assertion that this command is replay-safe — never a silent default (Codex finding: an opt-in
+    // guard the CLI forgot to pass left a replay hole). Freshness window alone is not replay-proof.
+    if (!opts.idempotent) {
+      if (envelope.nonce == null || envelope.nonce === '') return { ok: false, reason: 'envelope missing nonce (replay protection requires one; pass opts.idempotent only for replay-safe commands)' };
+      if (!opts.seenNonces || typeof opts.seenNonces.has !== 'function') return { ok: false, reason: 'no replay store supplied — refusing to authorize a non-idempotent command without replay protection (fail-closed)' };
       const key = `${sender_did}:${envelope.nonce}`;
       if (opts.seenNonces.has(key)) return { ok: false, reason: 'replayed nonce (already seen)' };
     }
@@ -93,7 +100,8 @@ export function authorizeMeshCommand(envelope, trust, opts = {}) {
       return { ok: false, reason: 'command signature failed (tamper or wrong signer)' };
     }
 
-    if (opts.seenNonces && envelope.nonce != null) opts.seenNonces.add(`${sender_did}:${envelope.nonce}`);
+    // Record the nonce ONLY after full success, so a failed auth never burns a nonce.
+    if (!opts.idempotent && opts.seenNonces && envelope.nonce != null) opts.seenNonces.add(`${sender_did}:${envelope.nonce}`);
     return { ok: true, role: known.role };
   } catch (e) {
     return { ok: false, reason: 'authorization error: ' + e.message };

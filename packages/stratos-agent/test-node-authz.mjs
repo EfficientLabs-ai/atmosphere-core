@@ -47,16 +47,29 @@ function envelope(signer, senderDid, { action = 'route', params = { x: 1 }, ts =
 }
 const NOW = () => 1000; // deterministic clock at ts
 
-ok('authorized: a paired node and the owner', () => {
+ok('authorized: a paired node and the owner (with a replay store)', () => {
   const trust = buildTrustSet(state);
-  assert.strictEqual(authorizeMeshCommand(envelope(nodeA, nodeADid), trust, { now: NOW }).ok, true);
-  const o = authorizeMeshCommand(envelope(owner, ownerDid), trust, { now: NOW });
+  const seen = new Set();
+  assert.strictEqual(authorizeMeshCommand(envelope(nodeA, nodeADid, { nonce: 'a' }), trust, { now: NOW, seenNonces: seen }).ok, true);
+  const o = authorizeMeshCommand(envelope(owner, ownerDid, { nonce: 'b' }), trust, { now: NOW, seenNonces: seen });
   assert.strictEqual(o.ok, true); assert.strictEqual(o.role, 'owner');
+});
+
+ok('DENIED: replay protection is MANDATORY — no store, or no nonce → fail-closed', () => {
+  const trust = buildTrustSet(state);
+  // no store supplied
+  const v1 = authorizeMeshCommand(envelope(nodeA, nodeADid, { nonce: 'x' }), trust, { now: NOW });
+  assert.strictEqual(v1.ok, false); assert.match(v1.reason, /no replay store/);
+  // store but no nonce
+  const v2 = authorizeMeshCommand(envelope(nodeA, nodeADid, { nonce: null }), trust, { now: NOW, seenNonces: new Set() });
+  assert.strictEqual(v2.ok, false); assert.match(v2.reason, /missing nonce/);
+  // EXPLICIT idempotent escape is allowed (replay-safe command)
+  assert.strictEqual(authorizeMeshCommand(envelope(nodeA, nodeADid, { nonce: null }), trust, { now: NOW, idempotent: true }).ok, true);
 });
 
 ok('DENIED: unknown sender (no TOFU on commands)', () => {
   const trust = buildTrustSet(state);
-  const v = authorizeMeshCommand(envelope(stranger, originId(stranger.publicKey)), trust, { now: NOW });
+  const v = authorizeMeshCommand(envelope(stranger, originId(stranger.publicKey)), trust, { now: NOW, seenNonces: new Set() });
   assert.strictEqual(v.ok, false); assert.match(v.reason, /not a paired node or the owner/);
 });
 
@@ -64,7 +77,7 @@ ok('DENIED: impersonation — stranger signs but claims a paired did', () => {
   const trust = buildTrustSet(state);
   // stranger signs an envelope claiming to be nodeA → signature checked against nodeA's PINNED key → fails.
   const e = envelope(stranger, nodeADid);
-  const v = authorizeMeshCommand(e, trust, { now: NOW });
+  const v = authorizeMeshCommand(e, trust, { now: NOW, seenNonces: new Set() });
   assert.strictEqual(v.ok, false); assert.match(v.reason, /signature failed/);
 });
 
@@ -72,13 +85,13 @@ ok('DENIED: tampered body after signing', () => {
   const trust = buildTrustSet(state);
   const e = envelope(nodeA, nodeADid);
   e.params = { x: 999 }; // change after signing
-  assert.strictEqual(authorizeMeshCommand(e, trust, { now: NOW }).ok, false);
+  assert.strictEqual(authorizeMeshCommand(e, trust, { now: NOW, seenNonces: new Set() }).ok, false);
 });
 
 ok('DENIED: stale envelope outside the freshness window', () => {
   const trust = buildTrustSet(state);
   const e = envelope(nodeA, nodeADid, { ts: 1000 });
-  const v = authorizeMeshCommand(e, trust, { now: () => 1000 + 5 * 60_000 }); // 5 min later
+  const v = authorizeMeshCommand(e, trust, { now: () => 1000 + 5 * 60_000, seenNonces: new Set() }); // 5 min later
   assert.strictEqual(v.ok, false); assert.match(v.reason, /freshness window/);
 });
 
@@ -92,13 +105,16 @@ ok('DENIED: replayed nonce', () => {
 
 ok('DENIED: revoked sender (even with a perfect signature)', () => {
   const trust = buildTrustSet({ ...state, revokedNodes: [nodeADid] });
-  const v = authorizeMeshCommand(envelope(nodeA, nodeADid), trust, { now: NOW });
+  const v = authorizeMeshCommand(envelope(nodeA, nodeADid), trust, { now: NOW, seenNonces: new Set() });
   assert.strictEqual(v.ok, false); assert.match(v.reason, /REVOKED/);
 });
 
 ok('revocation: owner-signed, peer-verifiable; foreign owner + tamper fail closed', () => {
   const rev = createRevocation({ ownerKeys: owner, nodeDid: nodeADid, now: () => 2000 });
-  assert.strictEqual(verifyRevocation(rev).ok, true);
+  // no pin AND no fingerprint → refused (no blind trust on an unpinned device).
+  assert.strictEqual(verifyRevocation(rev).ok, false);
+  // no pin but the human-compared owner fingerprint → accepted.
+  assert.strictEqual(verifyRevocation(rev, { expectedOwnerFingerprint: fingerprint(owner.publicKey) }).ok, true);
   const pin = { owner_public_key: enc(owner.publicKey) }; // not used directly; pass the bundle
   const pinned = enc(owner.publicKey);
   assert.strictEqual(verifyRevocation(rev, { pinnedOwnerPublicKey: pinned }).ok, true);

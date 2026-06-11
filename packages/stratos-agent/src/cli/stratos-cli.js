@@ -966,9 +966,11 @@ function cmdPair(rest, deps) {
     // A peer applies a revocation it received: verifies against its pinned owner, then records it.
     if (sub === 'apply-revocation') {
       const file = rest[1];
-      if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair apply-revocation <revocation.json>${C.x}`] };
+      const ofpIdx = rest.indexOf('--owner-fingerprint');
+      const ownerFp = ofpIdx >= 0 ? rest[ofpIdx + 1] : null;
+      if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair apply-revocation <revocation.json> [--owner-fingerprint <fp>]${C.x}`] };
       const pinned = deps.config.getPairedOwner?.();
-      const v = ownerIdentity.verifyRevocation(readJson(file), { pinnedOwnerPublicKey: pinned ? pinned.owner_public_key : null });
+      const v = ownerIdentity.verifyRevocation(readJson(file), { pinnedOwnerPublicKey: pinned ? pinned.owner_public_key : null, expectedOwnerFingerprint: ownerFp });
       if (!v.ok) return { code: 1, lines: [`${C.r}✗ revocation REFUSED: ${v.reason}${C.x}`] };
       try { deps.config.addRevokedNode?.(v.nodeDid); } catch { /* runtime store optional in minimal deps */ }
       return { code: 0, lines: [`${C.g}✓ applied revocation of ${didShort(v.nodeDid)}${C.x} ${C.d}(signed by owner ${didShort(v.ownerDid)})${C.x}`] };
@@ -982,7 +984,17 @@ function cmdPair(rest, deps) {
         pairedNodes: deps.config.getPairedNodes?.() || [],
         revokedNodes: deps.config.getRevokedNodes?.() || [],
       });
-      const verdict = nodeAuthz.authorizeMeshCommand(readJson(file), trust);
+      // Persistent replay store in the profile — replay protection spans CLI invocations, not just
+      // one call. A bounded JSON file of seen sender:nonce keys (newest-kept), loaded + saved here.
+      const profileDir = process.env.STRATOS_PROFILE_DIR || path.join(_ROOT, '.stratos-profile');
+      const noncePath = path.join(profileDir, 'seen-nonces.json');
+      let seenArr = [];
+      try { seenArr = JSON.parse(fs.readFileSync(noncePath, 'utf8')); } catch { /* fresh */ }
+      const seenNonces = new Set(seenArr);
+      const verdict = nodeAuthz.authorizeMeshCommand(readJson(file), trust, { seenNonces });
+      if (verdict.ok) {
+        try { fs.mkdirSync(profileDir, { recursive: true }); fs.writeFileSync(noncePath, JSON.stringify([...seenNonces].slice(-5000))); } catch { /* best-effort */ }
+      }
       return verdict.ok
         ? { code: 0, lines: [`${C.g}✓ authorized${C.x} ${C.d}(sender role: ${verdict.role})${C.x}`] }
         : { code: 1, lines: [`${C.r}✗ DENIED: ${verdict.reason}${C.x}`] };

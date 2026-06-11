@@ -226,14 +226,35 @@ ok('size-based rotation: segments archive, the chain stays unbroken, reload veri
   const segBundle = segLog.exportBundle({ publicKeyBundle: node.publicKey });
   assert.strictEqual(verifyBundle(segBundle).ok, true, 'archived segment verifies via bundle (anchored)');
 
-  // Fail-closed: with TWO receipts in the active file, splice out the first (keep the control
-  // line) → the survivor no longer chains onto the anchor.
+  // Fail-closed A: splice a receipt out from behind the (intact) control line → the survivor no
+  // longer chains onto the signed anchor.
   reloaded.append({ actor_id: ACTOR, action: 'inference', ref: 'r5', input_hash: hashContent('5'), output_hash: hashContent('5o'), cost_units: 5 });
   const lines = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean);
-  assert.strictEqual(lines.length, 3, 'active file = control line + r4 + r5');
-  fs.writeFileSync(p, [lines[0], lines[2]].join('\n') + '\n'); // drop r4, keep control + r5
+  assert.ok(lines.length >= 3, 'active file = control line + ≥2 receipts');
+  fs.writeFileSync(p, [lines[0], ...lines.slice(2)].join('\n') + '\n'); // drop the first receipt
   const spliced = new ReceiptLog({ path: p, verifier: makeReceiptVerifier(node.publicKey) });
   assert.strictEqual(spliced.verify().ok, false, 'head-spliced active file fails against the anchor');
+
+  // Fail-closed B (the attack Codex called out): the attacker ALSO rewrites _prev_head so the
+  // truncated suffix chains "cleanly" — the control line's hybrid SIGNATURE catches the edit.
+  const survivor = JSON.parse(lines[2]); // the receipt kept above
+  const forgedControl = { ...JSON.parse(lines[0]), _prev_head: survivor.prev_hash };
+  fs.writeFileSync(p, [JSON.stringify(forgedControl), ...lines.slice(2)].join('\n') + '\n');
+  const forged = new ReceiptLog({ path: p, verifier: makeReceiptVerifier(node.publicKey) });
+  const fv = forged.verify();
+  assert.strictEqual(fv.ok, false, 'rewritten anchor must fail');
+  assert.match(fv.reason, /control line/, 'caught by the control-line signature, fail-closed');
+
+  // A signer-less log must refuse to rotate at all (unsigned anchors are not a thing).
+  const p2 = path.join(tmp, 'nosigner.jsonl');
+  const plain = new ReceiptLog({ path: p2, nodeId: NODE_ID, now, jti, rotateMaxBytes: 1 });
+  plain.append({ actor_id: ACTOR, action: 'inference', ref: 'x1', input_hash: hashContent('x'), output_hash: hashContent('y'), cost_units: 1 });
+  plain.append({ actor_id: ACTOR, action: 'inference', ref: 'x2', input_hash: hashContent('x'), output_hash: hashContent('y'), cost_units: 1 });
+  assert.strictEqual(fs.readdirSync(tmp).filter((f) => f.startsWith('nosigner.jsonl.')).length, 0, 'no rotation without a signer');
+
+  // Segment-aware reader: loadChainEntries returns the FULL genesis-rooted history, no control lines.
+  const all = ReceiptLog.loadChainEntries(path.join(tmp, 'receipts.jsonl'));
+  assert.ok(all.length >= 4 && all.every((r) => !('_prev_head' in r)), 'loadChainEntries spans segments, skips control lines');
 
   fs.rmSync(tmp, { recursive: true, force: true });
 });

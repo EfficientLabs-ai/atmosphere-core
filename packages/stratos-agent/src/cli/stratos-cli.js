@@ -255,7 +255,9 @@ function cmdReceipt(rest, d = {}) {
     ] };
   }
 
-  // export + summary read the live receipts.jsonl.
+  // export + summary read the FULL receipt history: archived rotation segments (oldest first) +
+  // the active file — rotation never silently shrinks what this surface reports (segment-aware
+  // since the rotation feature landed; control lines are lineage, not receipts, and are skipped).
   const pArg = rest.find((a, i) => i > 0 && a !== '--since' && !/^\d+$/.test(a) && rest[i - 1] !== '--since');
   const p = receiptsPath(sub === 'export' ? undefined : pArg);
   const kf = nodeKeysPath();
@@ -263,8 +265,10 @@ function cmdReceipt(rest, d = {}) {
   const verifier = pub ? makeReceiptVerifier(pub) : null;
 
   let log;
-  try { log = new ReceiptLog({ path: fs.existsSync(p) ? p : null, verifier }); }
-  catch (e) { return { code: 1, lines: [`${C.r}could not read receipts: ${e.message}${C.x}`] }; }
+  try {
+    log = new ReceiptLog({ verifier });
+    log.chain = ReceiptLog.loadChainEntries(p); // genesis-rooted full history across segments
+  } catch (e) { return { code: 1, lines: [`${C.r}could not read receipts: ${e.message}${C.x}`] }; }
 
   if (sub === 'export') {
     if (!log.length) {

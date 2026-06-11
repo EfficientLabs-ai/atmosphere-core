@@ -236,8 +236,9 @@ export async function observe(o = {}) {
       endOpts.actor_id = inj.actor_id || (def && def.actor_id) || undefined;
       ended = core.endTrace(handle, endOpts);
       // endTrace's receipt minting is fail-OPEN (a broken signer/path yields receipt:null without
-      // throwing) — make that visible: a provided log that minted nothing is a swallowed failure.
-      if (ended && endOpts.receiptLog && !ended.receipt) {
+      // throwing) — make that visible: a log AND actor that minted nothing is a swallowed failure.
+      // (receiptLog without actor_id is endTrace's documented honest no-op — not a failure.)
+      if (ended && endOpts.receiptLog && endOpts.actor_id && !ended.receipt) {
         tapLog('mint-receipt', new Error(`receipt not minted (fail-open) — log path: ${endOpts.receiptLog.path || '(in-memory)'}`));
       }
     } catch (e) { tapLog('end-trace', e); }

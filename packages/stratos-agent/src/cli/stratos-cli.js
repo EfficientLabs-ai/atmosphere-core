@@ -884,7 +884,7 @@ function cmdPair(rest, deps) {
       `  ${C.g}list${C.x}                                       Nodes paired on this device (active/REVOKED)`,
       `  ${C.g}revoke${C.x}  <node-did>                           Owner: withdraw a node's authority (signed revocation)`,
       `  ${C.g}apply-revocation${C.x} <revocation.json>          Peer: verify + record a revocation`,
-      `  ${C.g}authz${C.x}   <envelope.json>                      Authorize a mesh command against this device's trust set`,
+      `  ${C.g}authz${C.x}   <envelope.json>                      Diagnostic: verify a mesh command vs this device's trust set`,
       '',
       `  ${C.d}Honest scope: identity + ceremony + pinning + ENFORCEMENT + revocation are live (Gate 2b). Wiring the`,
       `  enforcement into the live mesh ingress is the daemon-integration step.${C.x}`,
@@ -984,19 +984,14 @@ function cmdPair(rest, deps) {
         pairedNodes: deps.config.getPairedNodes?.() || [],
         revokedNodes: deps.config.getRevokedNodes?.() || [],
       });
-      // Persistent replay store in the profile — replay protection spans CLI invocations, not just
-      // one call. A bounded JSON file of seen sender:nonce keys (newest-kept), loaded + saved here.
-      const profileDir = process.env.STRATOS_PROFILE_DIR || path.join(_ROOT, '.stratos-profile');
-      const noncePath = path.join(profileDir, 'seen-nonces.json');
-      let seenArr = [];
-      try { seenArr = JSON.parse(fs.readFileSync(noncePath, 'utf8')); } catch { /* fresh */ }
-      const seenNonces = new Set(seenArr);
-      const verdict = nodeAuthz.authorizeMeshCommand(readJson(file), trust, { seenNonces });
-      if (verdict.ok) {
-        try { fs.mkdirSync(profileDir, { recursive: true }); fs.writeFileSync(noncePath, JSON.stringify([...seenNonces].slice(-5000))); } catch { /* best-effort */ }
-      }
+      // DIAGNOSTIC verifier: checks an envelope against trust + signature + freshness for a human
+      // testing pairing. Durable cross-message REPLAY state is the DAEMON mesh-ingress's job (a
+      // locked, persistent nonce store) — NOT a CLI file (an unlocked CLI read-modify-write would be
+      // race-prone and fail-open; Codex finding). So authz passes a fresh ephemeral store and
+      // declares its replay check is single-invocation only.
+      const verdict = nodeAuthz.authorizeMeshCommand(readJson(file), trust, { seenNonces: new Set() });
       return verdict.ok
-        ? { code: 0, lines: [`${C.g}✓ authorized${C.x} ${C.d}(sender role: ${verdict.role})${C.x}`] }
+        ? { code: 0, lines: [`${C.g}✓ authorized${C.x} ${C.d}(sender role: ${verdict.role}; diagnostic — durable replay state lives in the daemon ingress)${C.x}`] }
         : { code: 1, lines: [`${C.r}✗ DENIED: ${verdict.reason}${C.x}`] };
     }
     return { code: 1, lines: [`${C.r}unknown pair subcommand: ${sub}${C.x} — see 'stratos pair help'`] };

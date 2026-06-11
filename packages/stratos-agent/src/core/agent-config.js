@@ -238,6 +238,18 @@ export function setPairedOwner(ownerDid, ownerPublicKeyB64) {
     return s.pairedOwner;
   });
 }
+// Gate 2b: the revocation set — node DIDs the owner has withdrawn authority from. A revoked node
+// stays in pairedNodes (audit trail) but mesh authorization denies it (node-authz.js).
+export function getRevokedNodes() { return loadRuntime().revokedNodes || []; }
+export function addRevokedNode(nodeDid) {
+  if (typeof nodeDid !== 'string' || !nodeDid) throw new Error('revocation needs a node_did');
+  return withLock(() => {
+    const s = loadRuntime();
+    s.revokedNodes = Array.from(new Set([...(s.revokedNodes || []), String(nodeDid)]));
+    saveRuntime(s);
+    return s.revokedNodes;
+  });
+}
 export function getPairedNodes() { return loadRuntime().pairedNodes || []; }
 export function addPairedNode(entry) {
   if (!entry?.node_did) throw new Error('paired-node entry needs node_did');

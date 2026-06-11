@@ -28,6 +28,7 @@ import { originId } from '../memory/skill-seal.js';
 import { route as routeDecision, difficulty, autoEscalateEnabled } from '../routing/model-router.js';
 import { runDemo, DEFAULT_PROMPT } from './demo-harness.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
+import * as ownerIdentity from '../identity/owner-identity.js';
 import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
 import { EgressPolicy, checkEgress, connectorHostsToRules } from '../security/egress-policy.js';
 import * as fts from '../memory/fts-memory.js';
@@ -94,6 +95,8 @@ function helpText() {
     `  ${C.g}doctor${C.x}          Read-only preflight — tells you exactly what's missing`,
     `  ${C.g}models${C.x}          List locally-installed models + the configured route`,
     `  ${C.g}bind${C.x} <chat-id>  Bind your Telegram chat id as owner (enables chat config)`,
+    `  ${C.g}owner${C.x}           Cryptographic owner identity (Gate 2): did + pairing fingerprint`,
+    `  ${C.g}pair${C.x}            Pair a second node to the same owner: request · approve · accept · list`,
     `  ${C.g}channels${C.x}        Connect a messaging channel to talk to your agent (Telegram · Discord · Slack · Matrix · Signal — all live)`,
     `  ${C.g}connect${C.x}         Onboard a connector/MCP server (credential → vault, sidecar pinned)`,
     `  ${C.g}connectors${C.x}      List onboarded connectors (metadata only; secrets stay in the vault)`,
@@ -823,6 +826,115 @@ function cmdBind(argv, deps) {
   return { code: 0, lines: [`${C.g}✓ Owner bound to ${bound}.${C.x} Only this id (in a DM) can reconfigure the agent from chat.`] };
 }
 
+/**
+ * `stratos owner` — GATE 2: the cryptographic OWNER identity (hybrid PQC, separate from node keys —
+ * the chat-id bind above is UI auth; THIS is the authority a pairing grant is signed with).
+ *   show (default)   owner did:atmos + the HUMAN fingerprint (what you compare during pairing)
+ *   init             create the owner keypair if absent (0600), record the public half in runtime
+ * The private half never prints and never enters runtime state.
+ */
+function cmdOwner(rest, deps) {
+  const sub = (rest[0] || 'show').toLowerCase();
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos owner${C.x} ${C.d}— the cryptographic owner identity (Gate 2)${C.x}`,
+      `  ${C.g}show${C.x}   Owner did:atmos + fingerprint (creates the keypair on first use)`,
+      `  ${C.g}init${C.x}   Same as show (explicit first-run form)`,
+    ] };
+  }
+  if (sub !== 'show' && sub !== 'init') return { code: 1, lines: [`${C.r}unknown owner subcommand: ${sub}${C.x} — see 'stratos owner help'`] };
+  try {
+    const ok = ownerIdentity.loadOrCreateOwnerKeys();
+    const fp = ownerIdentity.fingerprint(ok.publicKey);
+    // Record the PUBLIC identity in runtime state so channels/daemon can reference it.
+    const pubB64 = Object.fromEntries(Object.entries(ok.publicKey).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
+    try { deps.config.setOwnerIdentity?.(ok.ownerDid, pubB64); } catch { /* runtime store optional in minimal deps */ }
+    return { code: 0, lines: [
+      `${C.B}Owner identity${C.x} ${C.d}(hybrid Ed25519 + ML-DSA-65 — same suite as the node)${C.x}`,
+      `  ${C.d}did        ${C.x}${C.b}${ok.ownerDid}${C.x}`,
+      `  ${C.d}fingerprint${C.x} ${C.g}${fp}${C.x}  ${C.d}← compare THIS, human-to-human, when pairing${C.x}`,
+      `  ${C.d}keys       ${C.x}${ok.path} ${C.d}(0600; private half never leaves this file)${C.x}`,
+    ] };
+  } catch (e) { return { code: 1, lines: [`${C.r}owner identity failed: ${e.message}${C.x}`] }; }
+}
+
+/**
+ * `stratos pair` — GATE 2: the explicit node-pairing ceremony (no blind TOFU; the human-compared
+ * fingerprint IS the trust step). Artifacts are plain JSON files the human moves between devices —
+ * the signatures carry the trust, not the transport.
+ *   request                                    (on the NEW node) signed pairing-request → stdout
+ *   approve <request.json> --fingerprint <fp>  (on the OWNER node) verify + approve → grant → stdout
+ *   accept  <grant.json>                       (on the NEW node) verify the grant, PIN the owner key
+ *   list                                       paired nodes recorded on this device
+ */
+function cmdPair(rest, deps) {
+  const sub = (rest[0] || 'help').toLowerCase();
+  if (sub === 'help' || sub === '-h' || sub === '--help') {
+    return { code: 0, lines: [
+      `${C.B}stratos pair${C.x} ${C.d}— pair a second node to the same owner (Gate 2 ceremony)${C.x}`,
+      `  ${C.g}request${C.x}                                    On the NEW node: signed pairing-request → stdout`,
+      `  ${C.g}approve${C.x} <request.json> --fingerprint <fp>  On the OWNER node: verify + sign the grant.`,
+      `      ${C.y}Refuses without --fingerprint${C.x} ${C.d}— pass the value the human read off the new device;`,
+      `      the comparison IS the ceremony (no blind trust-on-first-use).${C.x}`,
+      `  ${C.g}accept${C.x}  <grant.json>                       On the NEW node: verify the grant + PIN the owner key`,
+      `  ${C.g}list${C.x}                                       Nodes paired on this device`,
+      '',
+      `  ${C.d}Honest scope: identity + ceremony + pinning are live; mesh-side command enforcement and`,
+      `  revocation are Gate 2b — a paired node is RECORDED here, enforcement lands next.${C.x}`,
+    ] };
+  }
+  const readJson = (f) => JSON.parse(fs.readFileSync(path.resolve(f), 'utf8'));
+  const loadNodeKeypair = () => {
+    const kf = nodeKeysPath();
+    if (!fs.existsSync(kf)) throw new Error(`no node identity yet (${kf}) — run the daemon once or 'stratos init'`);
+    const raw = JSON.parse(fs.readFileSync(kf, 'utf8'));
+    const dec = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
+    return { publicKey: dec(raw.publicKey), privateKey: dec(raw.privateKey) };
+  };
+  try {
+    if (sub === 'request') {
+      const nodeKeys = loadNodeKeypair();
+      const req = ownerIdentity.createPairingRequest({ nodeKeys });
+      const fp = ownerIdentity.fingerprint(nodeKeys.publicKey);
+      console.error(`# this node's fingerprint — the owner must hear/see THIS value: ${fp}`);
+      return { code: 0, lines: JSON.stringify(req, null, 2).split('\n') };
+    }
+    if (sub === 'approve') {
+      const file = rest[1];
+      const fpIdx = rest.indexOf('--fingerprint');
+      const fp = fpIdx >= 0 ? rest[fpIdx + 1] : null;
+      if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair approve <request.json> --fingerprint <fp>${C.x}`] };
+      const ownerKeys = ownerIdentity.loadOrCreateOwnerKeys();
+      const grant = ownerIdentity.approvePairing({ ownerKeys, request: readJson(file), expectedFingerprint: fp });
+      try { deps.config.addPairedNode?.({ node_did: grant.node_did, node_public_key: grant.node_public_key, granted_at: grant.granted_at }); } catch { /* runtime store optional in minimal deps */ }
+      console.error(`# paired ${didShort(grant.node_did)} — give the grant below to the new node ('stratos pair accept')`);
+      return { code: 0, lines: JSON.stringify(grant, null, 2).split('\n') };
+    }
+    if (sub === 'accept') {
+      const file = rest[1];
+      if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair accept <grant.json>${C.x}`] };
+      const grant = readJson(file);
+      const pinned = deps.config.getOwnerIdentity?.();
+      const v = ownerIdentity.verifyPairingGrant(grant, { pinnedOwnerPublicKey: pinned ? pinned.owner_public_key : null });
+      if (!v.ok) return { code: 1, lines: [`${C.r}✗ grant REFUSED: ${v.reason}${C.x}`] };
+      // First accept PINS the owner; later grants must verify against the pin (enforced above).
+      try { deps.config.setOwnerIdentity?.(v.ownerDid, grant.owner_public_key); } catch { /* runtime store optional in minimal deps */ }
+      return { code: 0, lines: [
+        `${C.g}✓ paired to owner ${didShort(v.ownerDid)}${C.x} ${C.d}(owner fingerprint ${v.ownerFingerprint} — confirm with the owner once)${C.x}`,
+        `${C.d}owner key ${pinned ? 'matched the existing pin' : 'PINNED on this device'}; future grants must verify against it.${C.x}`,
+      ] };
+    }
+    if (sub === 'list') {
+      const nodes = deps.config.getPairedNodes?.() || [];
+      if (!nodes.length) return { code: 0, lines: [`${C.d}no paired nodes recorded on this device${C.x}`] };
+      return { code: 0, lines: nodes.map((n) => `  ${C.b}${didShort(n.node_did)}${C.x} ${C.d}paired ${n.paired_at || n.granted_at || '?'}${C.x}`) };
+    }
+    return { code: 1, lines: [`${C.r}unknown pair subcommand: ${sub}${C.x} — see 'stratos pair help'`] };
+  } catch (e) {
+    return { code: 1, lines: [`${C.r}pair ${sub} failed: ${e.message}${C.x}`] };
+  }
+}
+
 /** Pure systemd --user unit generator (no root). Tested directly. */
 export function generateSystemdUnit({ execPath = process.execPath, binPath = 'stratos', port = 4099 } = {}) {
   return [
@@ -852,7 +964,7 @@ export function applyInit({ agentName, localModel } = {}, config = realConfig) {
   return config.getConfig();
 }
 
-export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'workspace', 'task', 'capture', 'trace', 'eval', 'improve', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
+export const COMMANDS = ['init', 'start', 'status', 'doctor', 'models', 'bind', 'owner', 'pair', 'channels', 'connect', 'connectors', 'mesh', 'icm', 'workspace', 'task', 'capture', 'trace', 'eval', 'improve', 'ledger', 'receipt', 'id', 'route', 'demo', 'memory', 'user', 'voice', 'skill', 'egress', 'service', 'version', 'help'];
 
 // Reading local cross-session memory is itself a capability — declared minimally and gated
 // deny-by-default through the SAME capability-gate the skill runtime uses. `memory.read` is the
@@ -1805,6 +1917,8 @@ export async function run(argv = [], deps = {}) {
     case 'doctor': return cmdDoctor(d);
     case 'models': return cmdModels(d);
     case 'bind': return cmdBind(rest, d);
+    case 'owner': return cmdOwner(rest, d);
+    case 'pair': return cmdPair(rest, d);
     case 'connectors': return cmdConnectors(d);
     case 'mesh': return cmdMesh(d);
     case 'icm': return cmdIcm(rest);

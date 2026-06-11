@@ -171,6 +171,11 @@ const SUITES = {
     // grant signed by the owner suite · accept verifies BOTH signature halves and PINS the owner
     // key · pinned owner rejects a foreign (internally-valid) grant · runtime storage round-trips.
     'test-owner-pairing.mjs',
+    // GATE 2b — MESH AUTHORIZATION + REVOCATION (2026-06-11). Deny-by-default command authorization
+    // against the device trust set: owner + paired nodes authorized; unknown/revoked/tampered/
+    // stale/replayed/impersonating senders DENIED; owner-signed revocations are peer-verifiable
+    // (foreign owner + tamper fail closed). Includes a real-CLI end-to-end revoke→deny.
+    'test-node-authz.mjs',
   ],
 };
 

@@ -29,6 +29,7 @@ import { route as routeDecision, difficulty, autoEscalateEnabled } from '../rout
 import { runDemo, DEFAULT_PROMPT } from './demo-harness.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
 import * as ownerIdentity from '../identity/owner-identity.js';
+import * as nodeAuthz from '../identity/node-authz.js';
 import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
 import { EgressPolicy, checkEgress, connectorHostsToRules } from '../security/egress-policy.js';
 import * as fts from '../memory/fts-memory.js';
@@ -880,10 +881,13 @@ function cmdPair(rest, deps) {
       `      On the NEW node: verify the grant is for THIS node, compare the OWNER's fingerprint`,
       `      (read off the owner device — ${C.y}required on first accept${C.x}${C.d}), then PIN the owner key.`,
       `      Once pinned, later grants verify against the pin and need no fingerprint.${C.x}`,
-      `  ${C.g}list${C.x}                                       Nodes paired on this device`,
+      `  ${C.g}list${C.x}                                       Nodes paired on this device (active/REVOKED)`,
+      `  ${C.g}revoke${C.x}  <node-did>                           Owner: withdraw a node's authority (signed revocation)`,
+      `  ${C.g}apply-revocation${C.x} <revocation.json>          Peer: verify + record a revocation`,
+      `  ${C.g}authz${C.x}   <envelope.json>                      Authorize a mesh command against this device's trust set`,
       '',
-      `  ${C.d}Honest scope: identity + ceremony + pinning are live; mesh-side command enforcement and`,
-      `  revocation are Gate 2b — a paired node is RECORDED here, enforcement lands next.${C.x}`,
+      `  ${C.d}Honest scope: identity + ceremony + pinning + ENFORCEMENT + revocation are live (Gate 2b). Wiring the`,
+      `  enforcement into the live mesh ingress is the daemon-integration step.${C.x}`,
     ] };
   }
   const readJson = (f) => JSON.parse(fs.readFileSync(path.resolve(f), 'utf8'));
@@ -944,8 +948,44 @@ function cmdPair(rest, deps) {
     }
     if (sub === 'list') {
       const nodes = deps.config.getPairedNodes?.() || [];
+      const revoked = new Set(deps.config.getRevokedNodes?.() || []);
       if (!nodes.length) return { code: 0, lines: [`${C.d}no paired nodes recorded on this device${C.x}`] };
-      return { code: 0, lines: nodes.map((n) => `  ${C.b}${didShort(n.node_did)}${C.x} ${C.d}paired ${n.paired_at || n.granted_at || '?'}${C.x}`) };
+      return { code: 0, lines: nodes.map((n) => `  ${C.b}${didShort(n.node_did)}${C.x} ${revoked.has(n.node_did) ? C.r + 'REVOKED' + C.x : C.g + 'active' + C.x} ${C.d}paired ${n.paired_at || n.granted_at || '?'}${C.x}`) };
+    }
+    // GATE 2b: the OWNER revokes a paired node's authority. Signs a verifiable revocation and records
+    // the did in this device's revocation set so mesh authorization (node-authz) denies it.
+    if (sub === 'revoke') {
+      const nodeDid = rest[1];
+      if (!nodeDid) return { code: 1, lines: [`${C.r}usage: stratos pair revoke <node-did>${C.x}`] };
+      const ownerKeys = ownerIdentity.loadOrCreateOwnerKeys();
+      const rev = ownerIdentity.createRevocation({ ownerKeys, nodeDid });
+      try { deps.config.addRevokedNode?.(nodeDid); } catch { /* runtime store optional in minimal deps */ }
+      console.error(`# revoked ${didShort(nodeDid)} — distribute the signed revocation below to peers ('stratos pair apply-revocation')`);
+      return { code: 0, lines: JSON.stringify(rev, null, 2).split('\n') };
+    }
+    // A peer applies a revocation it received: verifies against its pinned owner, then records it.
+    if (sub === 'apply-revocation') {
+      const file = rest[1];
+      if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair apply-revocation <revocation.json>${C.x}`] };
+      const pinned = deps.config.getPairedOwner?.();
+      const v = ownerIdentity.verifyRevocation(readJson(file), { pinnedOwnerPublicKey: pinned ? pinned.owner_public_key : null });
+      if (!v.ok) return { code: 1, lines: [`${C.r}✗ revocation REFUSED: ${v.reason}${C.x}`] };
+      try { deps.config.addRevokedNode?.(v.nodeDid); } catch { /* runtime store optional in minimal deps */ }
+      return { code: 0, lines: [`${C.g}✓ applied revocation of ${didShort(v.nodeDid)}${C.x} ${C.d}(signed by owner ${didShort(v.ownerDid)})${C.x}`] };
+    }
+    // Verify-as-a-criterion: authorize a mesh command envelope against THIS device's trust set.
+    if (sub === 'authz') {
+      const file = rest[1];
+      if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair authz <envelope.json>${C.x}`] };
+      const trust = nodeAuthz.buildTrustSet({
+        pairedOwner: deps.config.getPairedOwner?.() || null,
+        pairedNodes: deps.config.getPairedNodes?.() || [],
+        revokedNodes: deps.config.getRevokedNodes?.() || [],
+      });
+      const verdict = nodeAuthz.authorizeMeshCommand(readJson(file), trust);
+      return verdict.ok
+        ? { code: 0, lines: [`${C.g}✓ authorized${C.x} ${C.d}(sender role: ${verdict.role})${C.x}`] }
+        : { code: 1, lines: [`${C.r}✗ DENIED: ${verdict.reason}${C.x}`] };
     }
     return { code: 1, lines: [`${C.r}unknown pair subcommand: ${sub}${C.x} — see 'stratos pair help'`] };
   } catch (e) {

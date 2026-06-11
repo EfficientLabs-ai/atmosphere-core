@@ -202,3 +202,50 @@ export function verifyPairingGrant(grant, { pinnedOwnerPublicKey = null, expecte
     return { ok: false, reason: 'unverifiable grant: ' + e.message };
   }
 }
+
+/* ── GATE 2b: revocation — the owner withdraws a paired node's authority ───── */
+const revocationBody = (r) => canonical({ kind: r.kind, owner_did: r.owner_did, node_did: r.node_did, revoked_at: r.revoked_at });
+
+/**
+ * The OWNER signs a revocation for a paired node. Holds only public material (the revoked node's
+ * did) + the owner signature. A revocation is itself a signed claim — a paired node can verify it
+ * against the pinned owner key, so revocation propagates with the same trust as a grant.
+ */
+export function createRevocation({ ownerKeys, nodeDid, now = Date.now } = {}) {
+  if (!ownerKeys?.privateKey) throw new Error('createRevocation needs the owner keypair');
+  if (typeof nodeDid !== 'string' || !/^did:atmos:[0-9a-f]{40}$/.test(nodeDid)) throw new Error('revocation needs a valid node did:atmos');
+  const r = {
+    kind: 'pairing-revocation',
+    owner_did: originId(ownerKeys.publicKey),
+    owner_public_key: enc(ownerKeys.publicKey),
+    node_did: nodeDid,
+    revoked_at: now(),
+  };
+  r.sig = encSig(signPayload(revocationBody(r), ownerKeys.privateKey));
+  return r;
+}
+
+/**
+ * Verify a revocation — fail-closed, and (with a pin) bound to the pinned owner so a foreign owner
+ * cannot revoke a node it never paired. Returns {ok, nodeDid, ownerDid}.
+ */
+export function verifyRevocation(rev, { pinnedOwnerPublicKey = null } = {}) {
+  try {
+    if (!rev || rev.kind !== 'pairing-revocation' || !rev.owner_public_key || !rev.node_did || !rev.sig) {
+      return { ok: false, reason: 'malformed revocation' };
+    }
+    const ownerPub = pinnedOwnerPublicKey
+      ? (typeof pinnedOwnerPublicKey.ed25519Der === 'string' ? dec(pinnedOwnerPublicKey) : pinnedOwnerPublicKey)
+      : dec(rev.owner_public_key);
+    if (pinnedOwnerPublicKey && originId(dec(rev.owner_public_key)) !== originId(ownerPub)) {
+      return { ok: false, reason: 'revocation signed by a different owner than the pin — refusing' };
+    }
+    if (originId(ownerPub) !== rev.owner_did) return { ok: false, reason: 'owner_did does not match the owner key' };
+    if (!verifyPayload(revocationBody(rev), decSig(rev.sig), ownerPub)) {
+      return { ok: false, reason: 'revocation signature failed (tamper or wrong owner)' };
+    }
+    return { ok: true, nodeDid: rev.node_did, ownerDid: rev.owner_did };
+  } catch (e) {
+    return { ok: false, reason: 'unverifiable revocation: ' + e.message };
+  }
+}

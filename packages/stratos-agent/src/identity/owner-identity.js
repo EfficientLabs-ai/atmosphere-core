@@ -167,6 +167,14 @@ export function verifyPairingGrant(grant, { pinnedOwnerPublicKey = null, expecte
     const ownerPub = pinnedOwnerPublicKey
       ? (typeof pinnedOwnerPublicKey.ed25519Der === 'string' ? dec(pinnedOwnerPublicKey) : pinnedOwnerPublicKey)
       : dec(grant.owner_public_key);
+    if (pinnedOwnerPublicKey) {
+      // Pinned mode authenticates with the PIN — so the grant's embedded key must EQUAL the pin,
+      // or a pinned-owner-signed grant carrying alternate key material could rewrite the stored
+      // pin on re-accept (Codex note). Identity of key material is part of the invariant.
+      if (originId(dec(grant.owner_public_key)) !== originId(ownerPub)) {
+        return { ok: false, reason: 'grant embeds a different owner key than the pin — refusing (pin integrity)' };
+      }
+    }
     if (!pinnedOwnerPublicKey) {
       if (!expectedOwnerFingerprint) {
         return { ok: false, reason: 'no pinned owner and no owner fingerprint supplied — refusing first accept without the human comparison (no blind TOFU in either direction)' };

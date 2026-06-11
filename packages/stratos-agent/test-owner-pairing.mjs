@@ -110,6 +110,13 @@ await ok('grant verification: SYMMETRIC ceremony — owner fingerprint required 
   const pinned = Object.fromEntries(Object.entries(owner.publicKey).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
   assert.strictEqual(verifyPairingGrant(forged2, { pinnedOwnerPublicKey: pinned }).ok, false, 'pin rejects a foreign owner');
   assert.strictEqual(verifyPairingGrant(grant, { pinnedOwnerPublicKey: pinned }).ok, true, 'pin accepts the real owner (no fingerprint needed once pinned)');
+  // pin INTEGRITY: a grant signed by the pinned owner but embedding alternate key material is
+  // refused — a pinned re-accept can never rewrite the stored pin.
+  const altKey = JSON.parse(JSON.stringify(grant));
+  altKey.owner_public_key = Object.fromEntries(Object.entries(mallory.publicKey).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
+  const pv = verifyPairingGrant(altKey, { pinnedOwnerPublicKey: pinned });
+  assert.strictEqual(pv.ok, false, 'embedded key must equal the pin');
+  assert.match(pv.reason, /pin integrity/);
 });
 
 await ok('runtime storage: owner identity + paired nodes round-trip; re-pair replaces', async () => {

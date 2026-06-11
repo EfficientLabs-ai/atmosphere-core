@@ -76,20 +76,29 @@ export function hashContent(x) {
  * its signature. Keys are explicit + ordered through canonical(), so the same body hashes identically
  * on any machine.
  */
-const receiptBody = (r) => ({
-  receipt_id: r.receipt_id,
-  ts: r.ts,
-  actor_id: r.actor_id,
-  action: r.action,
-  ref: r.ref,
-  node_id: r.node_id,
-  owner_wallet: r.owner_wallet ?? null,
-  input_hash: r.input_hash,
-  output_hash: r.output_hash,
-  cost_units: r.cost_units,
-  caller_id: r.caller_id ?? null,
-  prev_hash: r.prev_hash,
-});
+// BODY VERSIONING (legacy v0): receipts persisted before `owner_wallet` entered the schema carry
+// NO owner_wallet key — their hash and BOTH signature halves cover the body WITHOUT it.
+// Verification reconstructs the body the writer actually signed, keyed on field PRESENCE.
+// Tamper-safe in both directions: stripping the key from a current receipt (or adding it to a
+// legacy one) changes the canonical string, so the stored hash AND the hybrid signature both
+// fail. createReceipt() always sets owner_wallet, so every receipt written today is current-format.
+const receiptBody = (r) => {
+  const body = {
+    receipt_id: r.receipt_id,
+    ts: r.ts,
+    actor_id: r.actor_id,
+    action: r.action,
+    ref: r.ref,
+    node_id: r.node_id,
+    input_hash: r.input_hash,
+    output_hash: r.output_hash,
+    cost_units: r.cost_units,
+    caller_id: r.caller_id ?? null,
+    prev_hash: r.prev_hash,
+  };
+  if ('owner_wallet' in r) body.owner_wallet = r.owner_wallet ?? null; // absent key = legacy v0
+  return body;
+};
 const canonicalBody = (r) => canonical(receiptBody(r));
 const hashReceipt = (r) => sha256(canonicalBody(r));
 

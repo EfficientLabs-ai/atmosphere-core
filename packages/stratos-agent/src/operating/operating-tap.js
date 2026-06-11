@@ -28,16 +28,30 @@ export function isEnabled() {
 
 /**
  * Side channel for tap-internal failures: NEVER throws, NEVER touches the result. Operators can watch
- * it without it ever becoming load-bearing. Suppressed unless STRATOS_OPERATING_CORE_DEBUG=1 so the
- * fail-open path is silent in production by default.
+ * it without it ever becoming load-bearing. Console output stays suppressed unless
+ * STRATOS_OPERATING_CORE_DEBUG=1 — but every swallowed failure is ALSO appended (best-effort) to
+ * <profile>/tap-failures.jsonl so fail-open never means fail-invisible: a daemon silently minting
+ * zero receipts now leaves a countable trace the heartbeat/operator can see (P1: fail-visible
+ * telemetry). The sidecar write itself is wrapped — a failing failure-log can never affect exec().
  */
 function tapLog(stage, err) {
+  const msg = err && err.message ? err.message : String(err);
   try {
     if (process.env.STRATOS_OPERATING_CORE_DEBUG === '1') {
       // eslint-disable-next-line no-console
-      console.warn(`⚠️  [operating-tap] ${stage} failed (swallowed, fail-open):`, err && err.message ? err.message : err);
+      console.warn(`⚠️  [operating-tap] ${stage} failed (swallowed, fail-open):`, msg);
     }
   } catch { /* a logger that throws must never affect exec() — swallow */ }
+  try {
+    // Sync builtin access (this module is ESM and stays import-free on the disabled path; tapLog
+    // only ever runs on the enabled path, after a failure).
+    const fsS = process.getBuiltinModule('node:fs');
+    const pathS = process.getBuiltinModule('node:path');
+    const profile = process.env.STRATOS_PROFILE_DIR || '.stratos-profile';
+    fsS.mkdirSync(profile, { recursive: true });
+    fsS.appendFileSync(pathS.join(profile, 'tap-failures.jsonl'),
+      JSON.stringify({ ts: new Date().toISOString(), stage, error: msg }) + '\n');
+  } catch { /* fail-open: the failure sidecar is best-effort by design */ }
 }
 
 /** Lazily-loaded operating-core handles (only ever populated on the ENABLED path). */
@@ -89,11 +103,17 @@ async function defaultReceiptLog() {
     const rp = process.env.STRATOS_RECEIPTS || pathMod.join(profile, 'live-receipts.jsonl');
     const { originId } = await import('../memory/skill-seal.js');
     const actor_id = originId(keys.publicKey);
+    // Size-based rotation (P1: receipt-log rotation) — the daemon's live log no longer grows
+    // unbounded. Default 5MB; STRATOS_RECEIPTS_MAX_BYTES overrides (0 disables). Rotation keeps
+    // the hash chain unbroken (segment + lineage line — see ReceiptLog jsdoc).
+    const envMax = process.env.STRATOS_RECEIPTS_MAX_BYTES;
+    const rotateMaxBytes = envMax !== undefined ? (Number(envMax) || 0) : 5 * 1024 * 1024;
     const log = new led.ReceiptLog({
       path: rp,
       signer: led.makeReceiptSigner(keys.privateKey),
       verifier: led.makeReceiptVerifier(keys.publicKey),
       nodeId: actor_id,
+      rotateMaxBytes,
     });
     _receipt = { log, actor_id };
     return _receipt;
@@ -215,6 +235,11 @@ export async function observe(o = {}) {
       endOpts.receiptLog = inj.receiptLog || (def && def.log) || undefined;
       endOpts.actor_id = inj.actor_id || (def && def.actor_id) || undefined;
       ended = core.endTrace(handle, endOpts);
+      // endTrace's receipt minting is fail-OPEN (a broken signer/path yields receipt:null without
+      // throwing) — make that visible: a provided log that minted nothing is a swallowed failure.
+      if (ended && endOpts.receiptLog && !ended.receipt) {
+        tapLog('mint-receipt', new Error(`receipt not minted (fail-open) — log path: ${endOpts.receiptLog.path || '(in-memory)'}`));
+      }
     } catch (e) { tapLog('end-trace', e); }
 
     // Optional eval — only if a caller injected an evaluator (off by default; never in the hot path).

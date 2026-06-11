@@ -157,6 +157,13 @@ const SUITES = {
     // thrown exec while the error still propagates unchanged, FAIL-OPEN (an injected capture that throws
     // still returns exec()'s result), exec()-called-exactly-once, input validation, and determinism.
     'test-operating-tap.mjs',
+    // LIVE RECEIPT TAP (P1 residue closed 2026-06-11) — the daemon-shaped DEFAULT path: observe() with
+    // NOTHING injected mints signed, public-key-verifiable, appending receipts into STRATOS_RECEIPTS and
+    // stays fail-open on an unwritable path. Supervised child, 60s cap. Previously excluded as "hangs":
+    // the old unwritable path lived under /proc, where mkdir can BLOCK uninterruptibly (hidepid procfs
+    // mounts) instead of returning EPERM — the path choice hung, not the tap. Now uses a portable
+    // ENOTDIR blocker (a file used as a directory) and completes in <1s.
+    'test-live-receipts.mjs',
   ],
 };
 

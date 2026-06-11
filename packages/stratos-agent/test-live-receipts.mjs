@@ -48,10 +48,22 @@ if (n2 <= n1) fail('second observe did not append');
 if (!new led.ReceiptLog({ path: rp, verifier: led.makeReceiptVerifier(pub) }).verify().ok) fail('chain broke');
 
 // 4. Fail-open: unwritable receipt path NEVER affects the exec result.
+// The unwritable path is a FILE used as a directory (ENOTDIR) — it fails FAST and portably.
+// (The previous choice, a path under /proc, exposed a kernel quirk: mkdir on procfs can BLOCK in
+// uninterruptible sleep instead of returning EPERM — hidepid procfs mounts do this — which starved
+// the child's event loop forever and made this test "hang". Root-caused 2026-06-11.)
 _resetTapReceiptLog();
-process.env.STRATOS_RECEIPTS = '/proc/definitely/not/writable/r.jsonl';
+const blocker = path.join(tmp, 'blocker');
+fs.writeFileSync(blocker, 'a file, not a directory');
+process.env.STRATOS_RECEIPTS = path.join(blocker, 'sub', 'r.jsonl');
 const out2 = await observe({ meta: { source: 'api', intent: 'question', raw: 'x' }, exec: async () => 'ok' });
 if (out2 !== 'ok') fail('fail-open violated');
+
+// 5. Fail-VISIBLE: the swallowed failure left a countable trace in the profile sidecar (P1).
+const sidecar = path.join(process.env.STRATOS_PROFILE_DIR, 'tap-failures.jsonl');
+if (!fs.existsSync(sidecar)) fail('no tap-failures.jsonl — fail-open became fail-invisible');
+const failures = fs.readFileSync(sidecar, 'utf8').split('\\n').filter(Boolean).map(JSON.parse);
+if (!failures.some((f) => f.stage && f.error)) fail('sidecar entry malformed: ' + JSON.stringify(failures));
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('CHILD-OK');

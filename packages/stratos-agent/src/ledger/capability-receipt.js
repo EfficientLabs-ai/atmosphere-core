@@ -184,26 +184,41 @@ export class ReceiptLog {
    * @param {string|null} [o.nodeId]      this node's did:atmos (default node_id for emitted receipts).
    * @param {function|null} [o.now]       injectable clock (ms) — deterministic tests.
    * @param {function|null} [o.jti]       injectable receipt-id generator — deterministic tests.
+   * @param {number} [o.rotateMaxBytes]   OPT-IN size-based rotation: when the active file exceeds this
+   *   many bytes after an append, it is renamed to `<path>.<ts>.segment` and a fresh active file
+   *   starts with an UNSIGNED control line `{"_rotated_from":..., "_prev_head":...}` recording the
+   *   lineage. The in-memory chain (and so the hash chain) continues unbroken across segments; an
+   *   archived segment exports/verifies as an anchored partial chain — the SAME trust model as
+   *   `exportBundle({since})`. 0/absent = never rotate (default; behavior unchanged).
    */
-  constructor({ path: p = null, signer = null, verifier = null, nodeId = null, now = null, jti = null } = {}) {
+  constructor({ path: p = null, signer = null, verifier = null, nodeId = null, now = null, jti = null, rotateMaxBytes = 0 } = {}) {
     this.path = p; this.signer = signer; this.verifier = verifier;
     this.nodeId = nodeId; this._now = now; this._jti = jti;
+    this.rotateMaxBytes = Number(rotateMaxBytes) || 0;
     this.chain = [];
+    // Anchor for a rotated ACTIVE file: the head hash of the previous segment (from the control
+    // line). verify() requires the first loaded receipt to chain onto this anchor — a truncated or
+    // head-spliced active file still fails closed against it.
+    this._anchor = GENESIS;
     if (p && fs.existsSync(p)) {
       for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
-        const t = line.trim(); if (t) this.chain.push(JSON.parse(t));
+        const t = line.trim(); if (!t) continue;
+        const obj = JSON.parse(t);
+        if (obj && typeof obj._prev_head === 'string') { this._anchor = obj._prev_head; continue; }
+        this.chain.push(obj);
       }
     }
   }
 
   get length() { return this.chain.length; }
-  head() { return this.chain.length ? this.chain[this.chain.length - 1].hash : GENESIS; }
+  head() { return this.chain.length ? this.chain[this.chain.length - 1].hash : this._anchor; }
   entries() { return this.chain.slice(); }
 
   /**
    * Append a receipt: chain onto the head, sign the canonical body with the node key, persist. The
    * caller supplies actor/action/ref/hashes/cost; node_id defaults to this log's nodeId. Returns the
-   * full signed receipt.
+   * full signed receipt. With rotateMaxBytes set, an oversized active file is rotated AFTER the
+   * append (the just-written receipt always lands before rotation, so no receipt is ever lost).
    */
   append(fields = {}) {
     const f = { node_id: this.nodeId, ...fields };
@@ -213,8 +228,31 @@ export class ReceiptLog {
     if (this.path) {
       fs.mkdirSync(path.dirname(this.path), { recursive: true });
       fs.appendFileSync(this.path, JSON.stringify(r) + '\n');
+      this._maybeRotate();
     }
     return r;
+  }
+
+  /**
+   * Size-based segment rotation. The active file is renamed to `<path>.<ts>.segment` (still a valid
+   * anchored-partial-chain JSONL a verifier can export/replay) and a fresh active file begins with
+   * the lineage control line. The in-memory chain is trimmed to keep RAM bounded too — the hash
+   * chain itself is NOT broken: the next append still links onto the preserved head. Failures here
+   * must never break append (the receipt is already persisted) — they throw to the caller only if
+   * the rename itself failed midway, which leaves the original intact.
+   */
+  _maybeRotate() {
+    if (!this.rotateMaxBytes) return;
+    let size = 0;
+    try { size = fs.statSync(this.path).size; } catch { return; }
+    if (size <= this.rotateMaxBytes) return;
+    const stamp = new Date(this._now ? this._now() : Date.now()).toISOString().replace(/[:.]/g, '-');
+    const segment = `${this.path}.${stamp}.segment`;
+    const prevHead = this.head();
+    fs.renameSync(this.path, segment);
+    fs.writeFileSync(this.path, JSON.stringify({ _rotated_from: path.basename(segment), _prev_head: prevHead }) + '\n');
+    this._anchor = prevHead;
+    this.chain = []; // segment receipts live on disk; the chain continues from the anchored head
   }
 
   /**
@@ -227,7 +265,7 @@ export class ReceiptLog {
    * malformed entry.
    */
   verify({ requireSig = false } = {}) {
-    let prev = GENESIS;
+    let prev = this._anchor; // GENESIS normally; the previous segment's head after a rotation reload
     for (let i = 0; i < this.chain.length; i++) {
       const r = this.chain[i];
       if (!r || typeof r !== 'object') return { ok: false, brokenAt: i, reason: 'malformed receipt' };

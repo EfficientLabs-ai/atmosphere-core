@@ -191,6 +191,53 @@ ok('legacy v0 receipts (no owner_wallet key) verify by the body they actually si
   assert.strictEqual(vB.brokenAt, 1);
 });
 
+ok('size-based rotation: segments archive, the chain stays unbroken, reload verifies against the anchor', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rcpt-rotate-'));
+  const p = path.join(tmp, 'receipts.jsonl');
+  // Tiny threshold → every append beyond the first rotates. Use the deterministic clock for stamps.
+  const log = freshLog({ path: p, rotateMaxBytes: 1 });
+  log.append({ actor_id: ACTOR, action: 'inference', ref: 'r1', input_hash: hashContent('1'), output_hash: hashContent('1o'), cost_units: 1 });
+  log.append({ actor_id: ACTOR, action: 'inference', ref: 'r2', input_hash: hashContent('2'), output_hash: hashContent('2o'), cost_units: 2 });
+  log.append({ actor_id: ACTOR, action: 'inference', ref: 'r3', input_hash: hashContent('3'), output_hash: hashContent('3o'), cost_units: 3 });
+  const segments = fs.readdirSync(tmp).filter((f) => f.includes('.segment')).sort();
+  assert.ok(segments.length >= 2, 'rotation produced archived segments');
+
+  // The chain is UNBROKEN across segments: replay every receipt from all files in order.
+  const allLines = [];
+  for (const f of [...segments, 'receipts.jsonl']) {
+    for (const line of fs.readFileSync(path.join(tmp, f), 'utf8').split('\n')) {
+      const t = line.trim(); if (!t) continue;
+      const o = JSON.parse(t); if (!o._prev_head) allLines.push(o);
+    }
+  }
+  assert.strictEqual(allLines.length, 3, 'no receipt lost to rotation');
+  const whole = new ReceiptLog({ verifier: makeReceiptVerifier(node.publicKey) });
+  whole.chain = allLines;
+  assert.strictEqual(whole.verify({ requireSig: true }).ok, true, 'full cross-segment chain verifies from genesis');
+
+  // Reload the rotated ACTIVE file: anchor comes from the control line; verify + append still work.
+  const reloaded = new ReceiptLog({ path: p, nodeId: NODE_ID, now, jti, signer: makeReceiptSigner(node.privateKey), verifier: makeReceiptVerifier(node.publicKey) });
+  assert.strictEqual(reloaded.verify({ requireSig: true }).ok, true, 'anchored active file verifies after reload');
+  reloaded.append({ actor_id: ACTOR, action: 'inference', ref: 'r4', input_hash: hashContent('4'), output_hash: hashContent('4o'), cost_units: 4 });
+  assert.strictEqual(reloaded.verify({ requireSig: true }).ok, true, 'append after reload keeps chaining');
+
+  // An archived segment is third-party-verifiable as an anchored partial chain (the export path).
+  const segLog = new ReceiptLog({ path: path.join(tmp, segments[segments.length - 1]) });
+  const segBundle = segLog.exportBundle({ publicKeyBundle: node.publicKey });
+  assert.strictEqual(verifyBundle(segBundle).ok, true, 'archived segment verifies via bundle (anchored)');
+
+  // Fail-closed: with TWO receipts in the active file, splice out the first (keep the control
+  // line) → the survivor no longer chains onto the anchor.
+  reloaded.append({ actor_id: ACTOR, action: 'inference', ref: 'r5', input_hash: hashContent('5'), output_hash: hashContent('5o'), cost_units: 5 });
+  const lines = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean);
+  assert.strictEqual(lines.length, 3, 'active file = control line + r4 + r5');
+  fs.writeFileSync(p, [lines[0], lines[2]].join('\n') + '\n'); // drop r4, keep control + r5
+  const spliced = new ReceiptLog({ path: p, verifier: makeReceiptVerifier(node.publicKey) });
+  assert.strictEqual(spliced.verify().ok, false, 'head-spliced active file fails against the anchor');
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 ok('a DIFFERENT node\'s public key cannot verify these receipts (wrong signer rejected)', () => {
   const log = freshLog(); seed(log, 2);
   const other = generateHybridKeyPair();

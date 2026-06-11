@@ -210,4 +210,44 @@ export function isOwner(chatId, env = process.env) {
 }
 export function markConfigured() { try { return updateConfig((c) => { c.configured = true; }); } catch { return getConfig(); } }
 
+// ---- GATE 2: cryptographic owner identity + paired nodes (runtime state, not user config) -----
+// The chat-id owner above stays UI-level auth; this records the CRYPTOGRAPHIC owner (did:atmos +
+// public key, base64 bundle) and the nodes the owner has explicitly paired (fingerprint ceremony —
+// src/identity/owner-identity.js). PUBLIC material only: private keys never enter runtime state.
+export function getOwnerIdentity() {
+  const s = loadRuntime();
+  return s.ownerIdentity || null; // { owner_did, owner_public_key } | null
+}
+export function setOwnerIdentity(ownerDid, ownerPublicKeyB64) {
+  return withLock(() => {
+    const s = loadRuntime();
+    s.ownerIdentity = { owner_did: String(ownerDid), owner_public_key: ownerPublicKeyB64 };
+    saveRuntime(s);
+    return s.ownerIdentity;
+  });
+}
+// The PINNED owner this device accepted a pairing-grant from — a SEPARATE slot from
+// ownerIdentity (which records the LOCAL owner identity created by `stratos owner`). Keeping them
+// apart means running `stratos owner` on a paired node can never clobber the pin (Codex finding).
+export function getPairedOwner() { return loadRuntime().pairedOwner || null; }
+export function setPairedOwner(ownerDid, ownerPublicKeyB64) {
+  return withLock(() => {
+    const s = loadRuntime();
+    s.pairedOwner = { owner_did: String(ownerDid), owner_public_key: ownerPublicKeyB64 };
+    saveRuntime(s);
+    return s.pairedOwner;
+  });
+}
+export function getPairedNodes() { return loadRuntime().pairedNodes || []; }
+export function addPairedNode(entry) {
+  if (!entry?.node_did) throw new Error('paired-node entry needs node_did');
+  return withLock(() => {
+    const s = loadRuntime();
+    s.pairedNodes = (s.pairedNodes || []).filter((n) => n.node_did !== entry.node_did); // re-pair replaces
+    s.pairedNodes.push({ ...entry, paired_at: entry.paired_at || new Date().toISOString() });
+    saveRuntime(s);
+    return s.pairedNodes;
+  });
+}
+
 export function _reset() { _cfg = null; } // test hook

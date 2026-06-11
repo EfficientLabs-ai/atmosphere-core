@@ -164,6 +164,13 @@ const SUITES = {
     // mounts) instead of returning EPERM — the path choice hung, not the tap. Now uses a portable
     // ENOTDIR blocker (a file used as a directory) and completes in <1s.
     'test-live-receipts.mjs',
+    // GATE 2 — OWNER IDENTITY + NODE PAIRING (2026-06-11). Hermetic: in-process hybrid keypairs,
+    // tmp profile dirs, the real CLI driven via spawnSync (two devices simulated as two dirs).
+    // Proves the explicit ceremony end to end: signed self-certifying request · approve REFUSES
+    // without/with-wrong fingerprint (the human comparison IS the trust step — no blind TOFU) ·
+    // grant signed by the owner suite · accept verifies BOTH signature halves and PINS the owner
+    // key · pinned owner rejects a foreign (internally-valid) grant · runtime storage round-trips.
+    'test-owner-pairing.mjs',
   ],
 };
 

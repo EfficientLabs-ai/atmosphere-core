@@ -152,6 +152,45 @@ ok('export --since filters by ts and still verifies as a partial chain', () => {
   assert.strictEqual(v.ok, true);
 });
 
+ok('legacy v0 receipts (no owner_wallet key) verify by the body they actually signed — and presence-tamper fails both ways', () => {
+  // Reconstruct what the pre-owner_wallet writer persisted: body WITHOUT the field, hash and
+  // hybrid signature over that exact body, and NO owner_wallet key on the stored object.
+  const canonical = (v) => {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v);
+    if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
+    return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
+  };
+  const legacyBody = {
+    receipt_id: 'legacy-0001', ts: now(), actor_id: ACTOR, action: 'inference', ref: 'old-model',
+    node_id: NODE_ID, input_hash: hashContent('in'), output_hash: hashContent('out'),
+    cost_units: 7, caller_id: null, prev_hash: '0'.repeat(64),
+  };
+  const legacy = { ...legacyBody };
+  legacy.hash = crypto.createHash('sha256').update(canonical(legacyBody)).digest('hex');
+  legacy.sig = makeReceiptSigner(node.privateKey)(canonical(legacyBody));
+
+  // A mixed chain: the legacy receipt, then a current-format receipt chained onto it.
+  const log = freshLog();
+  log.chain.push(legacy);
+  log.append({ actor_id: ACTOR, action: 'skill-run', ref: 'new-skill', input_hash: hashContent('i2'), output_hash: hashContent('o2'), cost_units: 3 });
+  const bundle = log.exportBundle({ publicKeyBundle: node.publicKey });
+  assert.strictEqual(verifyBundle(bundle).ok, true, 'mixed legacy+current chain verifies');
+
+  // Presence tamper A: ADD owner_wallet to the legacy receipt → hash AND signature break.
+  const tA = JSON.parse(JSON.stringify(bundle));
+  tA.receipts[0].owner_wallet = null;
+  const vA = verifyBundle(tA);
+  assert.strictEqual(vA.ok, false);
+  assert.strictEqual(vA.brokenAt, 0);
+
+  // Presence tamper B: STRIP owner_wallet from the current receipt → same fail-closed result.
+  const tB = JSON.parse(JSON.stringify(bundle));
+  delete tB.receipts[1].owner_wallet;
+  const vB = verifyBundle(tB);
+  assert.strictEqual(vB.ok, false);
+  assert.strictEqual(vB.brokenAt, 1);
+});
+
 ok('a DIFFERENT node\'s public key cannot verify these receipts (wrong signer rejected)', () => {
   const log = freshLog(); seed(log, 2);
   const other = generateHybridKeyPair();

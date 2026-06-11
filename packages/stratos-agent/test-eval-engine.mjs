@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createTask } from './src/workspace/workspace-tree.js';
 import { startTrace, recordStep, endTrace, readTrace, traceInputHash } from './src/trace/trace-engine.js';
-import { ReceiptLog, makeReceiptSigner, makeReceiptVerifier } from './src/ledger/capability-receipt.js';
+import { ReceiptLog, makeReceiptSigner, makeReceiptVerifier, hashContent } from './src/ledger/capability-receipt.js';
 import { generateHybridKeyPair } from './src/security/quantum-crypto.js';
 import { originId } from './src/memory/skill-seal.js';
 import { evaluate, readEval, EVAL_FIELDS, DEFAULT_RUBRIC, computeReceiptVerify } from './src/eval/eval-engine.js';
@@ -118,6 +118,38 @@ ok('trace-integrity PASSES for a verifying receipt (chain + signature + input-ha
   const ti = out.record.criteria.find((c) => c.id === 'trace-integrity');
   assert.strictEqual(ti.pass, true);
   assert.strictEqual(ti.score, 1);
+});
+
+ok('receipt LOCATION is precise: shared leaf ids + newer traffic never select the wrong receipt', () => {
+  // One log, TWO traced tasks whose LEAF id collide ('signup'), older one first, then extra noise
+  // receipts — the exact ambiguity that head/leaf-task_id selection got wrong.
+  const parts = ['acme', 'web', 'flowA', 'signup'];
+  createTask(...parts, opt);
+  const kit = freshKit();
+  const h1 = startTrace({ task: parts.join('/'), model_used: 'gemma2:2b', root: ROOT, now: kit.now });
+  recordStep(h1, { kind: 'io', summary: 'older work', who: kit.nodeId, permission: 'fs.write', input: 'a', output: 'b', cost_units: 1 });
+  const older = endTrace(h1, { result: 'ok', outputs: ['done'], receiptLog: kit.log, actor_id: kit.nodeId, now: kit.now });
+  // Same LEAF task id under a different workflow + an unrelated receipt afterwards (moves the head).
+  createTask('acme', 'web', 'flowB', 'signup', opt);
+  const h2 = startTrace({ task: 'acme/web/flowB/signup', model_used: 'gemma2:2b', root: ROOT, now: kit.now });
+  recordStep(h2, { kind: 'io', summary: 'newer work', who: kit.nodeId, permission: 'fs.write', input: 'x', output: 'y', cost_units: 2 });
+  endTrace(h2, { result: 'ok', outputs: ['done'], receiptLog: kit.log, actor_id: kit.nodeId, now: kit.now });
+  kit.log.append({ actor_id: kit.nodeId, action: 'inference', ref: 'noise', input_hash: hashContent('n'), output_hash: hashContent('m'), cost_units: 1 });
+
+  // The trace carries its receipt_id locator (new traces).
+  assert.strictEqual(older.trace.receipt_id, older.receipt.receipt_id, 'trace records its receipt id');
+  // (1) id-locator path: NO receipt object passed, only the (multi-receipt) log — still matches.
+  const v1 = computeReceiptVerify(older.trace, { receiptLog: kit.log, verifier: kit.verifier });
+  assert.strictEqual(v1.chainOk, true);
+  assert.strictEqual(v1.inputHashMatches, true, 'located by receipt_id despite shared leaf + newer head');
+  // (2) legacy traces (no receipt_id): exact content-hash existence in the verified chain.
+  const legacy = JSON.parse(JSON.stringify(older.trace)); delete legacy.receipt_id;
+  const v2 = computeReceiptVerify(legacy, { receiptLog: kit.log, verifier: kit.verifier });
+  assert.strictEqual(v2.inputHashMatches, true, 'legacy trace located by exact content binding');
+  // (3) tampered trace: hashes differently → NOTHING in the chain matches → fail.
+  const forged = JSON.parse(JSON.stringify(legacy)); forged.steps[0].cost_units = 999;
+  const v3 = computeReceiptVerify(forged, { receiptLog: kit.log, verifier: kit.verifier });
+  assert.strictEqual(v3.inputHashMatches, false, 'tampered trace matches no receipt (fail-closed)');
 });
 
 ok('trace-integrity FAILS CLOSED for a tampered trace (steps no longer hash to receipt input_hash)', () => {

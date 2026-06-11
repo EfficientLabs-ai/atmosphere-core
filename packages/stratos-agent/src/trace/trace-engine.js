@@ -166,6 +166,10 @@ export function endTrace(handle, o = {}) {
       // Store WHERE the receipt lives so a verifier can find it. Prefer the log's file path; else
       // the trace records the receipt id + that it is in-memory (honest).
       tr.receipt_path = log.path ? log.path : `(in-memory)#${receipt.receipt_id}`;
+      // Precise locator (rotation-safe): the leaf task_id is NOT unique across tasks/days, so the
+      // trace records its receipt's id — eval finds the exact receipt no matter which segment it
+      // later lives in.
+      tr.receipt_id = receipt.receipt_id;
     } catch {
       // Fail-OPEN emission (same contract as SkillExecutor): a broken signer never breaks the trace.
       receipt = null;

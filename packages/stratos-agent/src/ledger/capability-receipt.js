@@ -96,7 +96,7 @@ const receiptBody = (r) => {
     caller_id: r.caller_id ?? null,
     prev_hash: r.prev_hash,
   };
-  if ('owner_wallet' in r) body.owner_wallet = r.owner_wallet ?? null; // absent key = legacy v0
+  if (Object.hasOwn(r, 'owner_wallet')) body.owner_wallet = r.owner_wallet ?? null; // absent OWN key = legacy v0
   return body;
 };
 const canonicalBody = (r) => canonical(receiptBody(r));

@@ -116,5 +116,25 @@ await ok('gateway-auth: 401 persists route/method/peer — and NEVER the provide
   delete process.env.ATMOS_GATEWAY_SECRET;
 });
 
-assert.strictEqual(pass, 7, `expected all 7 tests to run, got ${pass}`);
-console.log(`\n✅ ${pass}/7 denial-audit tests passed — denials are persistent, bounded, secret-safe.`);
+await ok('pair CLI: a non-throwing grant REFUSAL persists (real CLI, tampered grant)', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const dev = tmp();
+  const profile = path.join(dev, '.stratos-profile');
+  // a structurally-valid but unverifiable grant — verifyPairingGrant RETURNS {ok:false} (no throw),
+  // exactly the path Codex flagged as previously unaudited
+  const grant = path.join(dev, 'grant.json');
+  fs.writeFileSync(grant, JSON.stringify({ kind: 'pairing-grant', node_did: 'did:atmos:' + 'd'.repeat(40), owner_did: 'did:atmos:' + 'e'.repeat(40), owner_public_key: {}, sig: { ed25519Sig: 'AA==', mldsaSig: 'AA==' } }));
+  const r = spawnSync(process.execPath, [path.join(HERE, 'bin', 'stratos.js'), 'pair', 'accept', grant, '--owner-fingerprint', 'dead-beef-dead-beef'],
+    { cwd: dev, env: { ...process.env, STRATOS_PROFILE_DIR: profile }, encoding: 'utf8', timeout: 60000 });
+  assert.strictEqual(r.status, 1, 'refusal exits 1');
+  const sink = path.join(profile, 'denial-audit.jsonl');
+  assert.ok(fs.existsSync(sink), 'refusal landed in the sink');
+  const es = lines(sink).filter((e) => e.gate === 'pairing');
+  assert.ok(es.length >= 1, 'a pairing denial was recorded');
+  assert.ok(es.some((e) => /pair (accept|request)/.test(e.action || '')), 'action names the ceremony step');
+});
+
+assert.strictEqual(pass, 8, `expected all 8 tests to run, got ${pass}`);
+console.log(`\n✅ ${pass}/8 denial-audit tests passed — denials are persistent, bounded, secret-safe.`);

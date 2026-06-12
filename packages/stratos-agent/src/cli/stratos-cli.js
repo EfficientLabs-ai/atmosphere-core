@@ -936,6 +936,7 @@ function cmdPair(rest, deps) {
         expectedNodeDid: myDid,
       });
       if (!v.ok) {
+        recordDenial({ gate: 'pairing', reason: v.reason, action: 'pair accept', actor: grant?.node_did });
         const hint = /no pinned owner and no owner fingerprint/.test(v.reason)
           ? [`${C.d}First pairing: run ${C.x}stratos owner${C.d} on the OWNER device, read its fingerprint aloud, then re-run with --owner-fingerprint <fp> — the human comparison is the ceremony, in BOTH directions.${C.x}`]
           : [];
@@ -972,7 +973,10 @@ function cmdPair(rest, deps) {
       if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair apply-revocation <revocation.json> [--owner-fingerprint <fp>]${C.x}`] };
       const pinned = deps.config.getPairedOwner?.();
       const v = ownerIdentity.verifyRevocation(readJson(file), { pinnedOwnerPublicKey: pinned ? pinned.owner_public_key : null, expectedOwnerFingerprint: ownerFp });
-      if (!v.ok) return { code: 1, lines: [`${C.r}✗ revocation REFUSED: ${v.reason}${C.x}`] };
+      if (!v.ok) {
+        recordDenial({ gate: 'pairing', reason: v.reason, action: 'pair apply-revocation' });
+        return { code: 1, lines: [`${C.r}✗ revocation REFUSED: ${v.reason}${C.x}`] };
+      }
       try { deps.config.addRevokedNode?.(v.nodeDid); } catch { /* runtime store optional in minimal deps */ }
       return { code: 0, lines: [`${C.g}✓ applied revocation of ${didShort(v.nodeDid)}${C.x} ${C.d}(signed by owner ${didShort(v.ownerDid)})${C.x}`] };
     }

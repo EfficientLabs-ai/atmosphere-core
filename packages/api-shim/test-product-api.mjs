@@ -23,7 +23,7 @@ process.env.STRATOS_PROFILE_DIR = PROFILE;
 
 // real receipt machinery for the verify + count paths
 const { generateHybridKeyPair } = await import('../stratos-agent/src/security/quantum-crypto.js');
-const { ReceiptLog, makeReceiptSigner, createReceipt, verifyBundle } = await import('../stratos-agent/src/ledger/capability-receipt.js');
+const { ReceiptLog, makeReceiptSigner, createReceipt, verifyBundle, makeReceiptVerifier } = await import('../stratos-agent/src/ledger/capability-receipt.js');
 const { originId } = await import('../stratos-agent/src/memory/skill-seal.js');
 
 const kp = generateHybridKeyPair();
@@ -55,7 +55,7 @@ fs.writeFileSync(path.join(PROFILE, 'runtime-state.json'), JSON.stringify({
 const app = express();
 app.use(createProductRouter({
   profileDir: PROFILE,
-  receipts: { verifyBundle, ReceiptLog, originId },
+  receipts: { verifyBundle, ReceiptLog, originId, makeReceiptVerifier }, // PRODUCTION dep shape — keep in sync with server.js
   runtimeScorePath: scorePath,
   heartbeatPath: path.join(PROFILE, 'node-heartbeat.jsonl'),
 }));
@@ -129,7 +129,7 @@ await ok('GET /onboard/state: checklist derived from artifacts; providers NAMES 
 await ok('GET /onboard/state: a brand-new node reports honest falses (nothing faked, no write-on-read)', async () => {
   const EMPTY = tmp(); // empty profile dir — zero state files
   const app3 = express();
-  app3.use(createProductRouter({ profileDir: EMPTY, receipts: { verifyBundle, ReceiptLog, originId }, heartbeatPath: path.join(EMPTY, 'none.jsonl') }));
+  app3.use(createProductRouter({ profileDir: EMPTY, receipts: { verifyBundle, ReceiptLog, originId, makeReceiptVerifier }, heartbeatPath: path.join(EMPTY, 'none.jsonl') }));
   const s3 = app3.listen(0, '127.0.0.1');
   await new Promise((r) => s3.once('listening', r));
   const s = await (await fetch(`http://127.0.0.1:${s3.address().port}/onboard/state`)).json();
@@ -174,5 +174,35 @@ await ok('real server mount: product routes are strict (503 no-secret) but /heal
 
 server.close();
 delete process.env.STRATOS_PROFILE_DIR;
-assert.strictEqual(pass, 7, `expected all 7 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/7 product-api tests passed — read APIs + onboarding, composed from real truth.`);
+await ok('PAIRED lights ONLY from a VERIFIED pairing receipt on this node\'s chain (dual-Codex round 3 — production dep shape)', async () => {
+  const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), 'paired-verify-'));
+  const kp = generateHybridKeyPair();
+  const b64o = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
+  fs.writeFileSync(path.join(PROFILE, 'node-keys.json'), JSON.stringify({ publicKey: b64o(kp.publicKey), privateKey: b64o(kp.privateKey) }));
+  fs.writeFileSync(path.join(PROFILE, 'agent-config.json'), JSON.stringify({ configured: true }));
+  const did = originId(kp.publicKey);
+  const chainPath = path.join(PROFILE, 'live-receipts.jsonl');
+  const log = new ReceiptLog({ path: chainPath, signer: makeReceiptSigner(kp.privateKey), nodeId: did });
+  log.append(createReceipt({ actor_id: did, action: 'pairing', ref: 'accept:did:atmos:owner', cost_units: 0, node_id: did }));
+  const mk = async () => {
+    const a = express();
+    a.use(createProductRouter({ profileDir: PROFILE, receipts: { verifyBundle, ReceiptLog, originId, makeReceiptVerifier } }));
+    const srv = a.listen(0, '127.0.0.1');
+    await new Promise((r) => srv.once('listening', r));
+    const out = await (await fetch(`http://127.0.0.1:${srv.address().port}/onboard/state`)).json();
+    srv.close();
+    return out;
+  };
+  const s1 = await mk();
+  assert.strictEqual(s1.state_evidence.PAIRED, true, 'a signed pairing receipt on the verified chain lights PAIRED');
+  assert.strictEqual(s1.state, 'PAIRED');
+  // tamper the chain → the SAME artifact stops counting (fail-closed)
+  const lines = fs.readFileSync(chainPath, 'utf8').trim().split('\n');
+  const t = JSON.parse(lines[0]); t.ref = 'accept:did:atmos:EVIL';
+  fs.writeFileSync(chainPath, JSON.stringify(t) + '\n');
+  const s2 = await mk();
+  assert.strictEqual(s2.state_evidence.PAIRED, false, 'a tampered pairing line is just text');
+});
+
+assert.strictEqual(pass, 8, `expected all 8 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/8 product-api tests passed — read APIs + onboarding, composed from real truth.`);

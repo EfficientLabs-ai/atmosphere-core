@@ -46,6 +46,10 @@ const SUITES = {
     // continuity store/retrieve (receipt over content HASHES only). Hermetic: real router engine,
     // real signed recorder, tmp profile.
     'test-intelligence-api.mjs',
+    // ENTITLEMENT F3 (2026-06-12) — the LOCAL offline entitlement verifier (the SAFE slice of the
+    // Stripe plan; no Stripe/money/signing here). Real hybrid verify; every failure falls to Free
+    // Forever (fail-to-free, never fail-closed). Inert — not yet gating any route.
+    'test-entitlement.mjs',
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG
     // probe that needed a live vector store was removed in the consolidation):
     'test-task-router.js', 'test-classify-live.mjs',

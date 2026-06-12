@@ -23,10 +23,15 @@ const prov = generateHybridKeyPair();
 const b64 = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
 const provPub = b64(prov.publicKey);
 
-const canonical = (token) => { const { sig, ...body } = token; return JSON.stringify(body, Object.keys(body).sort()); };
+function canonical(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
+  return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
+}
+const canonicalBody = (token) => { const { sig, ...body } = token; return canonical(body); };
 function signToken(fields) {
   const token = { format: 'efl.entitlement.v1', issuer: 'efficientlabs-provisioning', ...fields };
-  token.sig = signPayload(canonical(token), prov.privateKey);
+  token.sig = signPayload(canonicalBody(token), prov.privateKey);
   return token;
 }
 
@@ -103,5 +108,32 @@ ok('no provisioning key configured → fail to Free (a paid token without a trus
   assert.strictEqual(e.resolve().source, 'free');
 });
 
-assert.strictEqual(pass, 8, `expected all 8 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/8 entitlement tests passed — offline verify, every failure falls to Free Forever.`);
+ok('NESTED-field tamper after signing → fail to Free (recursive canonical)', () => {
+  const token = signToken({ subject: 'x', tier: 'exos_pro', state: 'active', expires_at: 1_800_000_000_000, namespaces: ['terminal.*'], limits: { nodes: 1, seats: 1 } });
+  token.limits.seats = 999; // tamper a NESTED field the flat-replacer bug used to ignore
+  const e = checker(token);
+  assert.strictEqual(e.resolve().source, 'free', 'nested tamper rejected by recursive canonical');
+});
+
+ok('REVOKED/CANCELED state → fail to Free even with a valid signature (state enforced)', () => {
+  for (const state of ['revoked', 'canceled', 'suspended', '']) {
+    const token = signToken({ subject: 'x', tier: 'apex', state, expires_at: 1_800_000_000_000, namespaces: ['terminal.*'] });
+    const e = checker(token);
+    assert.strictEqual(e.resolve().source, 'free', `state "${state}" must not grant`);
+    assert.ok(!e.isEntitled('terminal.shell'));
+  }
+  // past_due IS a granting (grace) state
+  const grace = signToken({ subject: 'x', tier: 'apex', state: 'past_due', expires_at: 1_800_000_000_000, namespaces: ['terminal.*'] });
+  assert.ok(checker(grace).isEntitled('terminal.shell'), 'past_due (grace) still grants');
+});
+
+ok('JUNK/Infinity expires_at → fail to Free (a paid token must carry a real window)', () => {
+  for (const exp of ['1e309', 'abc', null, '', 0, -5]) {
+    const token = signToken({ subject: 'x', tier: 'apex', state: 'active', expires_at: exp, namespaces: ['terminal.*'] });
+    const e = checker(token, { expired: true }); // far-future now()
+    assert.strictEqual(e.resolve().source, 'free', `expires_at ${JSON.stringify(exp)} must not grant`);
+  }
+});
+
+assert.strictEqual(pass, 11, `expected all 11 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/11 entitlement tests passed — offline verify, every failure falls to Free Forever.`);

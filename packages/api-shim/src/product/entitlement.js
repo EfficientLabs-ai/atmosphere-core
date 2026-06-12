@@ -28,18 +28,30 @@ export const FREE_FOREVER_NAMESPACES = Object.freeze([
 
 const GRACE_MS = 14 * 24 * 60 * 60_000; // PROPOSED 14-day grace past expiry (plan §4)
 
-/** Canonical body for signature verification — the token minus its signature (must match the signer). */
-function canonicalBody(token) {
-  const { sig, ...body } = token;
-  const keys = Object.keys(body).sort();
-  return JSON.stringify(body, keys);
+/** Recursive canonical JSON (the repo idiom — skill-seal.js/node-authz.js). A flat-key replacer
+ *  would collapse nested objects to {}, letting a nested authz field be tampered post-signature
+ *  (Codex finding). This canonicalizes at EVERY depth; the provisioning signer MUST use the same. */
+function canonical(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
+  return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
 }
+/** The signed body = the token minus its signature. */
+function canonicalBody(token) { const { sig, ...body } = token; return canonical(body); }
+
+/** Entitlement states that actually GRANT paid namespaces (plan §3). Anything else → Free floor. */
+const GRANTING_STATES = new Set(['active', 'past_due']); // past_due = grace; features stay on
 
 /** True if `ns` is covered by a grant list entry (exact, or a `prefix.*` wildcard). */
 export function namespaceCovered(ns, granted) {
+  if (typeof ns !== 'string' || !/^[a-z0-9]+(\.[a-z0-9]+)*$/i.test(ns)) return false; // valid dotted id only
   for (const g of granted) {
     if (g === ns) return true;
-    if (g.endsWith('.*') && (ns === g.slice(0, -2) || ns.startsWith(g.slice(0, -1)))) return true;
+    if (g.endsWith('.*')) {
+      const base = g.slice(0, -2);                 // 'terminal.*' → 'terminal'
+      if (ns === base) return true;                 // the base itself
+      if (ns.startsWith(base + '.') && ns.length > base.length + 1) return true; // base.<something>
+    }
   }
   return false;
 }
@@ -87,11 +99,18 @@ export function createEntitlement(deps = {}, opts = {}) {
     let ok = false;
     try { ok = verifyPayload(canonicalBody(token), token.sig, pub); } catch { ok = false; }
     if (!ok) return free('entitlement signature invalid — fail to Free Forever (a forged token grants nothing)');
-    const exp = Number(token.expires_at) || 0;
-    if (exp && now() > exp + GRACE_MS) return free('entitlement expired past grace — fail to Free Forever (never an error wall)');
-    // valid, signed, within the window: union the paid namespaces with the Free floor
+    // STATE (Codex finding): a signed-but-revoked/canceled/suspended token must NOT grant. Only
+    // active/past_due(grace) states unlock paid namespaces; anything else falls to Free.
+    const state = String(token.state || '');
+    if (!GRANTING_STATES.has(state)) return free(`entitlement state "${state || 'unset'}" is not granting — fail to Free Forever`);
+    // EXPIRY (Codex finding): a paid token MUST carry a finite positive expires_at. Junk/missing/
+    // Infinity is not a perpetual grant — it's an untrustworthy token → Free.
+    const exp = Number(token.expires_at);
+    if (!Number.isFinite(exp) || exp <= 0) return free('entitlement has no valid expiry — fail to Free Forever (a paid token must carry a window)');
+    if (now() > exp + GRACE_MS) return free('entitlement expired past grace — fail to Free Forever (never an error wall)');
+    // valid, signed, granting state, within the window: union paid namespaces with the Free floor
     const ns = Array.isArray(token.namespaces) ? token.namespaces : [];
-    return { tier: token.tier || 'unknown', namespaces: [...new Set([...FREE_FOREVER_NAMESPACES, ...ns])], state: token.state || 'active', source: 'token' };
+    return { tier: token.tier || 'unknown', namespaces: [...new Set([...FREE_FOREVER_NAMESPACES, ...ns])], state, source: 'token' };
   }
 
   /** isEntitled(namespace) → boolean. Free Forever namespaces are ALWAYS true. */

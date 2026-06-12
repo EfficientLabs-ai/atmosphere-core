@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseCustomSection, findCustomSectionRange } from './wasm-sections.js';
+import { makeNodeHeartbeat, parseHeartbeatSeconds } from './node-heartbeat.mjs';
 import { verifyPayload } from './quantum-crypto.js';
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
@@ -154,12 +155,30 @@ console.log(OWNER_WALLET
 
 const swarm = new Hyperswarm();
 let executed = 0;
-const stop = (code) => swarm.destroy().finally(() => process.exit(code));
+let peersNow = 0;
+
+// Periodic liveness telemetry (B5): local jsonl, NEVER an endpoint (this node has no inbound
+// surface by design). --heartbeat <seconds> overrides; 0 disables. A stale file IS the alarm.
+// Garbage values — BARE --heartbeat (getArg returns true; Number(true)===1!), typos, Infinity,
+// negatives — fall back to the default loudly. The module additionally refuses non-finite
+// intervals outright (a 1ms hot loop is structurally impossible).
+const HB_SECONDS = parseHeartbeatSeconds(getArg('heartbeat', cfg.heartbeatSeconds ?? 300));
+const heartbeat = makeNodeHeartbeat({
+  file: process.env.ATMOS_NODE_HEARTBEAT || path.join(__dir, 'node-heartbeat.jsonl'),
+  intervalMs: HB_SECONDS * 1000,
+  meta: { node: cfg.nodeLabel || 'node', topic: TOPIC_NAME, version: NODE_VERSION },
+  counters: { skillsRun: () => executed, peers: () => peersNow },
+});
+if (!ONCE) heartbeat.start(); // proof mode is a one-shot — a beat would fake freshness after exit
+
+const stop = (code) => { heartbeat.stop(); return swarm.destroy().finally(() => process.exit(code)); };
 
 const MAX_SKILL_BYTES = 1 << 20; // 1 MiB — skills are ~5 KB; anything larger is hostile.
 swarm.on('connection', (socket, info) => {
   const peer = b4a.toString(info.publicKey, 'hex').slice(0, 16);
   console.log(`🤝 connected to origin peer ${peer}… — awaiting signed skill`);
+  peersNow++;
+  socket.on('close', () => { peersNow = Math.max(0, peersNow - 1); });
   socket.on('error', () => {});
   let reported = false; // disclose capacity at most once per connection, only AFTER auth.
   let computeFn = null; // the verified skill's compute(), reused for dispatched job slices.

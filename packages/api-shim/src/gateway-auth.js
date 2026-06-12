@@ -54,6 +54,36 @@ export function requireGatewaySecret(req, res, next) {
   return next();
 }
 
+/**
+ * STRICT variant for surfaces that must NEVER fail open (e.g. /term filesystem/log reads —
+ * Codex finding on PR #108: warn-and-allow is acceptable backwards-compat for the spend routes,
+ * but a NEW read surface over the filesystem must refuse to exist without per-request auth).
+ *   - No secret configured        → 503 (the surface is OFF, with the reason)
+ *   - Browser-origin request      → 403 unless the Origin is explicitly allowlisted in
+ *                                   ATMOS_GATEWAY_ORIGINS (a cross-site page must never drive
+ *                                   a local fs-read surface, CORS reflection notwithstanding)
+ *   - Wrong/missing secret        → 401
+ * Reads env at REQUEST time (not import time) so tests and runtime reconfiguration see the
+ * current value; the legacy middleware keeps its import-time binding for compatibility.
+ */
+export function requireGatewaySecretStrict(req, res, next) {
+  const secret = process.env.ATMOS_GATEWAY_SECRET || null;
+  if (!secret) {
+    return res.status(503).json({ error: { message: 'this surface requires ATMOS_GATEWAY_SECRET to be configured (fail-closed; see issue #58)', type: 'gateway_auth' } });
+  }
+  const origin = req.get('origin');
+  if (origin) {
+    const allowed = (process.env.ATMOS_GATEWAY_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!allowed.includes(origin)) {
+      return res.status(403).json({ error: { message: 'browser-origin requests are refused on this surface unless the Origin is allowlisted in ATMOS_GATEWAY_ORIGINS', type: 'gateway_auth' } });
+    }
+  }
+  if (!secretMatches(req.get('x-atmos-gateway'), secret) && !secretMatches(bearerToken(req), secret)) {
+    return res.status(401).json({ error: { message: 'Unauthorized: invalid or missing gateway secret (x-atmos-gateway or Authorization: Bearer)', type: 'gateway_auth' } });
+  }
+  return next();
+}
+
 /** First-party callers spread this into their fetch headers. Empty when no secret is set. */
 export function gatewayAuthHeaders() {
   return GATEWAY_SECRET ? { 'x-atmos-gateway': GATEWAY_SECRET } : {};

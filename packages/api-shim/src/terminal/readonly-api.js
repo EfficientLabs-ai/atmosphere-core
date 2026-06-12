@@ -36,7 +36,7 @@ const MODULE_DIR = path.dirname(new URL(import.meta.url).pathname);
 const REPO_ROOT = path.resolve(MODULE_DIR, '..', '..', '..', '..');
 
 /** Secret-bearing names refused ANYWHERE in a relative path — list and read alike. */
-export const DENY_SEGMENT = /(^|\/)(\.env[^/]*|[^/]*vault[^/]*|secrets?|\.secrets[^/]*|[^/]*-keys\.json|owner-keys\.json|[^/]+\.(pem|key)|id_rsa[^/]*|\.npmrc|\.git|node_modules)(\/|$)/i;
+export const DENY_SEGMENT = /(^|\/)(\.env[^/]*|[^/]*vault[^/]*|secrets?|\.secrets[^/]*|[^/]*-keys\.json|owner-keys\.json|[^/]+\.(pem|key)|id_rsa[^/]*|\.npmrc|\.git|node_modules|\.stratos-profile|chat-memory|composio-credentials\.json|connectors\.json|runtime-state\.json)(\/|$)/i;
 
 const MAX_READ_DEFAULT = 256 * 1024;       // per-read soft cap
 const MAX_READ_HARD = 1024 * 1024;         // absolute ceiling
@@ -68,11 +68,16 @@ function jail(roots, rootId, rel) {
   if (cleaned.split(path.sep).includes('..')) return null;
   if (DENY_SEGMENT.test(cleaned.split(path.sep).join('/'))) return null;
   const abs = path.resolve(base, cleaned);
+  // an in-root symlink ALIAS to a denied name (safe.txt -> .env) must not bypass the deny list:
+  // refuse symlink leaves outright, and re-apply the deny pattern to the RESOLVED path below.
+  try { if (fs.lstatSync(abs).isSymbolicLink()) return null; } catch { return null; }
   let real;
   try { real = fs.realpathSync(abs); } catch { return null; } // must exist (read-only API)
   let realBase;
   try { realBase = fs.realpathSync(base); } catch { return null; }
   if (real !== realBase && !real.startsWith(realBase + path.sep)) return null; // symlink escape
+  const resolvedRel = path.relative(realBase, real).split(path.sep).join('/');
+  if (resolvedRel && DENY_SEGMENT.test(resolvedRel)) return null; // intermediate symlink → denied target
   return real;
 }
 
@@ -118,7 +123,8 @@ export function createReadonlyRouter(opts = {}) {
       const relChild = path.relative(roots[String(req.query.root)], path.join(real, name)).split(path.sep).join('/');
       if (DENY_SEGMENT.test(relChild)) continue; // denied names are invisible, not greyed out
       try {
-        const s = fs.statSync(path.join(real, name));
+        const s = fs.lstatSync(path.join(real, name)); // lstat: symlinks are OMITTED, never followed
+        if (s.isSymbolicLink()) continue;
         entries.push({ name, type: s.isDirectory() ? 'dir' : 'file', size: s.isDirectory() ? null : s.size, mtime: s.mtimeMs });
       } catch { /* raced away or unreadable — omit */ }
     }
@@ -167,7 +173,7 @@ export function createReadonlyRouter(opts = {}) {
     const poll = setInterval(() => {
       try {
         const size = fs.statSync(file).size;
-        if (size < pos) pos = 0; // rotated/truncated — restart from head
+        if (size < pos) pos = 0; // size-shrink-aware only (copytruncate-style); a rename rotation needs a reconnect
         if (size > pos) {
           const fd = fs.openSync(file, 'r');
           const buf = Buffer.alloc(Math.min(size - pos, TAIL_WINDOW));
@@ -210,7 +216,10 @@ export function createReadonlyRouter(opts = {}) {
       const logPath = process.env.STRATOS_RECEIPTS || path.join(profileDir, 'live-receipts.jsonl');
       if (!fs.existsSync(logPath)) return deny(res, 404, 'no receipt log on this device yet');
       const { ReceiptLog } = await import('../../../stratos-agent/src/ledger/capability-receipt.js');
-      const log = new ReceiptLog({ path: logPath }); // read-only open: no signer, no rotation
+      // segment-aware (Codex finding): the live log rotates at 5MB; loading only the active file
+      // would silently drop archived history and skew `since`. Same path the CLI export uses.
+      const log = new ReceiptLog({});
+      log.chain = ReceiptLog.loadChainEntries(logPath);
       const since = req.query.since ? String(req.query.since) : null;
       res.json(log.exportBundle({ since, publicKeyBundle }));
     } catch (e) {

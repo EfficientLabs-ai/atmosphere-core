@@ -14,6 +14,7 @@ import path from 'node:path';
 import express from 'express';
 import fetch from 'node-fetch';
 import { createReadonlyRouter } from './src/terminal/readonly-api.js';
+import { requireGatewaySecretStrict } from './src/gateway-auth.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'term-ro-'));
 let pass = 0;
@@ -33,6 +34,9 @@ fs.writeFileSync(path.join(ROOT, 'binary.bin'), Buffer.from([1, 2, 0, 4]));
 const OUTSIDE = tmp();
 fs.writeFileSync(path.join(OUTSIDE, 'escape.txt'), 'outside the jail');
 fs.symlinkSync(path.join(OUTSIDE, 'escape.txt'), path.join(ROOT, 'link-out.txt'));
+fs.symlinkSync(path.join(ROOT, '.env'), path.join(ROOT, 'safe.txt')); // in-root ALIAS to a denied name
+fs.mkdirSync(path.join(ROOT, '.stratos-profile', 'chat-memory'), { recursive: true });
+fs.writeFileSync(path.join(ROOT, '.stratos-profile', 'chat-memory', 'conv.json'), '{"transcript":"private"}');
 
 const LOGS = tmp();
 const LOGFILE = path.join(LOGS, 'atmos-secure-bridge-out.log');
@@ -59,6 +63,8 @@ await ok('fs/tree lists a level; denied names are INVISIBLE', async () => {
   assert.ok(names.includes('hello.txt') && names.includes('sub'));
   assert.ok(!names.includes('.env'), '.env must be invisible');
   assert.ok(!names.includes('vault-stuff'), 'vault names must be invisible');
+  assert.ok(!names.includes('.stratos-profile'), 'profile state must be invisible');
+  assert.ok(!names.includes('link-out.txt') && !names.includes('safe.txt'), 'symlinks are omitted, never followed');
   const sub = await (await get('/fs/tree?root=jail&path=sub')).json();
   assert.ok(!sub.entries.some((e) => e.name === 'node-keys.json'), 'key files must be invisible');
 });
@@ -80,6 +86,9 @@ await ok('jail: traversal, secret names, unknown root, symlink escape → 403', 
     '/fs/read?root=jail&path=sub/node-keys.json',
     '/fs/read?root=nope&path=hello.txt',
     '/fs/read?root=jail&path=link-out.txt',
+    '/fs/read?root=jail&path=safe.txt',
+    '/fs/read?root=jail&path=.stratos-profile/chat-memory/conv.json',
+    '/fs/tree?root=jail&path=.stratos-profile',
     '/fs/tree?root=jail&path=vault-stuff',
   ]) assert.strictEqual((await get(q)).status, 403, q);
 });
@@ -174,6 +183,53 @@ await ok('receipts/export: signed bundle verifies with the PUBLIC key only; no k
   assert.strictEqual(v.ok, true, 'bundle verifies standalone: ' + (v.reason || ''));
 });
 
+await ok('strict gateway auth: fail-CLOSED without a secret, origin-gated, 401 on mismatch', () => {
+  const makeReq = (headers = {}) => { const l = {}; for (const [k, v] of Object.entries(headers)) l[k.toLowerCase()] = v; return { get: (h) => l[h.toLowerCase()] }; };
+  const makeRes = () => { const r = { statusCode: 200 }; r.status = (c) => { r.statusCode = c; return r; }; r.json = () => r; return r; };
+  const run = (headers) => { const res = makeRes(); let nxt = false; requireGatewaySecretStrict(makeReq(headers), res, () => { nxt = true; }); return { nxt, status: res.statusCode }; };
+  const saved = { sec: process.env.ATMOS_GATEWAY_SECRET, org: process.env.ATMOS_GATEWAY_ORIGINS };
+  try {
+    delete process.env.ATMOS_GATEWAY_SECRET;
+    assert.strictEqual(run({}).status, 503, 'no secret configured → the surface is OFF');
+    process.env.ATMOS_GATEWAY_SECRET = 'strict-test-secret';
+    assert.strictEqual(run({}).status, 401, 'missing secret → 401');
+    assert.strictEqual(run({ 'x-atmos-gateway': 'wrong' }).status, 401);
+    assert.ok(run({ 'x-atmos-gateway': 'strict-test-secret' }).nxt, 'right secret → pass');
+    assert.strictEqual(run({ 'x-atmos-gateway': 'strict-test-secret', origin: 'https://evil.example' }).status, 403, 'un-allowlisted browser origin → 403 even with the secret');
+    process.env.ATMOS_GATEWAY_ORIGINS = 'https://app.example';
+    assert.ok(run({ 'x-atmos-gateway': 'strict-test-secret', origin: 'https://app.example' }).nxt, 'allowlisted origin → pass');
+  } finally {
+    if (saved.sec === undefined) delete process.env.ATMOS_GATEWAY_SECRET; else process.env.ATMOS_GATEWAY_SECRET = saved.sec;
+    if (saved.org === undefined) delete process.env.ATMOS_GATEWAY_ORIGINS; else process.env.ATMOS_GATEWAY_ORIGINS = saved.org;
+  }
+});
+
+await ok('receipts/export is SEGMENT-AWARE: rotation never silently shrinks exported history', async () => {
+  const { generateHybridKeyPair } = await import('../stratos-agent/src/security/quantum-crypto.js');
+  const { ReceiptLog, makeReceiptSigner, createReceipt, verifyBundle } = await import('../stratos-agent/src/ledger/capability-receipt.js');
+  const { originId } = await import('../stratos-agent/src/memory/skill-seal.js');
+  const PROFILE2 = tmp();
+  const kp = generateHybridKeyPair();
+  const b64 = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
+  fs.writeFileSync(path.join(PROFILE2, 'node-keys.json'), JSON.stringify({ publicKey: b64(kp.publicKey), privateKey: b64(kp.privateKey) }));
+  const nodeId = originId(kp.publicKey);
+  const log = new ReceiptLog({ path: path.join(PROFILE2, 'live-receipts.jsonl'), signer: makeReceiptSigner(kp.privateKey), nodeId, rotateMaxBytes: 2048 });
+  for (let i = 0; i < 6; i++) log.append(createReceipt({ actor_id: nodeId, action: 'inference', ref: 'rot-' + i, cost_units: 1, node_id: nodeId }));
+  const segs = fs.readdirSync(PROFILE2).filter((f) => f.endsWith('.segment'));
+  assert.ok(segs.length >= 1, 'rotation actually happened (fixture sanity)');
+  const app2 = express();
+  app2.use('/term', createReadonlyRouter({ roots: { jail: ROOT }, pm2LogsDir: LOGS, profileDir: PROFILE2 }));
+  const srv2 = app2.listen(0, '127.0.0.1');
+  await new Promise((r) => srv2.once('listening', r));
+  const r = await fetch(`http://127.0.0.1:${srv2.address().port}/term/receipts/export`);
+  srv2.close();
+  assert.strictEqual(r.status, 200);
+  const bundle = await r.json();
+  assert.strictEqual(bundle.receipts.length, 6, 'archived segment receipts included, not just the active file');
+  const v = verifyBundle(bundle);
+  assert.strictEqual(v.ok, true, 'full genesis-rooted history verifies: ' + (v.reason || ''));
+});
+
 server.close();
-assert.strictEqual(pass, 10, `expected all 10 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/10 terminal-readonly tests passed — jailed, redacted, bounded, measured.`);
+assert.strictEqual(pass, 12, `expected all 12 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/12 terminal-readonly tests passed — jailed, redacted, bounded, measured, fail-closed.`);

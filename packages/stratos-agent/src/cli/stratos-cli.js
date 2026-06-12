@@ -943,9 +943,25 @@ function cmdPair(rest, deps) {
         return { code: 1, lines: [`${C.r}✗ grant REFUSED: ${v.reason}${C.x}`, ...hint] };
       }
       try { deps.config.setPairedOwner?.(v.ownerDid, grant.owner_public_key); } catch { /* runtime store optional in minimal deps */ }
+      // Pairing-success receipt (ATMOS_ONBOARDING_BACKEND §1 step 3): the checklist's step-3
+      // checkmark needs an evidence artifact on the chain, not just runtime state. Fail-visible,
+      // never lifecycle-blocking — a receipt failure must not undo a valid pairing.
+      let receiptLine = null;
+      try {
+        const nodeKeys = loadNodeKeypair();
+        const rlog = new ReceiptLog({
+          path: receiptsPath(), signer: makeReceiptSigner(nodeKeys.privateKey),
+          nodeId: myDid, rotateMaxBytes: 5 * 1024 * 1024,
+        });
+        const r = rlog.append({ actor_id: myDid, action: 'pairing', ref: `accept:${v.ownerDid}`, cost_units: 0 });
+        receiptLine = `${C.d}pairing receipt ${C.x}${shortHash(r.hash)}${C.d} appended to the chain (step-3 evidence artifact).${C.x}`;
+      } catch (e) {
+        receiptLine = `${C.y}⚠ pairing receipt not minted (${e.message}) — the pairing itself succeeded.${C.x}`;
+      }
       return { code: 0, lines: [
         `${C.g}✓ paired to owner ${didShort(v.ownerDid)}${C.x} ${C.d}(owner fingerprint ${v.ownerFingerprint})${C.x}`,
         `${C.d}owner key ${pinned ? 'matched the existing pin' : 'PINNED on this device'}; future grants must verify against it.${C.x}`,
+        receiptLine,
       ] };
     }
     if (sub === 'list') {

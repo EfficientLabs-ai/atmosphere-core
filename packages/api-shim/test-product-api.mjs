@@ -160,6 +160,11 @@ await ok('real server mount: product routes are strict (503 no-secret) but /heal
     assert.strictEqual(health.status, 200, '/health must NOT be gated by the product strict auth');
     assert.strictEqual((await fetch(`${base}/v1/nodes`)).status, 503, '/v1/nodes is strict fail-closed');
     assert.strictEqual((await fetch(`${base}/onboard/state`)).status, 503, '/onboard/state is strict fail-closed');
+    // Lane B surfaces (2026-06-13): same strict wall, no secret → the surface refuses to exist
+    assert.strictEqual((await fetch(`${base}/score`)).status, 503, '/score is strict fail-closed');
+    assert.strictEqual((await fetch(`${base}/v1/nodes/register`, { method: 'POST' })).status, 503, 'node register is strict fail-closed');
+    assert.strictEqual((await fetch(`${base}/v1/workflows/x/execute`, { method: 'POST' })).status, 503, 'workflow execute is strict fail-closed');
+    assert.strictEqual((await fetch(`${base}/v1/skills/publish`, { method: 'POST' })).status, 503, 'skill publish is strict fail-closed');
     srv.close();
   } finally {
     process.chdir(cwd0);

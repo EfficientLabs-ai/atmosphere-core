@@ -68,6 +68,13 @@ export function createProductRouter(opts = {}) {
     try { return (fs.existsSync(receiptsFile()) && receipts?.ReceiptLog) ? receipts.ReceiptLog.loadChainEntries(receiptsFile()).length : 0; }
     catch { return 0; }
   };
+  // §2 artifact for the PAIRED checkmark (dual-Codex): a `pairing` receipt on the signed chain.
+  const hasPairingReceipt = () => {
+    try {
+      if (!fs.existsSync(receiptsFile()) || !receipts?.ReceiptLog) return false;
+      return receipts.ReceiptLog.loadChainEntries(receiptsFile()).some((e) => e.action === 'pairing');
+    } catch { return false; }
+  };
   const lastBeat = () => {
     try {
       if (!fs.existsSync(heartbeatFile())) return null;
@@ -131,13 +138,14 @@ export function createProductRouter(opts = {}) {
     const workspacesRoot = process.env.STRATOS_WORKSPACES_DIR || P('workspaces');
     const modelConnected = local != null || providers.length > 0;
     const machine = computeOnboardingState({
-      nodeDid: did, configured, paired, modelConnected,
-      receiptCount: count, traceExists: hasTraceEvidence(workspacesRoot),
+      nodeDid: did, configured, paired, pairingReceipt: hasPairingReceipt(), modelConnected,
+      receiptCount: count, traceScan: hasTraceEvidence(workspacesRoot),
     });
     res.json({
       state: machine.state,                       // ATMOS_ONBOARDING_BACKEND §2, disk-evidenced only
       state_evidence: machine.evidence,           // per-state booleans the FE can render directly
       state_unobservable: machine.unobservable,   // states with no local artifact — never claimed
+      scan_incomplete: machine.scan_incomplete,   // budgeted trace scan ran dry: FIRST_TASK_RUN is UNKNOWN, not false — never regress a checkmark on it
       nodeDid: did,
       ownerDid,
       paired,

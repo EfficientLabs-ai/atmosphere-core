@@ -14,6 +14,7 @@
  * Interactive `init` and the `start` daemon are handled by bin/stratos.js via the exported helpers.
  */
 import fs from 'node:fs';
+import nodeCrypto from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -953,7 +954,17 @@ function cmdPair(rest, deps) {
           path: receiptsPath(), signer: makeReceiptSigner(nodeKeys.privateKey),
           nodeId: myDid, rotateMaxBytes: 5 * 1024 * 1024,
         });
-        const r = rlog.append({ actor_id: myDid, action: 'pairing', ref: `accept:${v.ownerDid}`, cost_units: 0 });
+        // BIND the receipt to the ceremony (dual-Codex: an unbound pairing receipt is
+        // self-asserted — any key holder could mint one out of band). input_hash = the
+        // owner-SIGNED grant verbatim; output_hash = the accepted ceremony facts (owner DID +
+        // pinned owner fingerprint + this node's DID). A verifier can now demand the grant
+        // that hashes to input_hash and check its owner signature independently.
+        const h = (x) => nodeCrypto.createHash('sha256').update(String(x)).digest('hex');
+        const r = rlog.append({
+          actor_id: myDid, action: 'pairing', ref: `accept:${v.ownerDid}`, cost_units: 0,
+          input_hash: h(JSON.stringify(grant)),
+          output_hash: h(JSON.stringify({ owner_did: v.ownerDid, owner_fingerprint: v.ownerFingerprint, node_did: myDid })),
+        });
         receiptLine = `${C.d}pairing receipt ${C.x}${shortHash(r.hash)}${C.d} appended to the chain (step-3 evidence artifact).${C.x}`;
       } catch (e) {
         receiptLine = `${C.y}⚠ pairing receipt not minted (${e.message}) — the pairing itself succeeded.${C.x}`;

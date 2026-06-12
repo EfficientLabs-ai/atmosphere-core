@@ -77,18 +77,21 @@ export function createSkillsRouter(opts = {}) {
     try { sealed = seal.sealSkillBlock({ skillId: block.skillId, wasmHash: block.wasmHash, metadata: block.metadata ?? {} }, keys); }
     catch (e) { return deny(res, 500, 'seal failed: ' + e.message); }
 
-    const entry = { ts: new Date(now()).toISOString(), skill_id, target, origin: sealed.origin, wasm_hash: block.wasmHash };
-    try { fs.appendFileSync(publishedFile(), JSON.stringify(entry) + '\n'); }
-    catch (e) { return deny(res, 500, 'publish record write failed: ' + e.message); }
+    // proof-surface fail-closed (dual-Codex): the receipt is minted BEFORE the publish record
+    // lands — no recorder, or a failed mint, refuses the publish outright. Order matters: a
+    // receipt without a record is a visible 500 below; a record without a receipt would be a
+    // silent integrity hole.
+    if (!record) return deny(res, 503, 'receipt recorder unavailable — publishing is a proof-surface mutation and refuses without its receipt (fail-closed)');
+    const receipt_id = record({
+      ref: `skill:publish:${skill_id}`,
+      input_hash: sha256(JSON.stringify({ skill_id, target, wasmHash: block.wasmHash })),
+      output_hash: sha256(JSON.stringify(sealed.signatureSeal)),
+    });
+    if (!receipt_id) return deny(res, 503, 'receipt mint failed — publish refused (fail-closed; retry when the receipt rail is back)');
 
-    let receipt_id = null;
-    if (record) {
-      receipt_id = record({
-        ref: `skill:publish:${skill_id}`,
-        input_hash: sha256(JSON.stringify({ skill_id, target, wasmHash: block.wasmHash })),
-        output_hash: sha256(JSON.stringify(sealed.signatureSeal)),
-      });
-    }
+    const entry = { ts: new Date(now()).toISOString(), skill_id, target, origin: sealed.origin, wasm_hash: block.wasmHash, receipt_id };
+    try { fs.appendFileSync(publishedFile(), JSON.stringify(entry) + '\n'); }
+    catch (e) { return deny(res, 500, 'publish record write failed AFTER its receipt minted — receipt ' + receipt_id + ' attests the act; reconcile the published file: ' + e.message); }
     res.status(201).json({ published: true, target, seal: sealed, receipt_id });
   });
 

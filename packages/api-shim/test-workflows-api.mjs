@@ -144,5 +144,43 @@ await ok('unknown workflow 404; malformed definition 400 (dup step ids / missing
   srv.close();
 });
 
-assert.strictEqual(pass, 5, `expected all 5 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/5 workflows-api tests passed — classified, fail-closed, receipted per step.`);
+await ok('FAIL-CLOSED (dual-Codex): no recorder wired → real execution refuses; dry_run still describes', async () => {
+  const { PROFILE, srv, base } = await freshServer({ classify: classifyByVerb, executors: { echo: () => 'out' }, withRecorder: false });
+  fs.writeFileSync(path.join(PROFILE, 'workflows', 'w1.json'), JSON.stringify({ steps: [{ id: 's1', action: 'echo a line', uses: 'echo' }] }));
+  const dry = await (await fetch(base + '/v1/workflows/w1/execute', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dry_run: true }) })).json();
+  assert.strictEqual(dry.steps[0].decision, 'would_execute', 'dry_run still plans');
+  const real = await (await fetch(base + '/v1/workflows/w1/execute', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+  assert.strictEqual(real.status, 'refused', 'no recorder → nothing executes');
+  assert.match(real.steps[0].reason, /receipt recorder unavailable/);
+  srv.close();
+});
+
+await ok('FAIL-CLOSED (dual-Codex): a step whose receipt fails to mint marks the run FAILED and stops it', async () => {
+  const { PROFILE, srv, base } = await freshServer({ classify: classifyByVerb, executors: { echo: () => 'out' } });
+  // recorder that always fails the mint (rail down mid-run)
+  const app2 = express();
+  app2.use(createWorkflowsRouter({ profileDir: PROFILE, classify: classifyByVerb, executors: { echo: () => 'out' }, record: () => null }));
+  const srv2 = app2.listen(0, '127.0.0.1');
+  await new Promise((r) => srv2.once('listening', r));
+  fs.writeFileSync(path.join(PROFILE, 'workflows', 'w2.json'), JSON.stringify({ steps: [{ id: 's1', action: 'echo a', uses: 'echo' }, { id: 's2', action: 'echo b', uses: 'echo' }] }));
+  const run = await (await fetch(`http://127.0.0.1:${srv2.address().port}/v1/workflows/w2/execute`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+  assert.strictEqual(run.status, 'failed');
+  assert.match(run.steps[0].reason, /receipt failed to mint/);
+  assert.strictEqual(run.steps[1].decision, 'skipped', 'the run stopped');
+  srv.close(); srv2.close();
+});
+
+await ok('the step receipt BINDS the runtime inputs (dual-Codex): different inputs → different input_hash', async () => {
+  const { PROFILE, srv, base } = await freshServer({ classify: classifyByVerb, executors: { echo: (s, ctx) => ctx.inputs } });
+  fs.writeFileSync(path.join(PROFILE, 'workflows', 'w3.json'), JSON.stringify({ steps: [{ id: 's1', action: 'echo inputs', uses: 'echo' }] }));
+  const go = (inputs) => fetch(base + '/v1/workflows/w3/execute', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inputs }) }).then((r) => r.json());
+  await go({ a: 1 }); await go({ a: 2 });
+  const chain = ReceiptLog.loadChainEntries(path.join(PROFILE, 'live-receipts.jsonl'));
+  const hashes = chain.filter((e) => String(e.ref || '').startsWith('workflow:w3#')).map((e) => e.input_hash);
+  assert.strictEqual(hashes.length, 2);
+  assert.notStrictEqual(hashes[0], hashes[1], 'caller inputs are part of the signed proof');
+  srv.close();
+});
+
+assert.strictEqual(pass, 8, `expected all 8 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/8 workflows-api tests passed — classified, fail-closed, receipted per step.`);

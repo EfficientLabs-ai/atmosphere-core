@@ -28,7 +28,10 @@ import { signPayload, verifyPayload } from '../security/quantum-crypto.js';
 import { originId } from '../memory/skill-seal.js';
 
 /** The actions a receipt can attest. Deny-by-default: an unknown action is rejected at append(). */
-export const RECEIPT_ACTIONS = Object.freeze(['inference', 'skill-run']);
+// 'term-session' (2026-06-12): terminal session lifecycle events (start/attach/detach/end) join the
+// receipt rail — the ref field carries the event. Verification is enum-agnostic (hash chain +
+// signatures), so bundles containing the new action verify with pre-existing verifiers.
+export const RECEIPT_ACTIONS = Object.freeze(['inference', 'skill-run', 'term-session']);
 
 const GENESIS = '0'.repeat(64);
 

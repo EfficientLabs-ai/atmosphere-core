@@ -31,6 +31,10 @@ const SUITES = {
     // symlink-escape deny), redacted reads + log streams, MEASURED-only metrics, receipt export
     // verifying with the PUBLIC key only, SSE client cap.
     'test-terminal-readonly.mjs',
+    // ATMOS TERMINAL slice 2 (2026-06-12) — PTY sessions via injected fake backend (node-pty is an
+    // optionalDependency, never required hermetically): sanitized env/cwd, single-use attach
+    // tokens, ownership, ring replay, flow control, idle reaping, WS frames, signed receipts.
+    'test-terminal-sessions.mjs',
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG
     // probe that needed a live vector store was removed in the consolidation):
     'test-task-router.js', 'test-classify-live.mjs',

@@ -71,19 +71,26 @@ export function requireGatewaySecret(req, res, next) {
  * current value; the legacy middleware keeps its import-time binding for compatibility.
  */
 export function requireGatewaySecretStrict(req, res, next) {
+  // Every strict denial persists to the denial-audit sink (the sibling-branch gap caught in the
+  // first live verification: the legacy middleware audited, this one didn't). Facts only — the
+  // provided credential value never reaches the sink.
+  const denied = (code, reason) => {
+    recordDenial({ gate: 'gateway-auth-strict', reason, route: req.path, method: req.method, actor: req.ip });
+    return res.status(code).json({ error: { message: reason, type: 'gateway_auth' } });
+  };
   const secret = process.env.ATMOS_GATEWAY_SECRET || null;
   if (!secret) {
-    return res.status(503).json({ error: { message: 'this surface requires ATMOS_GATEWAY_SECRET to be configured (fail-closed; see issue #58)', type: 'gateway_auth' } });
+    return denied(503, 'this surface requires ATMOS_GATEWAY_SECRET to be configured (fail-closed; see issue #58)');
   }
   const origin = req.get('origin');
   if (origin) {
     const allowed = (process.env.ATMOS_GATEWAY_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
     if (!allowed.includes(origin)) {
-      return res.status(403).json({ error: { message: 'browser-origin requests are refused on this surface unless the Origin is allowlisted in ATMOS_GATEWAY_ORIGINS', type: 'gateway_auth' } });
+      return denied(403, 'browser-origin requests are refused on this surface unless the Origin is allowlisted in ATMOS_GATEWAY_ORIGINS');
     }
   }
   if (!secretMatches(req.get('x-atmos-gateway'), secret) && !secretMatches(bearerToken(req), secret)) {
-    return res.status(401).json({ error: { message: 'Unauthorized: invalid or missing gateway secret (x-atmos-gateway or Authorization: Bearer)', type: 'gateway_auth' } });
+    return denied(401, 'Unauthorized: invalid or missing gateway secret (x-atmos-gateway or Authorization: Bearer)');
   }
   return next();
 }

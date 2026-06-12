@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import { createSessionManager, loadNodePty } from './session-manager.js';
+import { recordDenial } from '../../../stratos-agent/src/security/denial-audit.js';
 
 /** Lazy, fail-visible signed receipt recorder (the operating-tap defaultReceiptLog pattern). */
 export function makeSessionReceiptRecorder({ profileDir } = {}) {
@@ -147,7 +148,12 @@ export async function attachTerminalWs(httpServer, manager, { path: wsPath = '/t
     const origin = req.headers.origin;
     if (origin) {
       const allowed = (process.env.ATMOS_GATEWAY_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
-      if (!allowed.includes(origin)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
+      if (!allowed.includes(origin)) {
+        recordDenial({ gate: 'terminal-ws', reason: 'un-allowlisted browser origin on WS upgrade', route: wsPath, actor: origin });
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.destroy();
+        return;
+      }
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       const sessionId = url.searchParams.get('session') || '';
@@ -159,6 +165,7 @@ export async function attachTerminalWs(httpServer, manager, { path: wsPath = '/t
           close: () => { try { ws.close(1000, 'session ended'); } catch { /* gone */ } },
         }, OWNER);
       } catch (e) {
+        recordDenial({ gate: 'terminal-ws', reason: e.message, route: wsPath, action: 'attach', target: sessionId });
         ws.close(4000 + Math.min(999, e.code || 500), e.message.slice(0, 120));
         return;
       }

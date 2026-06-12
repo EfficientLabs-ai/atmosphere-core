@@ -159,14 +159,17 @@ let peersNow = 0;
 
 // Periodic liveness telemetry (B5): local jsonl, NEVER an endpoint (this node has no inbound
 // surface by design). --heartbeat <seconds> overrides; 0 disables. A stale file IS the alarm.
-const HB_SECONDS = Number(getArg('heartbeat', cfg.heartbeatSeconds ?? 300));
+const HB_RAW = Number(getArg('heartbeat', cfg.heartbeatSeconds ?? 300));
+// garbage (--heartbeat with no value / typo / Infinity) falls back to the default, loudly —
+// setInterval would clamp invalid delays to 1ms and turn the beat into a hot loop (Codex finding).
+const HB_SECONDS = Number.isFinite(HB_RAW) && HB_RAW >= 0 ? HB_RAW : (console.warn(`⚠️  invalid --heartbeat value — using default 300s`), 300);
 const heartbeat = makeNodeHeartbeat({
   file: process.env.ATMOS_NODE_HEARTBEAT || path.join(__dir, 'node-heartbeat.jsonl'),
   intervalMs: HB_SECONDS * 1000,
   meta: { node: cfg.nodeLabel || 'node', topic: TOPIC_NAME, version: NODE_VERSION },
   counters: { skillsRun: () => executed, peers: () => peersNow },
 });
-heartbeat.start();
+if (!ONCE) heartbeat.start(); // proof mode is a one-shot — a beat would fake freshness after exit
 
 const stop = (code) => { heartbeat.stop(); return swarm.destroy().finally(() => process.exit(code)); };
 

@@ -54,7 +54,9 @@ export function makeNodeHeartbeat({
   }
 
   function start() {
-    if (timer || intervalMs <= 0) return;
+    // setInterval clamps invalid delays to 1ms (Codex finding): a malformed interval must mean
+    // DISABLED, never a hot append loop. Finite and positive, or no timer at all.
+    if (timer || !Number.isFinite(intervalMs) || intervalMs <= 0) return;
     beat(); // first beat immediately — "started" is itself a liveness fact
     timer = setInterval(beat, intervalMs);
     timer.unref?.(); // a heartbeat must never keep a stopping node alive

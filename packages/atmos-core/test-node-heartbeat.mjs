@@ -10,11 +10,11 @@ import { makeNodeHeartbeat, lastBeat } from './node-runner/node-heartbeat.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'node-hb-'));
 let pass = 0;
-const ok = (name, fn) => { fn(); console.log(`  ✓ ${name}`); pass++; };
+const ok = async (name, fn) => { await fn(); console.log(`  ✓ ${name}`); pass++; }; // awaits async cases (Codex note)
 
 console.log('node-heartbeat — a stale file IS the alarm\n');
 
-ok('beat() appends measured facts + live counters', () => {
+await ok('beat() appends measured facts + live counters', () => {
   const f = path.join(tmp(), 'hb.jsonl');
   let skills = 0;
   const hb = makeNodeHeartbeat({ file: f, meta: { node: 'test-node', topic: 't', version: '1.0.0' }, counters: { skillsRun: () => skills, peers: () => 2 } });
@@ -30,7 +30,7 @@ ok('beat() appends measured facts + live counters', () => {
   assert.ok(!Number.isNaN(Date.parse(lines[0].ts)));
 });
 
-ok('rotation bounds the file (file → file.1)', () => {
+await ok('rotation bounds the file (file → file.1)', () => {
   const f = path.join(tmp(), 'hb.jsonl');
   const hb = makeNodeHeartbeat({ file: f, maxBytes: 512, meta: { node: 'n'.repeat(64) } });
   for (let i = 0; i < 20; i++) hb.beat();
@@ -38,7 +38,7 @@ ok('rotation bounds the file (file → file.1)', () => {
   assert.ok(fs.statSync(f).size <= 1024, 'live file bounded');
 });
 
-ok('a broken sink never throws and warns once (fail-open, fail-visible)', () => {
+await ok('a broken sink never throws and warns once (fail-open, fail-visible)', () => {
   const blocked = path.join(tmp(), 'a-file');
   fs.writeFileSync(blocked, 'x');
   const hb = makeNodeHeartbeat({ file: path.join(blocked, 'hb.jsonl') });
@@ -46,7 +46,7 @@ ok('a broken sink never throws and warns once (fail-open, fail-visible)', () => 
   assert.strictEqual(hb.beat(), false); // second failure also non-throwing
 });
 
-ok('start() beats immediately; interval ≤0 disables; stop() stops', async () => {
+await ok('start() beats immediately; interval ≤0 disables; stop() stops', async () => {
   const f = path.join(tmp(), 'hb.jsonl');
   const hb = makeNodeHeartbeat({ file: f, intervalMs: 30 });
   hb.start();
@@ -62,7 +62,18 @@ ok('start() beats immediately; interval ≤0 disables; stop() stops', async () =
   assert.ok(!fs.existsSync(path.join(path.dirname(f), 'off.jsonl')), 'interval 0 = disabled');
 });
 
-ok('lastBeat(): fresh ok, stale not-ok, missing file not-ok', () => {
+await ok('malformed intervals mean DISABLED, never a 1ms hot loop', async () => {
+  for (const bad of [NaN, Infinity, -5, 'soon']) {
+    const f = path.join(tmp(), 'bad.jsonl');
+    const hb = makeNodeHeartbeat({ file: f, intervalMs: bad });
+    hb.start();
+    await new Promise((r) => setTimeout(r, 60));
+    hb.stop();
+    assert.ok(!fs.existsSync(f), `interval ${bad} → no timer, no beats`);
+  }
+});
+
+await ok('lastBeat(): fresh ok, stale not-ok, missing file not-ok', () => {
   const f = path.join(tmp(), 'hb.jsonl');
   const hb = makeNodeHeartbeat({ file: f });
   hb.beat();
@@ -72,5 +83,5 @@ ok('lastBeat(): fresh ok, stale not-ok, missing file not-ok', () => {
   assert.strictEqual(lastBeat(path.join(tmp(), 'ghost.jsonl')).ok, false, 'no file = not ok (the alarm)');
 });
 
-assert.strictEqual(pass, 5, `expected all 5 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/5 node-heartbeat tests passed — liveness is now a measured, bounded trace.`);
+assert.strictEqual(pass, 6, `expected all 6 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/6 node-heartbeat tests passed — liveness is now a measured, bounded trace.`);

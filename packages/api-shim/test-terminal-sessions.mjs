@@ -173,7 +173,9 @@ await ok('kill: owner-only; list reflects lifecycle', () => {
 await ok('WS end-to-end: token attach, frames, origin check, detach on close — and DENIALS persist safely', async () => {
   const WS_PROFILE = tmp();
   const savedProfile = process.env.STRATOS_PROFILE_DIR;
+  const savedOrigins = process.env.ATMOS_GATEWAY_ORIGINS;
   process.env.STRATOS_PROFILE_DIR = WS_PROFILE; // recordDenial resolves the sink per call
+  delete process.env.ATMOS_GATEWAY_ORIGINS; // hermetic: an ambient allowlist must not admit the evil origin
   const wsSink = () => {
     const f = path.join(WS_PROFILE, 'denial-audit.jsonl');
     return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.gate === 'terminal-ws') : [];
@@ -230,6 +232,7 @@ await ok('WS end-to-end: token attach, frames, origin check, detach on close —
   assert.strictEqual(mgr._sessions.get(created.sessionId).clients.size, 0, 'detach on close');
   server.close();
   if (savedProfile === undefined) delete process.env.STRATOS_PROFILE_DIR; else process.env.STRATOS_PROFILE_DIR = savedProfile;
+  if (savedOrigins === undefined) delete process.env.ATMOS_GATEWAY_ORIGINS; else process.env.ATMOS_GATEWAY_ORIGINS = savedOrigins;
 });
 
 await ok('receipts: term-session events SIGN onto the real chain and verify end-to-end', async () => {

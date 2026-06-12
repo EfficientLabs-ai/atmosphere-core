@@ -42,6 +42,10 @@ const SUITES = {
     // artifact server, receipt verify HTTP wrapper, honest single-node status, onboard/state
     // checklist (providers names-only, nothing faked). Hermetic: tmp profile, fake readers.
     'test-product-api.mjs',
+    // INTELLIGENCE API F2 (2026-06-12) — compute.route dry-run (decision only, no spend) +
+    // continuity store/retrieve (receipt over content HASHES only). Hermetic: real router engine,
+    // real signed recorder, tmp profile.
+    'test-intelligence-api.mjs',
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG
     // probe that needed a live vector store was removed in the consolidation):
     'test-task-router.js', 'test-classify-live.mjs',

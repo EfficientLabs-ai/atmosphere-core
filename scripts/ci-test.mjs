@@ -18,6 +18,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // Hermetic suites, verified green on Node 22 with no live services.
 const SUITES = {
+  // NODE HEARTBEAT (B5 2026-06-12) — periodic local liveness telemetry for the mesh node (no
+  // endpoint by design; a stale file IS the alarm). Hermetic: tmp files, injected counters.
+  'atmos-core': ['test-node-heartbeat.mjs'],
   'api-shim': [
     'test-discord-adapter.mjs', 'test-slack-adapter.mjs', 'test-matrix-adapter.mjs', 'test-signal-adapter.mjs',
     'test-compliance-gateway.mjs', 'test-compliance-router.mjs', 'test-language-gateway.mjs', 'test-secret-guard.mjs',

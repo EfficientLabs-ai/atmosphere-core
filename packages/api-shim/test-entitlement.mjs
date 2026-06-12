@@ -127,6 +127,15 @@ ok('REVOKED/CANCELED state → fail to Free even with a valid signature (state e
   assert.ok(checker(grace).isEntitled('terminal.shell'), 'past_due (grace) still grants');
 });
 
+ok('malformed namespaces entry (null) never throws — lookup stays safe', () => {
+  const token = signToken({ subject: 'x', tier: 'apex', state: 'active', expires_at: 1_800_000_000_000, namespaces: [null, 'terminal.*', 42] });
+  const e = checker(token);
+  assert.strictEqual(e.resolve().source, 'token');
+  assert.doesNotThrow(() => e.isEntitled('terminal.shell'), 'malformed grant entry must not throw');
+  assert.ok(e.isEntitled('terminal.shell'), 'the valid grant still works alongside junk entries');
+  assert.ok(namespaceCovered('terminal.shell', [null, 'terminal.*']), 'matcher tolerates non-string entries');
+});
+
 ok('JUNK/Infinity expires_at → fail to Free (a paid token must carry a real window)', () => {
   for (const exp of ['1e309', 'abc', null, '', 0, -5]) {
     const token = signToken({ subject: 'x', tier: 'apex', state: 'active', expires_at: exp, namespaces: ['terminal.*'] });
@@ -135,5 +144,5 @@ ok('JUNK/Infinity expires_at → fail to Free (a paid token must carry a real wi
   }
 });
 
-assert.strictEqual(pass, 11, `expected all 11 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/11 entitlement tests passed — offline verify, every failure falls to Free Forever.`);
+assert.strictEqual(pass, 12, `expected all 12 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/12 entitlement tests passed — offline verify, every failure falls to Free Forever.`);

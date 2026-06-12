@@ -46,6 +46,7 @@ const GRANTING_STATES = new Set(['active', 'past_due']); // past_due = grace; fe
 export function namespaceCovered(ns, granted) {
   if (typeof ns !== 'string' || !/^[a-z0-9]+(\.[a-z0-9]+)*$/i.test(ns)) return false; // valid dotted id only
   for (const g of granted) {
+    if (typeof g !== 'string') continue; // a malformed grant entry never matches (and never throws)
     if (g === ns) return true;
     if (g.endsWith('.*')) {
       const base = g.slice(0, -2);                 // 'terminal.*' → 'terminal'
@@ -109,7 +110,7 @@ export function createEntitlement(deps = {}, opts = {}) {
     if (!Number.isFinite(exp) || exp <= 0) return free('entitlement has no valid expiry — fail to Free Forever (a paid token must carry a window)');
     if (now() > exp + GRACE_MS) return free('entitlement expired past grace — fail to Free Forever (never an error wall)');
     // valid, signed, granting state, within the window: union paid namespaces with the Free floor
-    const ns = Array.isArray(token.namespaces) ? token.namespaces : [];
+    const ns = Array.isArray(token.namespaces) ? token.namespaces.filter((x) => typeof x === 'string') : [];
     return { tier: token.tier || 'unknown', namespaces: [...new Set([...FREE_FOREVER_NAMESPACES, ...ns])], state, source: 'token' };
   }
 

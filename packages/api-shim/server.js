@@ -14,7 +14,8 @@ import { languageGate } from './src/language-gateway.js';
 import { complianceApprovalGate } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
-import { requireGatewaySecret, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
+import { requireGatewaySecret, requireGatewaySecretStrict, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
+import { createReadonlyRouter } from './src/terminal/readonly-api.js';
 import { beginUpstreamAttempt, recordSuccess, recordFailure, isAvailabilityFailureStatus, breakerSnapshot } from './src/upstream-breaker.js';
 
 const localInference = new LocalInferenceEngine();
@@ -840,6 +841,12 @@ app.post('/mcp', requireGatewaySecret, async (req, res) => {
     id
   });
 });
+
+// Atmos Terminal slice 1 — READ-ONLY file/log/metrics/receipt APIs (no PTY). STRICT auth:
+// unlike the spend routes' warn-and-allow compatibility mode, a filesystem-read surface refuses
+// to exist without a configured secret (503), rejects un-allowlisted browser origins (403), and
+// 401s bad secrets. The fs jail + deny-list + redaction live inside the router.
+app.use('/term', requireGatewaySecretStrict, createReadonlyRouter());
 
 // Catch-all health status check
 app.get('/health', (req, res) => {

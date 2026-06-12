@@ -27,6 +27,10 @@ const SUITES = {
     'test-no-fake-model-ids.mjs',
     'test-acp.mjs', 'test-mcp-rce.mjs', 'test-v1-messages-route.mjs', 'test-gate-failclosed.mjs', 'test-approval-flow.mjs',
     'test-gateway-auth.mjs', 'test-upstream-breaker.mjs', 'test-active-vision-honesty.mjs',
+    // ATMOS TERMINAL slice 1 (2026-06-12) — read-only /term APIs: fs jail (traversal/secret-name/
+    // symlink-escape deny), redacted reads + log streams, MEASURED-only metrics, receipt export
+    // verifying with the PUBLIC key only, SSE client cap.
+    'test-terminal-readonly.mjs',
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG
     // probe that needed a live vector store was removed in the consolidation):
     'test-task-router.js', 'test-classify-live.mjs',

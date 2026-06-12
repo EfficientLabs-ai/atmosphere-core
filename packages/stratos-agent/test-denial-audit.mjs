@@ -116,25 +116,49 @@ await ok('gateway-auth: 401 persists route/method/peer — and NEVER the provide
   delete process.env.ATMOS_GATEWAY_SECRET;
 });
 
-await ok('pair CLI: a non-throwing grant REFUSAL persists (real CLI, tampered grant)', async () => {
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const HERE = path.dirname(fileURLToPath(import.meta.url));
+// --- The Codex-flagged class: verifier REFUSALS that RETURN {ok:false} rather than throwing.
+// Both tests assert a VERIFIER-ORIGINATED reason in the sink, proving the refusal-return recorder
+// handled it (the generic catch recorder would carry a different, exception-shaped reason).
+const { spawnSync } = await import('node:child_process');
+const { fileURLToPath } = await import('node:url');
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const BIN = path.join(HERE, 'bin', 'stratos.js');
+const runCli = (cwd, env, args) => spawnSync(process.execPath, [BIN, ...args], { cwd, env: { ...process.env, ...env }, encoding: 'utf8', timeout: 60000 });
+const b64 = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
+
+await ok('pair accept: a verifier-RETURNED grant refusal persists (real CLI, provisioned node keys)', async () => {
+  const { generateHybridKeyPair } = await import('./src/security/quantum-crypto.js');
   const dev = tmp();
   const profile = path.join(dev, '.stratos-profile');
-  // a structurally-valid but unverifiable grant — verifyPairingGrant RETURNS {ok:false} (no throw),
-  // exactly the path Codex flagged as previously unaudited
+  const keys = path.join(dev, 'node-keys.json');
+  const kp = generateHybridKeyPair();
+  fs.writeFileSync(keys, JSON.stringify({ publicKey: b64(kp.publicKey), privateKey: b64(kp.privateKey) }));
+  // structurally valid grant bound to a DIFFERENT node — verifyPairingGrant RETURNS the
+  // replay-protection refusal (loadNodeKeypair succeeds first because keys are provisioned)
   const grant = path.join(dev, 'grant.json');
-  fs.writeFileSync(grant, JSON.stringify({ kind: 'pairing-grant', node_did: 'did:atmos:' + 'd'.repeat(40), owner_did: 'did:atmos:' + 'e'.repeat(40), owner_public_key: {}, sig: { ed25519Sig: 'AA==', mldsaSig: 'AA==' } }));
-  const r = spawnSync(process.execPath, [path.join(HERE, 'bin', 'stratos.js'), 'pair', 'accept', grant, '--owner-fingerprint', 'dead-beef-dead-beef'],
-    { cwd: dev, env: { ...process.env, STRATOS_PROFILE_DIR: profile }, encoding: 'utf8', timeout: 60000 });
-  assert.strictEqual(r.status, 1, 'refusal exits 1');
-  const sink = path.join(profile, 'denial-audit.jsonl');
-  assert.ok(fs.existsSync(sink), 'refusal landed in the sink');
-  const es = lines(sink).filter((e) => e.gate === 'pairing');
-  assert.ok(es.length >= 1, 'a pairing denial was recorded');
-  assert.ok(es.some((e) => /pair (accept|request)/.test(e.action || '')), 'action names the ceremony step');
+  const otherDid = 'did:atmos:' + 'd'.repeat(40);
+  fs.writeFileSync(grant, JSON.stringify({ kind: 'pairing-grant', node_did: otherDid, owner_did: 'did:atmos:' + 'e'.repeat(40), owner_public_key: { x: 'eQ==' }, node_public_key: { x: 'eQ==' }, sig: { ed25519Sig: 'AA==', mldsaSig: 'AA==' } }));
+  const r = runCli(dev, { STRATOS_PROFILE_DIR: profile, STRATOS_NODE_KEYS: keys }, ['pair', 'accept', grant, '--owner-fingerprint', 'dead-beef-dead-beef']);
+  assert.strictEqual(r.status, 1, 'refusal exits 1: ' + r.stderr);
+  const es = lines(path.join(profile, 'denial-audit.jsonl')).filter((e) => e.gate === 'pairing');
+  const hit = es.find((e) => e.action === 'pair accept' && /grant is for a different node/.test(e.reason));
+  assert.ok(hit, 'verifier-originated refusal reason recorded by the refusal-return path; got: ' + JSON.stringify(es));
+  assert.strictEqual(hit.actor, otherDid, 'actor carries the grant node_did');
 });
 
-assert.strictEqual(pass, 8, `expected all 8 tests to run, got ${pass}`);
-console.log(`\n✅ ${pass}/8 denial-audit tests passed — denials are persistent, bounded, secret-safe.`);
+await ok('pair apply-revocation: a verifier-RETURNED refusal persists (fail-closed, no node keys needed)', () => {
+  const dev = tmp();
+  const profile = path.join(dev, '.stratos-profile');
+  const rev = path.join(dev, 'rev.json');
+  // structurally valid revocation, NO pinned owner and NO fingerprint → verifyRevocation RETURNS
+  // the fail-closed refusal (never reaches signature verification)
+  fs.writeFileSync(rev, JSON.stringify({ kind: 'pairing-revocation', node_did: 'did:atmos:' + 'f'.repeat(40), owner_did: 'did:atmos:' + 'a'.repeat(40), owner_public_key: { x: 'eQ==' }, sig: { ed25519Sig: 'AA==', mldsaSig: 'AA==' } }));
+  const r = runCli(dev, { STRATOS_PROFILE_DIR: profile }, ['pair', 'apply-revocation', rev]);
+  assert.strictEqual(r.status, 1, 'refusal exits 1: ' + r.stderr);
+  const es = lines(path.join(profile, 'denial-audit.jsonl')).filter((e) => e.gate === 'pairing');
+  const hit = es.find((e) => e.action === 'pair apply-revocation' && /no pinned owner and no owner fingerprint/.test(e.reason));
+  assert.ok(hit, 'verifier-originated refusal reason recorded; got: ' + JSON.stringify(es));
+});
+
+assert.strictEqual(pass, 9, `expected all 9 tests to run, got ${pass}`);
+console.log(`\n✅ ${pass}/9 denial-audit tests passed — denials are persistent, bounded, secret-safe.`);

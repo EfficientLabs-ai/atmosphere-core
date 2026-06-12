@@ -183,13 +183,20 @@ await ok('receipts/export: signed bundle verifies with the PUBLIC key only; no k
   assert.strictEqual(v.ok, true, 'bundle verifies standalone: ' + (v.reason || ''));
 });
 
-await ok('strict gateway auth: fail-CLOSED without a secret, origin-gated, 401 on mismatch', () => {
+await ok('strict gateway auth: fail-CLOSED without a secret, origin-gated, 401 on mismatch — and EVERY denial persists', () => {
   const makeReq = (headers = {}) => { const l = {}; for (const [k, v] of Object.entries(headers)) l[k.toLowerCase()] = v; return { get: (h) => l[h.toLowerCase()] }; };
   const makeRes = () => { const r = { statusCode: 200 }; r.status = (c) => { r.statusCode = c; return r; }; r.json = () => r; return r; };
   const run = (headers) => { const res = makeRes(); let nxt = false; requireGatewaySecretStrict(makeReq(headers), res, () => { nxt = true; }); return { nxt, status: res.statusCode }; };
-  const saved = { sec: process.env.ATMOS_GATEWAY_SECRET, org: process.env.ATMOS_GATEWAY_ORIGINS };
+  const saved = { sec: process.env.ATMOS_GATEWAY_SECRET, org: process.env.ATMOS_GATEWAY_ORIGINS, prof: process.env.STRATOS_PROFILE_DIR };
+  const AUDIT_PROFILE = tmp();
+  process.env.STRATOS_PROFILE_DIR = AUDIT_PROFILE; // denial-audit resolves the sink per call
+  const sinkLines = () => {
+    const f = path.join(AUDIT_PROFILE, 'denial-audit.jsonl');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  };
   try {
     delete process.env.ATMOS_GATEWAY_SECRET;
+    delete process.env.ATMOS_GATEWAY_ORIGINS; // hermetic: an ambient allowlist must not flake the evil-origin check
     assert.strictEqual(run({}).status, 503, 'no secret configured → the surface is OFF');
     process.env.ATMOS_GATEWAY_SECRET = 'strict-test-secret';
     assert.strictEqual(run({}).status, 401, 'missing secret → 401');
@@ -198,9 +205,16 @@ await ok('strict gateway auth: fail-CLOSED without a secret, origin-gated, 401 o
     assert.strictEqual(run({ 'x-atmos-gateway': 'strict-test-secret', origin: 'https://evil.example' }).status, 403, 'un-allowlisted browser origin → 403 even with the secret');
     process.env.ATMOS_GATEWAY_ORIGINS = 'https://app.example';
     assert.ok(run({ 'x-atmos-gateway': 'strict-test-secret', origin: 'https://app.example' }).nxt, 'allowlisted origin → pass');
+    // the sibling-branch gap (caught live): strict denials MUST persist like legacy ones do
+    const es = sinkLines().filter((e) => e.gate === 'gateway-auth-strict');
+    assert.ok(es.length >= 4, `503 + 401s + 403 all recorded (got ${es.length})`);
+    assert.ok(es.some((e) => /requires ATMOS_GATEWAY_SECRET/.test(e.reason)), '503 recorded');
+    assert.ok(es.some((e) => /browser-origin/.test(e.reason)), 'origin 403 recorded');
+    assert.ok(!JSON.stringify(es).includes('strict-test-secret'), 'the secret value never reaches the sink');
   } finally {
     if (saved.sec === undefined) delete process.env.ATMOS_GATEWAY_SECRET; else process.env.ATMOS_GATEWAY_SECRET = saved.sec;
     if (saved.org === undefined) delete process.env.ATMOS_GATEWAY_ORIGINS; else process.env.ATMOS_GATEWAY_ORIGINS = saved.org;
+    if (saved.prof === undefined) delete process.env.STRATOS_PROFILE_DIR; else process.env.STRATOS_PROFILE_DIR = saved.prof;
   }
 });
 

@@ -196,6 +196,7 @@ await ok('strict gateway auth: fail-CLOSED without a secret, origin-gated, 401 o
   };
   try {
     delete process.env.ATMOS_GATEWAY_SECRET;
+    delete process.env.ATMOS_GATEWAY_ORIGINS; // hermetic: an ambient allowlist must not flake the evil-origin check
     assert.strictEqual(run({}).status, 503, 'no secret configured → the surface is OFF');
     process.env.ATMOS_GATEWAY_SECRET = 'strict-test-secret';
     assert.strictEqual(run({}).status, 401, 'missing secret → 401');

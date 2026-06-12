@@ -165,7 +165,10 @@ export async function attachTerminalWs(httpServer, manager, { path: wsPath = '/t
           close: () => { try { ws.close(1000, 'session ended'); } catch { /* gone */ } },
         }, OWNER);
       } catch (e) {
-        recordDenial({ gate: 'terminal-ws', reason: e.message, route: wsPath, action: 'attach', target: sessionId });
+        // sessionId here is the RAW query param — a swapped URL (session=<attachToken>) would log
+        // the token verbatim (Codex finding). Only the minted 16-hex id shape is ever persisted.
+        const safeTarget = /^[0-9a-f]{16}$/.test(sessionId) ? sessionId : undefined;
+        recordDenial({ gate: 'terminal-ws', reason: e.message, route: wsPath, action: 'attach', target: safeTarget });
         ws.close(4000 + Math.min(999, e.code || 500), e.message.slice(0, 120));
         return;
       }

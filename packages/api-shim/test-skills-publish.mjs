@@ -26,7 +26,7 @@ const { generateHybridKeyPair } = await import('../stratos-agent/src/security/qu
 const { ReceiptLog, makeReceiptSigner, createReceipt } = await import('../stratos-agent/src/ledger/capability-receipt.js');
 const { originId, sealSkillBlock, verifySkillBlock } = await import('../stratos-agent/src/memory/skill-seal.js');
 
-async function freshServer({ lifecycleGate } = {}) {
+async function freshServer({ lifecycleGate, recordOverride } = {}) {
   const PROFILE = tmp();
   fs.mkdirSync(path.join(PROFILE, 'skills'), { recursive: true });
   const kp = generateHybridKeyPair();
@@ -34,7 +34,7 @@ async function freshServer({ lifecycleGate } = {}) {
   fs.writeFileSync(path.join(PROFILE, 'node-keys.json'), JSON.stringify({ publicKey: b64(kp.publicKey), privateKey: b64(kp.privateKey) }));
   fs.writeFileSync(path.join(PROFILE, 'skills', 'summarize-v1.json'),
     JSON.stringify({ skillId: 'summarize-v1', wasmHash: 'a'.repeat(64), metadata: { evals: '6/6' } }));
-  const record = makeContinuityRecorder({ ReceiptLog, makeReceiptSigner, createReceipt, originId }, { profileDir: PROFILE });
+  const record = recordOverride !== undefined ? recordOverride : makeContinuityRecorder({ ReceiptLog, makeReceiptSigner, createReceipt, originId }, { profileDir: PROFILE });
   const app = express();
   app.use(createSkillsRouter({ profileDir: PROFILE, seal: { sealSkillBlock }, lifecycleGate, record }));
   const srv = app.listen(0, '127.0.0.1');
@@ -104,5 +104,18 @@ await ok('unknown skill 404; bad inputs 400 — publish never invents an artifac
   srv.close();
 });
 
-assert.strictEqual(pass, 5, `expected all 5 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/5 skills-publish tests passed — protected wall + gate fail-closed + real seal.`);
+await ok('FAIL-CLOSED (dual-Codex): publish refuses 503 with no recorder, and with a failing mint — no record lands either way', async () => {
+  const a = await freshServer({ lifecycleGate: () => ({ ok: true }), recordOverride: null });
+  const r1 = await post(a.base, { skill_id: 'summarize-v1', target: 'workspace' });
+  assert.strictEqual(r1.status, 503, 'no recorder → refused');
+  assert.ok(!fs.existsSync(path.join(a.PROFILE, 'published-skills.jsonl')), 'no publish record without a receipt');
+  a.srv.close();
+  const b = await freshServer({ lifecycleGate: () => ({ ok: true }), recordOverride: () => null });
+  const r2 = await post(b.base, { skill_id: 'summarize-v1', target: 'workspace' });
+  assert.strictEqual(r2.status, 503, 'failed mint → refused');
+  assert.ok(!fs.existsSync(path.join(b.PROFILE, 'published-skills.jsonl')), 'still no record');
+  b.srv.close();
+});
+
+assert.strictEqual(pass, 6, `expected all 6 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/6 skills-publish tests passed — protected wall + gate fail-closed + real seal.`);

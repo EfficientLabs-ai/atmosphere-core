@@ -32,7 +32,12 @@ export const UNOBSERVABLE_STATES = Object.freeze({
  * (root/<workspace>/<project>/<workflow>/<task>/traces/ — workspace-tree.js layout).
  * Work-bound: visits at most `cap` directory entries so a huge tree can't block the event loop.
  */
-export function hasTraceEvidence(workspacesRoot, cap = 2000) {
+/**
+ * TRI-STATE (dual-Codex): budget exhaustion is "incomplete scan", never "no
+ * evidence" — collapsing it to false made the state regress on large trees
+ * depending on directory order. Returns { found, exhausted }.
+ */
+export function hasTraceEvidence(workspacesRoot, cap = 20000) {
   let budget = cap;
   const walk = (dir, depth) => {
     if (budget <= 0 || depth > 6) return false;
@@ -50,33 +55,49 @@ export function hasTraceEvidence(workspacesRoot, cap = 2000) {
     }
     return false;
   };
-  return walk(workspacesRoot, 0);
+  const found = walk(workspacesRoot, 0);
+  return { found, exhausted: !found && budget <= 0 };
 }
 
 /**
  * Pure state computation from already-read disk facts.
  * @param {object} f
- * @param {string|null} f.nodeDid       derived from node-keys.json, or null
- * @param {boolean} f.configured        agent-config.json `configured`
- * @param {boolean} f.paired            runtime-state pairedOwner present
- * @param {boolean} f.modelConnected    local model set OR ≥1 provider key handle
- * @param {number}  f.receiptCount      entries on the receipt chain
- * @param {boolean} f.traceExists       hasTraceEvidence() over the workspaces root
- * @returns {{ state: string, evidence: object, unobservable: object }}
+ * @param {string|null} f.nodeDid          derived from node-keys.json, or null
+ * @param {boolean} f.configured           agent-config.json `configured`
+ * @param {boolean} f.paired               runtime-state pairedOwner present (runtime fact)
+ * @param {boolean} f.pairingReceipt       a `pairing` receipt exists on the signed chain (the §2 artifact)
+ * @param {boolean} f.modelConnected       local model set OR ≥1 provider key handle
+ * @param {number}  f.receiptCount         entries on the receipt chain
+ * @param {{found:boolean,exhausted:boolean}|boolean} f.traceScan  hasTraceEvidence() result
+ * @returns {{ state: string, evidence: object, unobservable: object, scan_incomplete: boolean }}
  */
 export function computeOnboardingState(f = {}) {
+  const rawScan = f.traceScan ?? f.traceExists; // traceExists = legacy boolean key
+  const scan = typeof rawScan === 'object' && rawScan !== null
+    ? rawScan
+    : { found: !!rawScan, exhausted: false };
   const evidence = {
     INSTALLED: true, // this API answering IS the evidence — the daemon is installed and running
     NODE_CREATED: !!f.nodeDid && !!f.configured,
-    PAIRED: !!f.paired,
+    // §2 rule: checkmarks derive from disk ARTIFACTS — the pairing receipt on the signed
+    // chain is the artifact (dual-Codex: runtime state alone let the FE show step 3 done
+    // with no receipt ever minted). The runtime fact is still exposed for diagnostics.
+    PAIRED: !!f.pairingReceipt,
     MODEL_CONNECTED: !!f.modelConnected,
-    FIRST_TASK_RUN: !!f.traceExists && (f.receiptCount ?? 0) > 0,
+    // exhausted scan = UNKNOWN, not false — the FE must not regress a checkmark on it
+    FIRST_TASK_RUN: scan.exhausted && !scan.found ? null : (scan.found && (f.receiptCount ?? 0) > 0),
   };
   // furthest state whose entry evidence exists, in §2 order. PAIRED never blocks the sovereign
-  // path: a later state with evidence wins even when PAIRED is false.
+  // path: a later state with evidence wins even when PAIRED is false. null (unknown) never
+  // advances AND never regresses — it simply doesn't count.
   let state = 'INSTALLED';
   for (const s of ONBOARD_STATES) {
-    if (evidence[s]) state = s;
+    if (evidence[s] === true) state = s;
   }
-  return { state, evidence, unobservable: { ...UNOBSERVABLE_STATES } };
+  return {
+    state,
+    evidence: { ...evidence, PAIRED_RUNTIME: !!f.paired },
+    unobservable: { ...UNOBSERVABLE_STATES },
+    scan_incomplete: scan.exhausted && !scan.found,
+  };
 }

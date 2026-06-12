@@ -80,6 +80,9 @@ export function createWorkflowsRouter(opts = {}) {
       if (level >= 5) return { step, level, executable: false, reason: 'L5 protected action — founder-only, refused always' };
       if (level === 4) return { step, level, executable: false, reason: 'L4 needs policy-approved execution — no policy store exists yet (honest refusal)' };
       if (typeof executors[step.uses] !== 'function') return { step, level, executable: false, reason: `no executor wired for "${step.uses ?? '(none declared)'}" — a step never pretends to run` };
+      // proof-surface fail-closed (dual-Codex): a step that would execute without a receipt
+      // recorder is refused — promised per-step receipts are a dependency, not a decoration.
+      if (!record && !dryRun) return { step, level, executable: false, reason: 'receipt recorder unavailable — executed steps must mint receipts (fail-closed)' };
       return { step, level, executable: true };
     });
 
@@ -101,14 +104,23 @@ export function createWorkflowsRouter(opts = {}) {
       } else {
         try {
           const out = executors[p.step.uses](p.step, { inputs, run_id, workflow_id: req.params.id, profileDir });
-          rec.decision = 'executed';
-          if (record) {
-            rec.receipt_id = record({
-              ref: `workflow:${req.params.id}#${p.step.id}`,
-              input_hash: sha256(JSON.stringify({ action: p.step.action, with: p.step.with ?? null })),
-              output_hash: sha256(out === undefined ? '' : JSON.stringify(out)),
-            });
-            if (rec.receipt_id) receipts.push(rec.receipt_id);
+          // the receipt attests what ACTUALLY drove execution: declared action + step config
+          // + the caller's runtime inputs (dual-Codex: hashing only {action,with} let callers
+          // vary real inputs without changing the signed proof).
+          rec.receipt_id = record({
+            ref: `workflow:${req.params.id}#${p.step.id}`,
+            input_hash: sha256(JSON.stringify({ action: p.step.action, with: p.step.with ?? null, inputs })),
+            output_hash: sha256(out === undefined ? '' : JSON.stringify(out)),
+          });
+          if (rec.receipt_id) {
+            rec.decision = 'executed';
+            receipts.push(rec.receipt_id);
+          } else {
+            // executed effects stand (they happened) but the run FAILS VISIBLY: a proof surface
+            // does not continue past an unminted receipt (fail-closed, dual-Codex).
+            rec.decision = 'failed';
+            rec.reason = 'step executed but its receipt failed to mint — run stopped (fail-closed); effects are recorded in this run record';
+            failed = true;
           }
         } catch (e) {
           rec.decision = 'failed'; rec.reason = e.message; failed = true; // fail-visible, stop the run

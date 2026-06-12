@@ -54,7 +54,7 @@ await ok('a REFUSED accept mints NO receipt (refusal is denial-audited, not rece
   assert.ok(!fs.existsSync(receiptsFile), 'no receipt file appears on refusal');
 });
 
-await ok('a SUCCESSFUL accept appends a signed action:pairing receipt to the chain', () => {
+await ok('a SUCCESSFUL accept appends a signed action:pairing receipt to the chain, BOUND to the ceremony', async () => {
   const r = run(devNew, newEnv, ['pair', 'accept', grantFile, '--owner-fingerprint', ownerFp]);
   assert.strictEqual(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /pairing receipt/, 'CLI reports the evidence artifact');
@@ -66,6 +66,14 @@ await ok('a SUCCESSFUL accept appends a signed action:pairing receipt to the cha
   assert.strictEqual(rec.node_id, NEW_DID);
   assert.match(rec.ref, /^accept:did:atmos:/, 'ref names the event + owner did');
   assert.strictEqual(rec.cost_units, 0, 'pairing is never a cost event');
+  // CEREMONY BINDING (dual-Codex): the receipt must be demandable evidence, not a self-assertion —
+  // input_hash = the owner-SIGNED grant verbatim; output_hash = the accepted ceremony facts.
+  const crypto = await import('node:crypto');
+  const h = (x) => crypto.createHash('sha256').update(String(x)).digest('hex');
+  const grant = JSON.parse(fs.readFileSync(grantFile, 'utf8'));
+  assert.strictEqual(rec.input_hash, h(JSON.stringify(grant)), 'input_hash binds the owner-signed grant — a verifier can demand the grant and check its signature');
+  const ownerDid = rec.ref.replace(/^accept:/, '');
+  assert.strictEqual(rec.output_hash, h(JSON.stringify({ owner_did: ownerDid, owner_fingerprint: ownerFp, node_did: NEW_DID })), 'output_hash binds owner DID + pinned fingerprint + node DID');
 });
 
 await ok('the chain containing the pairing receipt verifies third-party (public key only)', () => {

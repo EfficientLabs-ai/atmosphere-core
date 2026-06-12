@@ -874,7 +874,9 @@ app.use('/term', requireGatewaySecretStrict, (req, res, next) => {
 // entitlement check (single-tenant loopback today). State read directly from the profile dir.
 app.use(createProductRouter({
   auth: requireGatewaySecretStrict,
-  receipts: { verifyBundle: receiptVerifyBundle, ReceiptLog: ReceiptLogClass, originId: receiptOriginId },
+  // makeReceiptVerifier is REQUIRED for the PAIRED checkmark's verified-chain check (dual-Codex
+  // round 3: without it the state machine could never reach PAIRED in production)
+  receipts: { verifyBundle: receiptVerifyBundle, ReceiptLog: ReceiptLogClass, originId: receiptOriginId, makeReceiptVerifier: receiptMakeVerifier },
 }));
 
 // Foundation F2 — compute.route dry-run (decision only, no spend) + continuity store/retrieve.

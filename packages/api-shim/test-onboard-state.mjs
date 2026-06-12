@@ -23,9 +23,11 @@ console.log('onboard-state — §2 state machine, disk evidence only\n');
 await ok('state ladder: each state needs its exact evidence; furthest evidenced state wins', () => {
   assert.strictEqual(computeOnboardingState({}).state, 'INSTALLED', 'API answering = installed');
   assert.strictEqual(computeOnboardingState({ nodeDid: 'did:atmos:x', configured: true }).state, 'NODE_CREATED');
-  assert.strictEqual(computeOnboardingState({ nodeDid: 'did:atmos:x', configured: true, paired: true }).state, 'PAIRED');
+  // PAIRED derives from the CHAIN ARTIFACT (pairing receipt), not runtime state (dual-Codex)
+  assert.strictEqual(computeOnboardingState({ nodeDid: 'did:atmos:x', configured: true, paired: true }).state, 'NODE_CREATED', 'runtime pairing alone is NOT the §2 artifact');
+  assert.strictEqual(computeOnboardingState({ nodeDid: 'did:atmos:x', configured: true, paired: true, pairingReceipt: true }).state, 'PAIRED');
   assert.strictEqual(
-    computeOnboardingState({ nodeDid: 'did:atmos:x', configured: true, paired: true, modelConnected: true }).state,
+    computeOnboardingState({ nodeDid: 'did:atmos:x', configured: true, paired: true, pairingReceipt: true, modelConnected: true }).state,
     'MODEL_CONNECTED');
   assert.strictEqual(
     computeOnboardingState({ nodeDid: 'did:atmos:x', configured: true, modelConnected: true, traceExists: true, receiptCount: 2 }).state,
@@ -36,6 +38,7 @@ await ok('sovereign path: PAIRED is optional — a trace + receipt advances past
   const s = computeOnboardingState({ nodeDid: 'did:atmos:x', configured: true, paired: false, modelConnected: false, traceExists: true, receiptCount: 1 });
   assert.strictEqual(s.state, 'FIRST_TASK_RUN', 'pairing never gates steps 4–5');
   assert.strictEqual(s.evidence.PAIRED, false, 'and the evidence map stays honest about it');
+  assert.strictEqual(s.evidence.PAIRED_RUNTIME, false, 'runtime pairing fact exposed separately for diagnostics');
 });
 
 await ok('FIRST_TASK_RUN needs BOTH artifacts: a trace AND ≥1 receipt (§2 evidence column)', () => {
@@ -55,12 +58,24 @@ await ok('RECEIPT_EXPORTED / ACTIVATED / SCORED are NEVER claimed — unobservab
 
 await ok('hasTraceEvidence: finds traces/*.json in the workspace-tree layout; empty/missing → false', () => {
   const root = tmp();
-  assert.strictEqual(hasTraceEvidence(path.join(root, 'absent')), false, 'missing root → false');
+  assert.deepStrictEqual(hasTraceEvidence(path.join(root, 'absent')), { found: false, exhausted: false }, 'missing root → not found, scan complete');
   const taskDir = path.join(root, 'ws1', 'proj', 'flow', 'task1', 'traces');
   fs.mkdirSync(taskDir, { recursive: true });
-  assert.strictEqual(hasTraceEvidence(root), false, 'empty traces dir → false');
+  assert.strictEqual(hasTraceEvidence(root).found, false, 'empty traces dir → not found');
   fs.writeFileSync(path.join(taskDir, 'run1.json'), '{}');
-  assert.strictEqual(hasTraceEvidence(root), true, 'a trace file is the evidence');
+  assert.strictEqual(hasTraceEvidence(root).found, true, 'a trace file is the evidence');
+});
+
+await ok('TRI-STATE scan (dual-Codex): budget exhaustion is UNKNOWN, never a regression to false', () => {
+  const root = tmp();
+  // a wide tree the tiny cap cannot finish
+  for (let i = 0; i < 30; i++) fs.mkdirSync(path.join(root, 'ws' + i, 'p', 'f', 't'), { recursive: true });
+  const scan = hasTraceEvidence(root, 5);
+  assert.deepStrictEqual(scan, { found: false, exhausted: true }, 'ran dry without finding → exhausted');
+  const st = computeOnboardingState({ nodeDid: 'd', configured: true, traceScan: scan, receiptCount: 5 });
+  assert.strictEqual(st.evidence.FIRST_TASK_RUN, null, 'unknown, not false');
+  assert.strictEqual(st.scan_incomplete, true, 'flagged so the FE never regresses a checkmark on it');
+  assert.strictEqual(st.state, 'NODE_CREATED', 'unknown neither advances nor regresses the ladder');
 });
 
 await ok('GET /onboard/state surfaces the machine (additive fields) and still writes NOTHING', async () => {
@@ -83,5 +98,5 @@ await ok('GET /onboard/state surfaces the machine (additive fields) and still wr
   assert.deepStrictEqual(fs.readdirSync(PROFILE).sort(), before, 'GET wrote nothing (no write-on-read)');
 });
 
-assert.strictEqual(pass, 6, `expected all 6 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/6 onboard-state tests passed — states advance only on disk evidence.`);
+assert.strictEqual(pass, 7, `expected all 7 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/7 onboard-state tests passed — states advance only on disk evidence.`);

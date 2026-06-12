@@ -62,18 +62,16 @@ export function makeSessionReceiptRecorder({ profileDir } = {}) {
   async function append(event) {
       if (state === 'failed') return;
       if (!state) { await (initPromise ||= init()); }
-      const { event: ev, session_id, owner, profile: prof, action_kind, input_hash, output_hash, ...meta } = event;
-      // action defaults to 'term-session' (the recorder's origin); F2 continuity passes
-      // action_kind:'skill-run' to mint over content HASHES on the same signed rail.
+      const { event: ev, session_id, owner, profile: prof, ...meta } = event;
       state.log.append(state.createReceipt({
         actor_id: state.actor_id,
-        action: action_kind || 'term-session',
-        ref: ev && session_id ? `${ev}:${session_id}` : (event.ref || ev),
+        action: 'term-session',
+        ref: `${ev}:${session_id}`,
         cost_units: 0,
         node_id: state.actor_id,
         caller_id: owner,
-        input_hash: input_hash ?? null,
-        output_hash: output_hash ?? null,
+        input_hash: null,
+        output_hash: null,
         meta: { profile: prof, ...meta },
       }));
   }

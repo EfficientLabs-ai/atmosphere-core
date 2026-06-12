@@ -22,19 +22,17 @@ console.log('intelligence-api — route dry-run + continuity (hashes-only receip
 
 const PROFILE = tmp();
 
-// a real signed recorder so the continuity receipt actually lands and can be verified
+// the REAL synchronous continuity recorder, fed real node keys in the profile dir
 const { generateHybridKeyPair } = await import('./../stratos-agent/src/security/quantum-crypto.js');
-const { ReceiptLog, makeReceiptSigner } = await import('./../stratos-agent/src/ledger/capability-receipt.js');
+const { ReceiptLog, makeReceiptSigner, createReceipt, verifyBundle } = await import('./../stratos-agent/src/ledger/capability-receipt.js');
 const { originId } = await import('./../stratos-agent/src/memory/skill-seal.js');
+const { makeContinuityRecorder } = await import('./src/product/continuity-receipt.js');
 const kp = generateHybridKeyPair();
 const NODE_DID = originId(kp.publicKey);
+const b64 = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
+fs.writeFileSync(path.join(PROFILE, 'node-keys.json'), JSON.stringify({ publicKey: b64(kp.publicKey), privateKey: b64(kp.privateKey) }));
 const recPath = path.join(PROFILE, 'live-receipts.jsonl');
-const recLog = new ReceiptLog({ path: recPath, signer: makeReceiptSigner(kp.privateKey), nodeId: NODE_DID });
-const { createReceipt } = await import('./../stratos-agent/src/ledger/capability-receipt.js');
-const recorder = ({ input_hash, output_hash, ref }) => {
-  recLog.append(createReceipt({ actor_id: NODE_DID, action: 'skill-run', ref, cost_units: 0, node_id: NODE_DID, input_hash, output_hash }));
-  return ref;
-};
+const recorder = makeContinuityRecorder({ ReceiptLog, makeReceiptSigner, createReceipt, originId }, { profileDir: PROFILE });
 
 const app = express();
 app.use(createIntelligenceRouter({
@@ -78,13 +76,16 @@ await ok('POST /v1/continuity: stores content, mints a skill-run receipt over HA
   const secret = 'a private architecture decision the receipt must never contain';
   const r = await (await post('/v1/continuity', { scope: 'task/abc', kind: 'decision', content: secret })).json();
   assert.ok(r.id && r.content_hash && r.receipt_id);
-  // the on-disk continuity entry keeps content (user's own data); the RECEIPT must not
-  const bundle = recLog.exportBundle({ publicKeyBundle: kp.publicKey });
+  // load the signed chain back from disk and confirm the returned receipt_id is the TRUE signed id
+  const chain = ReceiptLog.loadChainEntries(recPath);
+  const signed = chain.at(-1);
+  assert.strictEqual(r.receipt_id, signed.receipt_id, 'returned id IS the signed receipt id (no false pointer)');
+  const verifyLog = new ReceiptLog({}); verifyLog.chain = chain;
+  const bundle = verifyLog.exportBundle({ publicKeyBundle: kp.publicKey });
   const blob = JSON.stringify(bundle);
   assert.ok(!blob.includes(secret), 'receipt carries NO plaintext content');
   assert.ok(blob.includes(r.content_hash), 'receipt commits the content hash');
-  assert.strictEqual(bundle.receipts.at(-1).action, 'skill-run', 'minted as skill-run');
-  const { verifyBundle } = await import('./../stratos-agent/src/ledger/capability-receipt.js');
+  assert.strictEqual(signed.action, 'skill-run', 'minted as skill-run');
   assert.strictEqual(verifyBundle(bundle).ok, true, 'continuity receipt verifies on the chain');
 });
 
@@ -111,6 +112,22 @@ await ok('GET /v1/continuity: scoped retrieval, newest-first, bounded; retrieval
   assert.ok(!JSON.stringify(last).includes('alpha'), 'raw query text not logged (hashed)');
 });
 
+await ok('GET /v1/continuity: work-bounded scan flags truncation on a large log', async () => {
+  const BIG = tmp();
+  const bigApp = express();
+  bigApp.use(createIntelligenceRouter({ profileDir: BIG, routing: { route: engineRoute, resolveRoute, difficulty } }));
+  const bs = bigApp.listen(0, '127.0.0.1'); await new Promise((r) => bs.once('listening', r));
+  const port = bs.address().port;
+  const big = (b) => fetch(`http://127.0.0.1:${port}/v1/continuity`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+  const line = JSON.stringify({ id: 'x', ts: new Date().toISOString(), scope: 'task/big', kind: 'note', content: 'y'.repeat(2000), refs: [], content_hash: 'h' }) + '\n';
+  fs.writeFileSync(path.join(BIG, 'continuity.jsonl'), line.repeat(2200)); // ~4.5MB
+  await big({ scope: 'task/big', kind: 'note', content: 'newest entry marker' });
+  const r = await (await fetch(`http://127.0.0.1:${port}/v1/continuity?scope=task/big&limit=5`)).json();
+  bs.close();
+  assert.strictEqual(r.scanned_truncated, true, 'a >4MB log is tail-scanned (work-bounded), flagged honestly');
+  assert.ok(r.items.some((e) => e.content === 'newest entry marker'), 'the newest (tail) entry is always seen');
+});
+
 server.close();
-assert.strictEqual(pass, 5, `expected all 5 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/5 intelligence-api tests passed — route spends nothing, continuity receipts are hashes-only.`);
+assert.strictEqual(pass, 6, `expected all 6 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/6 intelligence-api tests passed — route spends nothing, continuity receipts are hashes-only.`);

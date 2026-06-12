@@ -99,12 +99,27 @@ export function createIntelligenceRouter(opts = {}) {
     const q = req.query.q ? String(req.query.q).toLowerCase() : null;
     const since = req.query.since ? Date.parse(String(req.query.since)) : null;
     const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 500);
+    const MAX_SCAN = 4 * 1024 * 1024; // work-bound: scan at most the last 4MB (Codex finding — a huge
+    // local log must not block the event loop on every read). Honest `scanned_truncated` flag below.
     let entries = [];
+    let truncated = false;
     try {
       if (fs.existsSync(continuityFile())) {
-        for (const line of fs.readFileSync(continuityFile(), 'utf8').trim().split('\n')) {
+        const st = fs.statSync(continuityFile());
+        let text;
+        if (st.size > MAX_SCAN) {
+          const fd = fs.openSync(continuityFile(), 'r');
+          try { const buf = Buffer.alloc(MAX_SCAN); fs.readSync(fd, buf, 0, MAX_SCAN, st.size - MAX_SCAN); text = buf.toString('utf8'); }
+          finally { fs.closeSync(fd); }
+          text = text.slice(text.indexOf('\n') + 1); // drop the partial first line
+          truncated = true;
+        } else {
+          text = fs.readFileSync(continuityFile(), 'utf8');
+        }
+        for (const line of text.trim().split('\n')) {
           if (!line) continue;
-          const e = JSON.parse(line);
+          let e; try { e = JSON.parse(line); } catch { continue; }
+          if (!e || typeof e !== 'object') continue;
           if (scope && e.scope !== scope) continue;
           if (since && Number.isFinite(since) && Date.parse(e.ts) < since) continue;
           if (q) {
@@ -118,7 +133,7 @@ export function createIntelligenceRouter(opts = {}) {
     entries = entries.slice(-limit).reverse(); // newest first, bounded
     // retrieval is logged (the memory.retrieve discipline: pointer-logged, never silent)
     try { fs.appendFileSync(retrievalLog(), JSON.stringify({ ts: new Date().toISOString(), scope, q: q ? sha256(q).slice(0, 12) : null, returned: entries.length }) + '\n'); } catch { /* best-effort */ }
-    res.json({ items: entries, count: entries.length });
+    res.json({ items: entries, count: entries.length, scanned_truncated: truncated });
   });
 
   return router;

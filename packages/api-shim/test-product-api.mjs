@@ -42,17 +42,19 @@ fs.writeFileSync(scorePath, JSON.stringify({ format: 'efl.runtime-score.v1', gen
 // a node heartbeat
 fs.writeFileSync(path.join(PROFILE, 'node-heartbeat.jsonl'), JSON.stringify({ ts: new Date().toISOString(), node: 'n', uptime_s: 99, peers: 0 }) + '\n');
 
-// fake config reader (DESIRED state; providers carry secret handles we must NEVER surface)
-const fakeConfig = {
-  getConfig: () => ({ agentName: 'test-node', configured: true }),
-  getModelSources: () => ({ local: { enabled: true, name: 'gemma2:2b' }, providers: { anthropic: { keyHandle: 'vault:SECRET-HANDLE' }, openai: { keyHandle: 'vault:OTHER' } } }),
-  getPairedOwner: () => ({ owner_did: 'did:atmos:' + 'a'.repeat(40), owner_public_key: {} }),
-  getRevokedNodes: () => [],
-};
+// real on-disk state files (the API reads these directly, read-only). The provider map carries a
+// secret HANDLE that must never surface.
+fs.writeFileSync(path.join(PROFILE, 'agent-config.json'), JSON.stringify({
+  agentName: 'test-node', configured: true,
+  modelSources: { local: { enabled: true, name: 'gemma2:2b' }, providers: { anthropic: { keyHandle: 'vault:SECRET-HANDLE' }, openai: { keyHandle: 'vault:OTHER' } } },
+}));
+fs.writeFileSync(path.join(PROFILE, 'runtime-state.json'), JSON.stringify({
+  pairedOwner: { owner_did: 'did:atmos:' + 'a'.repeat(40), owner_public_key: {} }, revokedNodes: [],
+}));
 
 const app = express();
 app.use(createProductRouter({
-  config: fakeConfig,
+  profileDir: PROFILE,
   receipts: { verifyBundle, ReceiptLog, originId },
   runtimeScorePath: scorePath,
   heartbeatPath: path.join(PROFILE, 'node-heartbeat.jsonl'),
@@ -124,21 +126,16 @@ await ok('GET /onboard/state: checklist derived from artifacts; providers NAMES 
   assert.strictEqual(s.checklist.first_receipt, true);
 });
 
-await ok('GET /onboard/state: a brand-new node reports honest falses (nothing faked)', async () => {
-  const EMPTY = tmp();
+await ok('GET /onboard/state: a brand-new node reports honest falses (nothing faked, no write-on-read)', async () => {
+  const EMPTY = tmp(); // empty profile dir — zero state files
   const app3 = express();
-  app3.use(createProductRouter({
-    config: { getConfig: () => ({ configured: false }), getModelSources: () => ({ local: { enabled: false }, providers: {} }), getPairedOwner: () => null, getRevokedNodes: () => [] },
-    receipts: { verifyBundle, ReceiptLog, originId },
-    heartbeatPath: path.join(EMPTY, 'none.jsonl'),
-  }));
-  const savedProfile = process.env.STRATOS_PROFILE_DIR;
-  process.env.STRATOS_PROFILE_DIR = EMPTY; // no keys, no receipts
+  app3.use(createProductRouter({ profileDir: EMPTY, receipts: { verifyBundle, ReceiptLog, originId }, heartbeatPath: path.join(EMPTY, 'none.jsonl') }));
   const s3 = app3.listen(0, '127.0.0.1');
   await new Promise((r) => s3.once('listening', r));
   const s = await (await fetch(`http://127.0.0.1:${s3.address().port}/onboard/state`)).json();
   s3.close();
-  process.env.STRATOS_PROFILE_DIR = savedProfile;
+  // CRITICAL (Codex finding): a GET must NOT create state — the dir stays empty after the read
+  assert.deepStrictEqual(fs.readdirSync(EMPTY), [], 'GET /onboard/state wrote NOTHING to disk');
   assert.strictEqual(s.nodeDid, null);
   assert.strictEqual(s.paired, false);
   assert.strictEqual(s.receipts.count, 0);
@@ -146,7 +143,31 @@ await ok('GET /onboard/state: a brand-new node reports honest falses (nothing fa
   assert.strictEqual(s.checklist.first_receipt, false);
 });
 
+await ok('real server mount: product routes are strict (503 no-secret) but /health stays OPEN', async () => {
+  const cwd0 = process.cwd();
+  const FRESH = tmp();
+  process.chdir(FRESH); // no .stratos-profile here, no secret → strict surface must refuse
+  const savedSecret = process.env.ATMOS_GATEWAY_SECRET;
+  delete process.env.ATMOS_GATEWAY_SECRET;
+  process.env.LOCAL_FALLBACK_ENABLED = 'false';
+  let appMod;
+  try {
+    appMod = (await import('./server.js')).app;
+    const srv = appMod.listen(0, '127.0.0.1');
+    await new Promise((r) => srv.once('listening', r));
+    const base = `http://127.0.0.1:${srv.address().port}`;
+    const health = await fetch(`${base}/health`);
+    assert.strictEqual(health.status, 200, '/health must NOT be gated by the product strict auth');
+    assert.strictEqual((await fetch(`${base}/v1/nodes`)).status, 503, '/v1/nodes is strict fail-closed');
+    assert.strictEqual((await fetch(`${base}/onboard/state`)).status, 503, '/onboard/state is strict fail-closed');
+    srv.close();
+  } finally {
+    process.chdir(cwd0);
+    if (savedSecret === undefined) delete process.env.ATMOS_GATEWAY_SECRET; else process.env.ATMOS_GATEWAY_SECRET = savedSecret;
+  }
+});
+
 server.close();
 delete process.env.STRATOS_PROFILE_DIR;
-assert.strictEqual(pass, 6, `expected all 6 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/6 product-api tests passed — read APIs + onboarding, composed from real truth.`);
+assert.strictEqual(pass, 7, `expected all 7 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/7 product-api tests passed — read APIs + onboarding, composed from real truth.`);

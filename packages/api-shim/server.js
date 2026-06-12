@@ -18,7 +18,6 @@ import { requireGatewaySecret, requireGatewaySecretStrict, secretMatches, GATEWA
 import { createReadonlyRouter } from './src/terminal/readonly-api.js';
 import { buildTerminalSessions } from './src/terminal/terminal-sessions.js';
 import { createProductRouter } from './src/product/product-api.js';
-import * as agentConfig from '../stratos-agent/src/core/agent-config.js';
 import { verifyBundle as receiptVerifyBundle, ReceiptLog as ReceiptLogClass } from '../stratos-agent/src/ledger/capability-receipt.js';
 import { originId as receiptOriginId } from '../stratos-agent/src/memory/skill-seal.js';
 import { beginUpstreamAttempt, recordSuccess, recordFailure, isAvailabilityFailureStatus, breakerSnapshot } from './src/upstream-breaker.js';
@@ -861,10 +860,11 @@ app.use('/term', requireGatewaySecretStrict, (req, res, next) => {
   terminalSessionsPromise.then(({ router }) => router(req, res, next)).catch(() => next());
 });
 
-// Foundation F1 — FE-unblocking read APIs + onboarding state. Strict auth (fail-closed, denials
-// audited); read-only, no spend, no entitlement check (single-tenant loopback today).
-app.use(requireGatewaySecretStrict, createProductRouter({
-  config: agentConfig,
+// Foundation F1 — FE-unblocking read APIs + onboarding state. Strict auth is applied PER-ROUTE
+// inside the router (NOT app-wide — that would bleed onto /health); read-only, no spend, no
+// entitlement check (single-tenant loopback today). State read directly from the profile dir.
+app.use(createProductRouter({
+  auth: requireGatewaySecretStrict,
   receipts: { verifyBundle: receiptVerifyBundle, ReceiptLog: ReceiptLogClass, originId: receiptOriginId },
 }));
 

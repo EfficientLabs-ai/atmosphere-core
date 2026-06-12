@@ -2,55 +2,96 @@
  * product-api.js — Foundation build F1: the FE-unblocking read APIs + onboarding state.
  * (ATMOS_API_SPEC.md TO-BUILD #1/#2/#6 + ATMOS_ONBOARDING_BACKEND.md `GET /onboard/state`.)
  *
- * All four are R0 reads, strict-auth (fail-closed, denials audited by the middleware), no spend,
- * no entitlement check (single-tenant loopback today — the spec's TO-BUILD #10), no protected
- * surface. They compose EXISTING truth sources verbatim — nothing here recomputes or synthesizes:
- *
  *   GET  /v1/runtime-score        the published efl.runtime-score.v1 artifact, verbatim + ETag
  *   POST /v1/receipts/verify      HTTP wrapper over verifyBundle() — third-party verify, public-key-only
  *   GET  /v1/nodes                this node's honest status (single entry; never fakes a fleet)
  *   GET  /onboard/state           the FE checklist's single source of truth (derived from real artifacts)
  *
- * Everything is dependency-injected for hermetic tests. Mounted under requireGatewaySecretStrict.
+ * Design rules (all four are R0 reads):
+ *  - STRICTLY READ-ONLY: state is read by parsing the on-disk JSON DIRECTLY (read-only, default {}
+ *    on absence) — NOT through agent-config's accessors, which write a default config on first read
+ *    (Codex finding). A GET must never create state.
+ *  - ONE profile root: keys, receipts, config, runtime-state all resolve from the SAME profileDir
+ *    (`<cwd>/.stratos-profile`, the root agent-config owns; STRATOS_PROFILE_DIR overrides) — so a
+ *    response can never mix artifacts from two roots (Codex finding).
+ *  - PER-ROUTE auth: the strict gateway middleware is applied to each route, NOT app-wide — mounting
+ *    it at the app root bled onto /health (Codex finding). Default passthrough for hermetic tests.
+ *  - Provider key HANDLES never leave the node: only provider NAMES are surfaced.
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import express from 'express';
 
-const profileDir = () => process.env.STRATOS_PROFILE_DIR || path.join(os.homedir(), '.stratos-profile');
+const PASSTHROUGH = (req, res, next) => next();
 
-/** Locate the runtime-score artifact: env override → the web repo's published copy → none. */
+/** The one profile root — matches agent-config (`<cwd>/.stratos-profile`), STRATOS_PROFILE_DIR overrides. */
+function resolveProfileDir(opts = {}) {
+  return opts.profileDir || process.env.STRATOS_PROFILE_DIR || path.join(process.cwd(), '.stratos-profile');
+}
+
+/** Read + parse a JSON file read-only; missing/garbage → fallback (NEVER writes). */
+function readJsonSafe(file, fallback = {}) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+
 function runtimeScorePath(opts = {}) {
   if (opts.runtimeScorePath) return opts.runtimeScorePath;
   if (process.env.ATMOS_RUNTIME_SCORE) return process.env.ATMOS_RUNTIME_SCORE;
-  // the publisher writes this; the API serves it verbatim (the generator owns truth)
-  return path.join(os.homedir(), 'efficientlabs-web', 'data', 'runtime-score.json');
+  return path.join(process.env.HOME || '', 'efficientlabs-web', 'data', 'runtime-score.json');
 }
 
 export function createProductRouter(opts = {}) {
   const router = express.Router();
+  const auth = opts.auth || PASSTHROUGH;               // strict gateway middleware in production
+  const receipts = opts.receipts || null;              // { verifyBundle, ReceiptLog, originId } — pure fns
+  const profileDir = resolveProfileDir(opts);
+  const P = (name) => path.join(profileDir, name);
+  const nodeKeysFile = () => process.env.STRATOS_NODE_KEYS || P('node-keys.json');
+  const receiptsFile = () => process.env.STRATOS_RECEIPTS || P('live-receipts.jsonl');
+  const heartbeatFile = () => opts.heartbeatPath || P('node-heartbeat.jsonl');
   const deny = (res, code, message) => res.status(code).json({ error: { message, type: 'product_api' } });
-  // injectable readers (real modules in production; fakes in tests)
-  const cfg = opts.config || null;        // { getConfig, getModelSources, getPairedOwner, getRevokedNodes }
-  const receipts = opts.receipts || null; // { loadChainEntries, verifyBundle, originId, ReceiptLog }
-  const heartbeatPath = opts.heartbeatPath || path.join(profileDir(), 'node-heartbeat.jsonl');
+
+  // read-only state readers (direct file reads — no agent-config write-on-read)
+  const nodeDid = () => {
+    try {
+      const raw = readJsonSafe(nodeKeysFile(), null);
+      if (!raw?.publicKey || !receipts?.originId) return null;
+      const pub = Object.fromEntries(Object.entries(raw.publicKey).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
+      return receipts.originId(pub);
+    } catch { return null; }
+  };
+  const runtime = () => readJsonSafe(P('runtime-state.json'), {});
+  const config = () => readJsonSafe(P('agent-config.json'), {});
+  const receiptCount = () => {
+    try { return (fs.existsSync(receiptsFile()) && receipts?.ReceiptLog) ? receipts.ReceiptLog.loadChainEntries(receiptsFile()).length : 0; }
+    catch { return 0; }
+  };
+  const lastBeat = () => {
+    try {
+      if (!fs.existsSync(heartbeatFile())) return null;
+      const lines = fs.readFileSync(heartbeatFile(), 'utf8').trim().split('\n');
+      return JSON.parse(lines[lines.length - 1]);
+    } catch { return null; }
+  };
 
   // ── GET /v1/runtime-score — serve the published artifact verbatim (ATMOS_API_SPEC §2.4) ──
-  router.get('/v1/runtime-score', (req, res) => {
-    const p = runtimeScorePath(opts);
+  router.get('/v1/runtime-score', auth, (req, res) => {
     let raw;
-    try { raw = fs.readFileSync(p, 'utf8'); } catch { return deny(res, 404, 'runtime-score artifact not published yet (the 30-min publisher writes it)'); }
+    try { raw = fs.readFileSync(runtimeScorePath(opts), 'utf8'); } catch { return deny(res, 404, 'runtime-score artifact not published yet (the 30-min publisher writes it)'); }
     let doc;
     try { doc = JSON.parse(raw); } catch { return deny(res, 502, 'runtime-score artifact is unreadable JSON'); }
     const etag = '"' + crypto.createHash('sha256').update(String(doc.generated_at || raw)).digest('hex').slice(0, 16) + '"';
     if (req.get('if-none-match') === etag) return res.status(304).end();
-    res.set('ETag', etag).set('Cache-Control', 'no-cache').json(doc); // verbatim — no recompute
+    res.set('ETag', etag).set('Cache-Control', 'no-cache').json(doc);
   });
 
   // ── POST /v1/receipts/verify — HTTP wrapper over verifyBundle (ATMOS_API_SPEC §2.3) ──
-  router.post('/v1/receipts/verify', express.json({ limit: '8mb' }), (req, res) => {
+  // express.json() is idempotent behind the global bodyParser.json() (the `_body` guard skips a
+  // second parse) AND lets this route work standalone. HONEST LIMIT NOTE: in the daemon the global
+  // parser runs first, so ITS limit governs in production — a larger bundle yields 413 upstream;
+  // this inner limit only governs standalone callers.
+  router.post('/v1/receipts/verify', auth, express.json({ limit: '8mb' }), (req, res) => {
     if (!receipts?.verifyBundle) return deny(res, 503, 'receipt verification module unavailable');
     const bundle = req.body?.bundle ?? req.body; // accept {bundle} or a bare bundle
     if (!bundle || typeof bundle !== 'object' || !Array.isArray(bundle.receipts)) {
@@ -58,74 +99,48 @@ export function createProductRouter(opts = {}) {
     }
     let v;
     try { v = receipts.verifyBundle(bundle); } catch (e) { return deny(res, 422, 'verification error: ' + e.message); }
-    // verifyBundle is fail-closed; surface its exact verdict. No receipt minted (verification IS the act).
-    res.json(v);
+    res.json(v); // verifyBundle is fail-closed; no receipt minted (verification IS the act)
   });
 
   // ── GET /v1/nodes — this node's honest status (ATMOS_API_SPEC §2.9; single entry, never faked) ──
-  router.get('/v1/nodes', (req, res) => {
-    const node = { node_id: null, name: null, owner: null, heartbeat: null, last_seen: null, paired: false };
-    try {
-      const keyFile = process.env.STRATOS_NODE_KEYS || path.join(profileDir(), 'node-keys.json');
-      if (fs.existsSync(keyFile) && receipts?.originId) {
-        const raw = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
-        const pub = Object.fromEntries(Object.entries(raw.publicKey).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
-        node.node_id = receipts.originId(pub);
-      }
-    } catch { /* no identity yet — node_id stays null, honestly */ }
-    try { node.name = cfg?.getConfig?.().agentName ?? null; } catch { /* default */ }
-    try { node.paired = !!cfg?.getPairedOwner?.(); } catch { /* default false */ }
-    // heartbeat freshness from the node-heartbeat.jsonl (PR #110); absent = honest null, never faked alive
-    try {
-      if (fs.existsSync(heartbeatPath)) {
-        const lines = fs.readFileSync(heartbeatPath, 'utf8').trim().split('\n');
-        const last = JSON.parse(lines[lines.length - 1]);
-        const ageMs = Date.now() - Date.parse(last.ts);
-        node.heartbeat = { fresh: ageMs >= 0 && ageMs < 10 * 60_000, age_ms: ageMs, uptime_s: last.uptime_s, peers: last.peers };
-        node.last_seen = last.ts;
-      }
-    } catch { /* no heartbeat file — single-node-no-mesh, honest null */ }
+  router.get('/v1/nodes', auth, (req, res) => {
+    const node = { node_id: nodeDid(), name: config().agentName ?? null, paired: !!runtime().pairedOwner, heartbeat: null, last_seen: null };
+    const beat = lastBeat();
+    if (beat) {
+      const ageMs = Date.now() - Date.parse(beat.ts);
+      node.heartbeat = { fresh: ageMs >= 0 && ageMs < 10 * 60_000, age_ms: ageMs, uptime_s: beat.uptime_s, peers: beat.peers };
+      node.last_seen = beat.ts;
+    }
     res.json({ nodes: [node], measured: 'single node — fleet counts are not measured (single-node deployment)' });
   });
 
   // ── GET /onboard/state — FE checklist single source of truth (ATMOS_ONBOARDING_BACKEND §3) ──
-  router.get('/onboard/state', (req, res) => {
-    const state = { nodeDid: null, ownerDid: null, paired: false, revoked: [], model: { local: null, providers: [] }, receipts: { count: 0 }, checklist: {} };
-    try {
-      const keyFile = process.env.STRATOS_NODE_KEYS || path.join(profileDir(), 'node-keys.json');
-      if (fs.existsSync(keyFile) && receipts?.originId) {
-        const raw = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
-        const pub = Object.fromEntries(Object.entries(raw.publicKey).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
-        state.nodeDid = receipts.originId(pub);
-      }
-    } catch { /* not created yet */ }
-    try {
-      const po = cfg?.getPairedOwner?.();
-      if (po) { state.paired = true; state.ownerDid = po.owner_did || po.ownerDid || null; }
-      state.revoked = cfg?.getRevokedNodes?.() || [];
-    } catch { /* sovereign path — paired stays false (NOT a gate, V2 rule) */ }
-    try {
-      const ms = cfg?.getModelSources?.() || {};
-      state.model.local = ms.local?.enabled ? (ms.local.name || true) : null;
-      state.model.providers = Object.keys(ms.providers || {}); // NAMES ONLY — never key handles/values
-    } catch { /* default empty */ }
-    try {
-      const logPath = process.env.STRATOS_RECEIPTS || path.join(profileDir(), 'live-receipts.jsonl');
-      if (fs.existsSync(logPath) && receipts?.ReceiptLog) {
-        state.receipts.count = receipts.ReceiptLog.loadChainEntries(logPath).length;
-      }
-    } catch { /* no receipts yet */ }
-    let configured = false;
-    try { configured = !!cfg?.getConfig?.().configured; } catch { /* default */ }
-    // the 5 checklist booleans, each derived from a real artifact (§2.4: from artifacts, never memory)
-    state.checklist = {
-      installed: state.nodeDid != null || configured,           // identity minted or config marked
-      node_created: state.nodeDid != null && configured,        // keys + applyInit
-      paired_or_sovereign: state.paired || configured,          // paired OR proceeding sovereign (V2)
-      model_connected: state.model.local != null || state.model.providers.length > 0,
-      first_receipt: state.receipts.count > 0,                  // the activation evidence
-    };
-    res.json(state);
+  router.get('/onboard/state', auth, (req, res) => {
+    const rt = runtime();
+    const cfg = config();
+    const did = nodeDid();
+    const paired = !!rt.pairedOwner;
+    const ownerDid = rt.pairedOwner?.owner_did ?? rt.pairedOwner?.ownerDid ?? null;
+    const ms = cfg.modelSources || {};
+    const local = ms.local?.enabled ? (ms.local.name || true) : null;
+    const providers = Object.keys(ms.providers || {}); // NAMES ONLY — never key handles/values
+    const count = receiptCount();
+    const configured = !!cfg.configured;
+    res.json({
+      nodeDid: did,
+      ownerDid,
+      paired,
+      revoked: rt.revokedNodes || [],
+      model: { local, providers },
+      receipts: { count },
+      checklist: {
+        installed: did != null || configured,
+        node_created: did != null && configured,
+        paired_or_sovereign: paired || configured, // paired OR proceeding sovereign (V2 rule)
+        model_connected: local != null || providers.length > 0,
+        first_receipt: count > 0, // the activation evidence
+      },
+    });
   });
 
   return router;

@@ -30,6 +30,7 @@ import { runDemo, DEFAULT_PROMPT } from './demo-harness.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
 import * as ownerIdentity from '../identity/owner-identity.js';
 import * as nodeAuthz from '../identity/node-authz.js';
+import { makeAuditHook, recordDenial } from '../security/denial-audit.js';
 import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
 import { EgressPolicy, checkEgress, connectorHostsToRules } from '../security/egress-policy.js';
 import * as fts from '../memory/fts-memory.js';
@@ -935,6 +936,7 @@ function cmdPair(rest, deps) {
         expectedNodeDid: myDid,
       });
       if (!v.ok) {
+        recordDenial({ gate: 'pairing', reason: v.reason, action: 'pair accept', actor: grant?.node_did });
         const hint = /no pinned owner and no owner fingerprint/.test(v.reason)
           ? [`${C.d}First pairing: run ${C.x}stratos owner${C.d} on the OWNER device, read its fingerprint aloud, then re-run with --owner-fingerprint <fp> — the human comparison is the ceremony, in BOTH directions.${C.x}`]
           : [];
@@ -971,7 +973,10 @@ function cmdPair(rest, deps) {
       if (!file) return { code: 1, lines: [`${C.r}usage: stratos pair apply-revocation <revocation.json> [--owner-fingerprint <fp>]${C.x}`] };
       const pinned = deps.config.getPairedOwner?.();
       const v = ownerIdentity.verifyRevocation(readJson(file), { pinnedOwnerPublicKey: pinned ? pinned.owner_public_key : null, expectedOwnerFingerprint: ownerFp });
-      if (!v.ok) return { code: 1, lines: [`${C.r}✗ revocation REFUSED: ${v.reason}${C.x}`] };
+      if (!v.ok) {
+        recordDenial({ gate: 'pairing', reason: v.reason, action: 'pair apply-revocation' });
+        return { code: 1, lines: [`${C.r}✗ revocation REFUSED: ${v.reason}${C.x}`] };
+      }
       try { deps.config.addRevokedNode?.(v.nodeDid); } catch { /* runtime store optional in minimal deps */ }
       return { code: 0, lines: [`${C.g}✓ applied revocation of ${didShort(v.nodeDid)}${C.x} ${C.d}(signed by owner ${didShort(v.ownerDid)})${C.x}`] };
     }
@@ -989,13 +994,16 @@ function cmdPair(rest, deps) {
       // locked, persistent nonce store) — NOT a CLI file (an unlocked CLI read-modify-write would be
       // race-prone and fail-open; Codex finding). So authz passes a fresh ephemeral store and
       // declares its replay check is single-invocation only.
-      const verdict = nodeAuthz.authorizeMeshCommand(readJson(file), trust, { seenNonces: new Set() });
+      const verdict = nodeAuthz.authorizeMeshCommand(readJson(file), trust, { seenNonces: new Set(), audit: makeAuditHook('node-authz') });
       return verdict.ok
         ? { code: 0, lines: [`${C.g}✓ authorized${C.x} ${C.d}(sender role: ${verdict.role}; diagnostic — durable replay state lives in the daemon ingress)${C.x}`] }
         : { code: 1, lines: [`${C.r}✗ DENIED: ${verdict.reason}${C.x}`] };
     }
     return { code: 1, lines: [`${C.r}unknown pair subcommand: ${sub}${C.x} — see 'stratos pair help'`] };
   } catch (e) {
+    // Pairing-attempt telemetry (red-team gap): a refused approve/accept/apply-revocation previously
+    // reached only the human's terminal. Best-effort persist; the refusal itself is unchanged.
+    recordDenial({ gate: 'pairing', reason: e.message, action: `pair ${sub}` });
     return { code: 1, lines: [`${C.r}pair ${sub} failed: ${e.message}${C.x}`] };
   }
 }

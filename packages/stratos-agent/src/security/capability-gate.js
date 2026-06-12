@@ -23,6 +23,8 @@
  *   }
  */
 
+import { recordDenial } from './denial-audit.js';
+
 const STRING_LIST = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.length) : []);
 
 /** Normalize a manifest's declared capabilities into a strict, deny-by-default shape. */
@@ -38,7 +40,15 @@ export function parseCapabilities(manifest) {
 }
 
 class CapabilityError extends Error {
-  constructor(msg) { super(`CAPABILITY DENIED: ${msg}`); this.name = 'CapabilityError'; this.denied = true; }
+  constructor(msg) {
+    super(`CAPABILITY DENIED: ${msg}`);
+    this.name = 'CapabilityError';
+    this.denied = true;
+    // A CapabilityError exists only to be thrown — construction IS the denial event, so recording
+    // here covers every enforcement site (skill-executor, composio-exec, CLI) without each caller
+    // remembering to. recordDenial is best-effort and never throws back into the deny path.
+    recordDenial({ gate: 'capability-gate', reason: msg });
+  }
 }
 
 /** A computational skill may run only if it declared the `compute` capability. */

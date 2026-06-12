@@ -54,56 +54,67 @@ export function buildTrustSet(state = {}) {
  * FAIL-CLOSED authorization of one mesh command envelope against a trust set.
  * @param {object} envelope { action, params?, sender_did, ts, nonce?, sig:{ed25519Sig,mldsaSig} }
  * @param {object} trust   from buildTrustSet()
- * @param {object} [opts]  { now=Date.now, maxSkewMs=120000, seenNonces:Set }
+ * @param {object} [opts]  { now=Date.now, maxSkewMs=120000, seenNonces:Set, audit:fn }
+ *   - audit: optional injected hook called (best-effort) on EVERY denial with
+ *     { reason, action?, actor? } — see security/denial-audit.js makeAuditHook(). This module
+ *     stays pure (no fs/network); persistence is the caller's injected concern.
  * @returns {{ok:boolean, role?:string, reason?:string}}
  */
 export function authorizeMeshCommand(envelope, trust, opts = {}) {
   const now = opts.now || Date.now;
   const maxSkewMs = opts.maxSkewMs ?? 120000;
+  // Every refusal flows through deny() so an injected audit hook sees ALL of them; a throwing
+  // hook can never block the denial (the deny stands regardless of audit health).
+  const deny = (reason) => {
+    if (typeof opts.audit === 'function') {
+      try { opts.audit({ reason, action: envelope?.action, actor: envelope?.sender_did }); } catch { /* audit never blocks */ }
+    }
+    return { ok: false, reason };
+  };
   try {
-    if (!envelope || typeof envelope !== 'object') return { ok: false, reason: 'no envelope' };
+    if (!envelope || typeof envelope !== 'object') return deny('no envelope');
     const { action, sender_did, ts, sig } = envelope;
-    if (typeof action !== 'string' || !action) return { ok: false, reason: 'envelope missing action' };
-    if (typeof sender_did !== 'string' || !/^did:atmos:[0-9a-f]{40}$/.test(sender_did)) return { ok: false, reason: 'envelope missing/invalid sender_did' };
-    if (!sig || typeof sig.ed25519Sig !== 'string' || typeof sig.mldsaSig !== 'string') return { ok: false, reason: 'envelope missing hybrid signature' };
+    if (typeof action !== 'string' || !action) return deny('envelope missing action');
+    if (typeof sender_did !== 'string' || !/^did:atmos:[0-9a-f]{40}$/.test(sender_did)) return deny('envelope missing/invalid sender_did');
+    if (!sig || typeof sig.ed25519Sig !== 'string' || typeof sig.mldsaSig !== 'string') return deny('envelope missing hybrid signature');
 
     // (3) revocation BEFORE anything else — a revoked node is dead to us regardless of signature.
-    if (trust.revoked.has(sender_did)) return { ok: false, reason: 'sender is REVOKED (fail-closed)' };
+    if (trust.revoked.has(sender_did)) return deny('sender is REVOKED (fail-closed)');
 
     // (2) the sender must be a KNOWN, pinned identity. Unknown sender → deny (no TOFU on commands).
     const known = trust.keyByDid.get(sender_did);
-    if (!known) return { ok: false, reason: 'sender is not a paired node or the owner (deny-by-default)' };
+    if (!known) return deny('sender is not a paired node or the owner (deny-by-default)');
 
     // pin integrity: the pinned key must actually derive the claimed did.
     let pub;
-    try { pub = dec(known.pub); } catch { return { ok: false, reason: 'unusable pinned key for sender' }; }
-    if (originId(pub) !== sender_did) return { ok: false, reason: 'pinned key does not match sender_did (state corruption)' };
+    try { pub = dec(known.pub); } catch { return deny('unusable pinned key for sender'); }
+    if (originId(pub) !== sender_did) return deny('pinned key does not match sender_did (state corruption)');
 
     // (5) freshness — reject envelopes outside the skew window.
-    if (typeof ts !== 'number' || !Number.isFinite(ts)) return { ok: false, reason: 'envelope missing/invalid ts' };
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) return deny('envelope missing/invalid ts');
     const skew = Math.abs(now() - ts);
-    if (skew > maxSkewMs) return { ok: false, reason: `envelope outside freshness window (${Math.round(skew / 1000)}s > ${maxSkewMs / 1000}s)` };
+    if (skew > maxSkewMs) return deny(`envelope outside freshness window (${Math.round(skew / 1000)}s > ${maxSkewMs / 1000}s)`);
 
     // (5b) REPLAY protection is MANDATORY (fail-closed): a command must carry a nonce AND the caller
     // must supply a replay store (Set or {has,add}). The only escape is an EXPLICIT opts.idempotent
     // assertion that this command is replay-safe — never a silent default (Codex finding: an opt-in
     // guard the CLI forgot to pass left a replay hole). Freshness window alone is not replay-proof.
     if (!opts.idempotent) {
-      if (envelope.nonce == null || envelope.nonce === '') return { ok: false, reason: 'envelope missing nonce (replay protection requires one; pass opts.idempotent only for replay-safe commands)' };
-      if (!opts.seenNonces || typeof opts.seenNonces.has !== 'function') return { ok: false, reason: 'no replay store supplied — refusing to authorize a non-idempotent command without replay protection (fail-closed)' };
+      if (envelope.nonce == null || envelope.nonce === '') return deny('envelope missing nonce (replay protection requires one; pass opts.idempotent only for replay-safe commands)');
+      if (!opts.seenNonces || typeof opts.seenNonces.has !== 'function') return deny('no replay store supplied — refusing to authorize a non-idempotent command without replay protection (fail-closed)');
       const key = `${sender_did}:${envelope.nonce}`;
-      if (opts.seenNonces.has(key)) return { ok: false, reason: 'replayed nonce (already seen)' };
+      if (opts.seenNonces.has(key)) return deny('replayed nonce (already seen)');
     }
 
     // (4) BOTH signature halves over the canonical body, against the PINNED key.
     if (!verifyPayload(commandBody(envelope), decSig(sig), pub)) {
-      return { ok: false, reason: 'command signature failed (tamper or wrong signer)' };
+      return deny('command signature failed (tamper or wrong signer)');
     }
 
     // Record the nonce ONLY after full success, so a failed auth never burns a nonce.
     if (!opts.idempotent && opts.seenNonces && envelope.nonce != null) opts.seenNonces.add(`${sender_did}:${envelope.nonce}`);
     return { ok: true, role: known.role };
   } catch (e) {
-    return { ok: false, reason: 'authorization error: ' + e.message };
+    return deny('authorization error: ' + e.message);
   }
 }

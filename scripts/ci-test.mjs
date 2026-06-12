@@ -51,6 +51,9 @@ const SUITES = {
     // trust substrate (this session) — all hermetic: pure crypto/logic/file, no live services:
     'test-model-router.mjs', 'test-mesh-signal.mjs', 'test-stratos-route.mjs', 'test-stratos-id-ledger.mjs',
     'test-capability-gate.mjs', 'test-capability-enforcement.mjs', 'test-attribution-ledger.mjs',
+    // DENIAL AUDIT (2026-06-12) — every refusal leaves a persistent, bounded, secret-safe trace:
+    // node-authz audit hook · CapabilityError construction · gateway 401s · pair-ceremony failures.
+    'test-denial-audit.mjs',
     'test-identity-broker.mjs', 'test-trifecta-live.mjs', 'test-icm-workspace.mjs',
     // FTS5 cross-session memory (this session) — hermetic: in-memory SQLite, injected summarizer,
     // no network/Ollama; tests the search path, conversation filter, injection-safety, degrade, gate.

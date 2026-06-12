@@ -15,6 +15,7 @@ import { complianceApprovalGate } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 import { requireGatewaySecret, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
+import { createReadonlyRouter } from './src/terminal/readonly-api.js';
 import { beginUpstreamAttempt, recordSuccess, recordFailure, isAvailabilityFailureStatus, breakerSnapshot } from './src/upstream-breaker.js';
 
 const localInference = new LocalInferenceEngine();
@@ -840,6 +841,10 @@ app.post('/mcp', requireGatewaySecret, async (req, res) => {
     id
   });
 });
+
+// Atmos Terminal slice 1 — READ-ONLY file/log/metrics/receipt APIs (no PTY). Same per-request
+// secret as the spend routes; the fs jail + deny-list + redaction live inside the router.
+app.use('/term', requireGatewaySecret, createReadonlyRouter());
 
 // Catch-all health status check
 app.get('/health', (req, res) => {

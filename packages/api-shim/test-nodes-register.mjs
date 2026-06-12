@@ -84,6 +84,11 @@ await ok('re-register is IDEMPOTENT (dual-Codex): 200 not 201, identity + regist
   assert.strictEqual(reg.nodes[0].name, 'desk-node-renamed');
   assert.strictEqual(reg.nodes[0].registered_at, regBefore.nodes[0].registered_at, 'registered_at preserved — first registration is a fact, not a counter');
   assert.ok(reg.nodes[0].updated_at, 'updates stamp updated_at instead');
+  // TRUE no-op replay (dual-Codex round 3): the identical request mutates NOTHING
+  const regRaw = fs.readFileSync(path.join(PROFILE, 'node-registry.json'), 'utf8');
+  const replay = await post({ name: 'desk-node-renamed' });
+  assert.strictEqual(replay.status, 200);
+  assert.strictEqual(fs.readFileSync(path.join(PROFILE, 'node-registry.json'), 'utf8'), regRaw, 'registry byte-identical after an identical replay — not even updated_at moves');
 });
 
 await ok('the node-register receipts verify third-party on the chain (public key only)', async () => {

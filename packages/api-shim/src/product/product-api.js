@@ -160,11 +160,14 @@ export function createProductRouter(opts = {}) {
       revoked: rt.revokedNodes || [],
       model: { local, providers },
       receipts: { count },
+      // checklist derives from the SAME machine evidence as `state` — one source of truth
+      // (dual-Codex: the legacy did||configured / paired||configured derivations contradicted
+      // the machine and could resurrect the honesty bug through the older field).
       checklist: {
-        installed: did != null || configured,
-        node_created: did != null && configured,
-        paired_or_sovereign: paired || configured, // paired OR proceeding sovereign (V2 rule)
-        model_connected: local != null || providers.length > 0,
+        installed: machine.evidence.INSTALLED,            // this API answering IS the evidence
+        node_created: machine.evidence.NODE_CREATED,
+        paired_or_sovereign: machine.evidence.PAIRED || machine.evidence.NODE_CREATED, // verified artifact OR proceeding sovereign (V2 rule)
+        model_connected: machine.evidence.MODEL_CONNECTED,
         first_receipt: count > 0, // the activation evidence
       },
     });

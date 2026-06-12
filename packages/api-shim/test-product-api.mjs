@@ -139,7 +139,8 @@ await ok('GET /onboard/state: a brand-new node reports honest falses (nothing fa
   assert.strictEqual(s.nodeDid, null);
   assert.strictEqual(s.paired, false);
   assert.strictEqual(s.receipts.count, 0);
-  assert.strictEqual(s.checklist.installed, false);
+  assert.strictEqual(s.checklist.installed, true, 'this API answering IS the install evidence — checklist matches the state machine (dual-Codex round 3)');
+  assert.strictEqual(s.state, 'INSTALLED');
   assert.strictEqual(s.checklist.first_receipt, false);
 });
 

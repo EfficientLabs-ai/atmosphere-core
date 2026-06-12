@@ -86,14 +86,26 @@ export function createNodesRouter(opts = {}) {
     const prior = reg.nodes.find((n) => n.node_id === node_id) || null;
     const priorRaw = JSON.stringify(reg, null, 2);
     const stamp = new Date(now()).toISOString();
-    const entry = prior
-      ? { ...prior, name, owner_wallet: wallet, capabilities, updated_at: stamp }
-      : { node_id, name, owner_wallet: wallet, capabilities, registered_at: stamp };
-    try {
-      reg.nodes = [...reg.nodes.filter((n) => n.node_id !== node_id), entry];
-      fs.mkdirSync(profileDir, { recursive: true });
-      fs.writeFileSync(registryFile(), JSON.stringify(reg, null, 2));
-    } catch (e) { return deny(res, 500, 'registry write failed: ' + e.message); }
+    // a TRUE no-op replay (identical name/wallet/capabilities) mutates NOTHING — not even
+    // updated_at (dual-Codex: idempotent means the same request stops changing server state).
+    const unchanged = !!prior && prior.name === name
+      && (prior.owner_wallet ?? null) === wallet
+      && JSON.stringify(prior.capabilities ?? []) === JSON.stringify(capabilities);
+    const rollbackFreshKey = () => { if (minted) { try { fs.rmSync(nodeKeysFile(), { force: true }); } catch { /* best-effort */ } } };
+    const entry = unchanged ? prior
+      : prior
+        ? { ...prior, name, owner_wallet: wallet, capabilities, updated_at: stamp }
+        : { node_id, name, owner_wallet: wallet, capabilities, registered_at: stamp };
+    if (!unchanged) {
+      try {
+        reg.nodes = [...reg.nodes.filter((n) => n.node_id !== node_id), entry];
+        fs.mkdirSync(profileDir, { recursive: true });
+        fs.writeFileSync(registryFile(), JSON.stringify(reg, null, 2));
+      } catch (e) {
+        rollbackFreshKey(); // a refused FIRST registration leaves nothing behind — registry-write failures included
+        return deny(res, 500, 'registry write failed' + (minted ? ' — freshly-minted key rolled back' : '') + ': ' + e.message);
+      }
+    }
 
     // node-register receipt — FIRST registration only, and FAIL-CLOSED (dual-Codex): a mutation on
     // a proof-surface without its receipt is refused, and EVERYTHING this request created is
@@ -104,7 +116,7 @@ export function createNodesRouter(opts = {}) {
     if (!prior) {
       const revert = (why) => {
         try { fs.writeFileSync(registryFile(), priorRaw); } catch { /* best-effort; the 503 still refuses */ }
-        if (minted) { try { fs.rmSync(nodeKeysFile(), { force: true }); } catch { /* ditto */ } }
+        rollbackFreshKey();
         return deny(res, 503, why);
       };
       if (!record) return revert('receipt recorder unavailable — registration is a proof-surface mutation and refuses without its receipt (fail-closed; nothing was kept)');

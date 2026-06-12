@@ -31,10 +31,10 @@ import { createSessionManager, loadNodePty } from './session-manager.js';
 /** Lazy, fail-visible signed receipt recorder (the operating-tap defaultReceiptLog pattern). */
 export function makeSessionReceiptRecorder({ profileDir } = {}) {
   let state = null; // { log, actor_id } | 'failed'
-  return async function record(event) {
-    if (state === 'failed') return;
-    try {
-      if (!state) {
+  let initPromise = null; // single-flight init (Codex finding: concurrent first events raced
+  // two initializers → competing keypairs/ReceiptLog instances → broken prev_hash chain)
+  let queue = Promise.resolve(); // appends are SERIALIZED so prev_hash ordering is deterministic
+  async function init() {
         const [led, qc, seal] = await Promise.all([
           import('../../../stratos-agent/src/ledger/capability-receipt.js'),
           import('../../../stratos-agent/src/security/quantum-crypto.js'),
@@ -57,7 +57,10 @@ export function makeSessionReceiptRecorder({ profileDir } = {}) {
         const logPath = process.env.STRATOS_RECEIPTS || path.join(profile, 'live-receipts.jsonl');
         const log = new led.ReceiptLog({ path: logPath, signer: led.makeReceiptSigner(keys.privateKey), nodeId: actor_id, rotateMaxBytes: 5 * 1024 * 1024 });
         state = { log, actor_id, createReceipt: led.createReceipt };
-      }
+  }
+  async function append(event) {
+      if (state === 'failed') return;
+      if (!state) { await (initPromise ||= init()); }
       const { event: ev, session_id, owner, profile: prof, ...meta } = event;
       state.log.append(state.createReceipt({
         actor_id: state.actor_id,
@@ -70,12 +73,15 @@ export function makeSessionReceiptRecorder({ profileDir } = {}) {
         output_hash: null,
         meta: { profile: prof, ...meta },
       }));
-    } catch (e) {
+  }
+  return function record(event) {
+    queue = queue.then(() => append(event)).catch((e) => {
       try {
         if (state !== 'failed') console.warn('⚠️  [terminal] session receipt failed (fail-visible; lifecycle unaffected):', e.message);
       } catch { /* never block lifecycle */ }
       state = 'failed';
-    }
+    });
+    return queue;
   };
 }
 
@@ -131,7 +137,13 @@ export async function attachTerminalWs(httpServer, manager, { path: wsPath = '/t
   httpServer.on('upgrade', (req, socket, head) => {
     let url;
     try { url = new URL(req.url, 'http://localhost'); } catch { socket.destroy(); return; }
-    if (url.pathname !== wsPath) return; // not ours
+    if (url.pathname !== wsPath) {
+      // The bridge has NO other WS endpoints: an unmatched upgrade left dangling would let a
+      // local process hold unauthenticated FDs open (Codex finding) — refuse and destroy.
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     const origin = req.headers.origin;
     if (origin) {
       const allowed = (process.env.ATMOS_GATEWAY_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);

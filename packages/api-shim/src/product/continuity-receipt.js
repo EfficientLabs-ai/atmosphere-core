@@ -16,10 +16,13 @@ export function makeContinuityRecorder(deps = {}, opts = {}) {
   const { ReceiptLog, makeReceiptSigner, createReceipt, originId } = deps;
   let log = null;       // lazily built signed ReceiptLog
   let actorId = null;
-  let failed = false;
+  let warned = false;
 
   function ensure() {
-    if (log || failed) return;
+    if (log) return;
+    // RETRY on every call until keys exist (Codex note: a permanent failure cache would never pick
+    // up a node identity created after the first continuity write — until a restart). Cheap: a
+    // single file read on a low-frequency path; we just don't spam the warning.
     try {
       const profile = opts.profileDir || process.env.STRATOS_PROFILE_DIR || path.join(process.cwd(), '.stratos-profile');
       const keyFile = process.env.STRATOS_NODE_KEYS || path.join(profile, 'node-keys.json');
@@ -30,8 +33,7 @@ export function makeContinuityRecorder(deps = {}, opts = {}) {
       const logPath = process.env.STRATOS_RECEIPTS || path.join(profile, 'live-receipts.jsonl');
       log = new ReceiptLog({ path: logPath, signer: makeReceiptSigner(keys.privateKey), nodeId: actorId, rotateMaxBytes: 5 * 1024 * 1024 });
     } catch (e) {
-      failed = true;
-      try { console.warn('⚠️  [continuity] receipt rail unavailable (entries still store; no receipt):', e.message); } catch { /* never throw */ }
+      if (!warned) { try { console.warn('⚠️  [continuity] receipt rail unavailable (entries still store; no receipt; will retry):', e.message); } catch { /* never throw */ } warned = true; }
     }
   }
 

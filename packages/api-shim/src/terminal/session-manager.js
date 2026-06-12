@@ -132,9 +132,13 @@ export function createSessionManager(opts = {}) {
     pty.onData((data) => {
       s.lastActivity = now();
       s.bytesOut += Buffer.byteLength(data);
-      s.ring.push(data);
-      s.ringSize += Buffer.byteLength(data);
-      while (s.ringSize > ringBytes && s.ring.length > 1) s.ringSize -= Buffer.byteLength(s.ring.shift());
+      // HARD ring bound (Codex finding: one oversized chunk must not blow the budget) — an
+      // oversized chunk is tail-sliced before it enters the ring, and eviction can empty the ring.
+      let chunk = data;
+      if (Buffer.byteLength(chunk) > ringBytes) chunk = Buffer.from(chunk).subarray(-ringBytes).toString('utf8');
+      s.ring.push(chunk);
+      s.ringSize += Buffer.byteLength(chunk);
+      while (s.ringSize > ringBytes && s.ring.length > 0) s.ringSize -= Buffer.byteLength(s.ring.shift());
       for (const c of s.clients.values()) {
         c.unacked += Buffer.byteLength(data);
         try { c.send(data); } catch { /* transport died; detach() will clean up */ }
@@ -148,9 +152,11 @@ export function createSessionManager(opts = {}) {
     pty.onExit(({ exitCode } = {}) => {
       s.exited = true;
       s.exitCode = exitCode ?? null;
+      s.exitedAt = now();
       emit('term.session.end', s, { exit_code: s.exitCode, bytes_out: s.bytesOut, duration_ms: now() - s.createdAt });
       for (const c of s.clients.values()) { try { c.close(); } catch { /* already gone */ } }
       s.clients.clear();
+      s.ring = []; s.ringSize = 0; // a dead session holds no replay memory (Codex finding)
     });
 
     emit('term.session.start', s, { cwd: spec.cwd, cols, rows, tmux: tmuxSession || undefined });
@@ -188,7 +194,10 @@ export function createSessionManager(opts = {}) {
         }
       },
       detach: () => {
-        s.clients.delete(connId);
+        // idempotent + end-aware (Codex finding): WS fires both 'close' and 'error', and a normal
+        // exit clears clients first — a no-op detach must not emit a receipt (esp. not after 'end').
+        const removed = s.clients.delete(connId);
+        if (!removed || s.exited) return;
         emit('term.session.detach', s, { conn_id: connId });
         // a detached laggard must not keep the PTY paused forever
         if (s.paused && ![...s.clients.values()].some((x) => x.unacked > highWater)) {
@@ -220,14 +229,20 @@ export function createSessionManager(opts = {}) {
     return mintToken(sessionId);
   }
 
-  /** Reap idle sessions (no clients + no output for idleMs). Returns reaped ids. */
+  /**
+   * Reap idle sessions (no clients + no output for idleMs) and GC exited ones after a short
+   * grace window (list() can still show a fresh exit; memory cannot grow via create→kill churn —
+   * Codex finding). Returns reaped (killed) ids.
+   */
   function reapIdle() {
     const reaped = [];
+    const graceMs = 60_000;
     for (const s of sessions.values()) {
       if (!s.exited && s.clients.size === 0 && now() - s.lastActivity > idleMs) {
         try { s.pty.kill('SIGHUP'); } catch { /* already gone */ }
         reaped.push(s.id);
       }
+      if (s.exited && now() - (s.exitedAt ?? 0) > graceMs) sessions.delete(s.id);
     }
     // token GC rides the reaper
     for (const [t, v] of tokens) if (v.used || now() > v.expires) tokens.delete(t);

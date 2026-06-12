@@ -232,6 +232,74 @@ await ok('receipts: term-session events SIGN onto the real chain and verify end-
   } finally { delete process.env.STRATOS_PROFILE_DIR; }
 });
 
-assert.strictEqual(pass, 11, `expected all 11 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/11 terminal-session tests passed — sanitized, owned, metered, receipted.`);
+await ok('HARD ring bound: one oversized chunk is tail-sliced, never retained whole', () => {
+  const { mgr, backend } = makeManager(); // ringBytes 64
+  const { id } = mgr.create({ owner: 'gateway' });
+  backend.spawned[0].emit('A'.repeat(500) + 'TAIL-MARKER');
+  const t = mgr.reissueToken(id, 'gateway');
+  const sink = { sent: [], send(d) { this.sent.push(d); }, close() {} };
+  mgr.attach(id, t, sink, 'gateway');
+  const replay = sink.sent.join('');
+  assert.ok(replay.length <= 64, `replay hard-bounded, got ${replay.length}`);
+  assert.ok(replay.endsWith('TAIL-MARKER'), 'the NEWEST bytes are kept');
+});
+
+await ok('exited sessions are GC\'d after the grace window (create→kill churn cannot grow memory)', () => {
+  const { mgr, clock } = makeManager();
+  const { id } = mgr.create({ owner: 'gateway' });
+  mgr.kill(id, 'gateway');
+  assert.ok(mgr._sessions.has(id), 'fresh exit still listed (grace)');
+  assert.strictEqual(mgr._sessions.get(id).ringSize, 0, 'dead session holds no replay memory');
+  clock.tick(61_000);
+  mgr.reapIdle();
+  assert.ok(!mgr._sessions.has(id), 'GC after grace');
+});
+
+await ok('no spurious detach receipts: close-after-end and double-detach are silent', () => {
+  const { mgr, backend, events } = makeManager();
+  const { id, attachToken } = mgr.create({ owner: 'gateway' });
+  const conn = mgr.attach(id, attachToken, { send() {}, close() {} }, 'gateway');
+  backend.spawned[0].kill('SIGHUP'); // session ends while attached → clients cleared by end path
+  conn.detach(); conn.detach();      // ws 'close' + 'error' both firing afterwards
+  const seq = events.map((e) => e.event);
+  assert.deepStrictEqual(seq, ['term.session.start', 'term.session.attach', 'term.session.end'], 'no detach after end, no doubles: ' + seq.join(','));
+});
+
+await ok('receipt recorder serializes concurrent first events — one keypair, intact chain', async () => {
+  const PROFILE = tmp();
+  const record = makeSessionReceiptRecorder({ profileDir: PROFILE });
+  await Promise.all([
+    record({ event: 'term.session.start', session_id: 'r1', owner: 'gateway', profile: 'default' }),
+    record({ event: 'term.session.attach', session_id: 'r1', owner: 'gateway', profile: 'default' }),
+    record({ event: 'term.session.end', session_id: 'r1', owner: 'gateway', profile: 'default' }),
+  ]);
+  const { ReceiptLog, makeReceiptVerifier } = await import('../stratos-agent/src/ledger/capability-receipt.js');
+  const raw = JSON.parse(fs.readFileSync(path.join(PROFILE, 'node-keys.json'), 'utf8'));
+  const pub = Object.fromEntries(Object.entries(raw.publicKey).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
+  const log = new ReceiptLog({ verifier: makeReceiptVerifier(pub) });
+  log.chain = ReceiptLog.loadChainEntries(path.join(PROFILE, 'live-receipts.jsonl'));
+  assert.strictEqual(log.chain.length, 3, 'all three landed');
+  const v = log.verify();
+  assert.strictEqual(v.ok, true, 'chain intact under concurrency: ' + (v.reason || ''));
+});
+
+await ok('unmatched WS upgrades are destroyed, not left dangling', async () => {
+  const { mgr } = makeManager();
+  const server = http.createServer((req, res) => res.end('ok'));
+  await attachTerminalWs(server, mgr);
+  server.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  const port = server.address().port;
+  const net = await import('node:net');
+  const sock = net.connect(port, '127.0.0.1');
+  sock.resume(); // flowing mode, or the server's FIN is never consumed and 'close' never fires
+  await new Promise((r) => sock.once('connect', r));
+  sock.write('GET /not-term HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n');
+  const closed = await new Promise((r) => { sock.once('close', () => r(true)); setTimeout(() => r(false), 2000); });
+  assert.ok(closed, 'foreign upgrade socket destroyed');
+  server.close();
+});
+
+assert.strictEqual(pass, 16, `expected all 16 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/16 terminal-session tests passed — sanitized, owned, metered, receipted.`);
 process.exit(0); // ws/http handles may linger; assertions above are the truth

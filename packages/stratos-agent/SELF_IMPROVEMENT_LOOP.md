@@ -81,7 +81,7 @@ capability-gated (`enforceCapabilities: true`) — the GSI compiler stamps least
 
 - **Capability receipt** (`src/ledger/capability-receipt.js`) — every inference / verified skill-run
   emits a PQC-signed, hash-chained receipt (actor/action/node/in-hash/out-hash/cost/prev-hash),
-  third-party-verifiable with only the public key. `RECEIPT_ACTIONS = ['inference', 'skill-run']`.
+  third-party-verifiable with only the public key. `RECEIPT_ACTIONS = ['inference', 'skill-run', 'term-session']` (terminal session lifecycle joined the rail 2026-06-12).
 - **Attribution ledger** (`src/ledger/attribution-ledger.js`) — append-only tamper-evident chain of
   contribution (`compute`, `skill-authored`, `skill-executed`, `skill-reused`, `task-completed`),
   attributed to a `did:atmos` identity. `summarize()` is **measured units per contributor, explicitly

@@ -170,7 +170,14 @@ await ok('kill: owner-only; list reflects lifecycle', () => {
   assert.ok(events.some((e) => e.event === 'term.session.end'));
 });
 
-await ok('WS end-to-end: token attach, input/resize/ack/ping frames, origin check, detach on close', async () => {
+await ok('WS end-to-end: token attach, frames, origin check, detach on close — and DENIALS persist safely', async () => {
+  const WS_PROFILE = tmp();
+  const savedProfile = process.env.STRATOS_PROFILE_DIR;
+  process.env.STRATOS_PROFILE_DIR = WS_PROFILE; // recordDenial resolves the sink per call
+  const wsSink = () => {
+    const f = path.join(WS_PROFILE, 'denial-audit.jsonl');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.gate === 'terminal-ws') : [];
+  };
   const { mgr, backend } = makeManager();
   const app = express();
   app.use('/term', createSessionRouter(mgr, { ptyAvailable: () => true }));
@@ -206,10 +213,23 @@ await ok('WS end-to-end: token attach, input/resize/ack/ping frames, origin chec
   const ws2 = new WebSocket(`ws://127.0.0.1:${port}/term/attach?session=${created.sessionId}&token=${created.attachToken}`);
   const closeCode = await new Promise((r) => ws2.once('close', (c) => r(c)));
   assert.strictEqual(closeCode, 4401, 'redeemed token → policy close code');
+  // SWAPPED-URL attack (Codex finding): session=<64-hex attach token> must never persist as target
+  const fakeToken = 'a'.repeat(64);
+  const ws3 = new WebSocket(`ws://127.0.0.1:${port}/term/attach?session=${fakeToken}&token=x`);
+  await new Promise((r) => ws3.once('close', r));
+  const denials = wsSink();
+  assert.ok(denials.some((e) => /un-allowlisted browser origin/.test(e.reason)), 'origin refusal persisted (gate terminal-ws)');
+  assert.ok(denials.some((e) => e.action === 'attach' && e.target === created.sessionId), 'redeemed-token denial carries the 16-hex session id');
+  const swapped = denials.filter((e) => e.action === 'attach' && /no such session/.test(e.reason));
+  assert.ok(swapped.length >= 1, 'swapped-URL denial recorded');
+  assert.ok(swapped.every((e) => e.target === undefined), 'a non-16-hex session param NEVER persists as target');
+  assert.ok(!JSON.stringify(denials).includes(fakeToken), 'the 64-hex value never reaches the sink anywhere');
+  assert.ok(!JSON.stringify(denials).includes(created.attachToken), 'real attach tokens never reach the sink');
   ws.close();
   await new Promise((r) => setTimeout(r, 100));
   assert.strictEqual(mgr._sessions.get(created.sessionId).clients.size, 0, 'detach on close');
   server.close();
+  if (savedProfile === undefined) delete process.env.STRATOS_PROFILE_DIR; else process.env.STRATOS_PROFILE_DIR = savedProfile;
 });
 
 await ok('receipts: term-session events SIGN onto the real chain and verify end-to-end', async () => {

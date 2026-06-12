@@ -49,6 +49,8 @@ export function createNodesRouter(opts = {}) {
     }
 
     // mint OR reuse — an existing node identity is never overwritten by a registration call.
+    // RACE-SAFE (dual-Codex): the mint writes with O_EXCL ('wx') so two concurrent first-time
+    // registrations cannot clobber each other — the loser reads the winner's identity and reuses it.
     const b64 = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v).toString('base64')]));
     const dec = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
     let publicKeyB64, minted = false;
@@ -58,36 +60,75 @@ export function createNodesRouter(opts = {}) {
         if (!publicKeyB64) return deny(res, 500, 'existing node-keys.json carries no public key — refusing to overwrite it');
       } else {
         const kp = identity.generateHybridKeyPair();
-        publicKeyB64 = b64(kp.publicKey);
+        const freshB64 = b64(kp.publicKey);
         fs.mkdirSync(profileDir, { recursive: true });
-        fs.writeFileSync(nodeKeysFile(), JSON.stringify({ publicKey: publicKeyB64, privateKey: b64(kp.privateKey) }), { mode: 0o600 });
-        minted = true;
+        try {
+          fs.writeFileSync(nodeKeysFile(), JSON.stringify({ publicKey: freshB64, privateKey: b64(kp.privateKey) }), { mode: 0o600, flag: 'wx' });
+          publicKeyB64 = freshB64;
+          minted = true;
+        } catch (e) {
+          if (e.code !== 'EEXIST') throw e;
+          // lost the race — the concurrent winner's identity is THE identity; reuse it
+          publicKeyB64 = JSON.parse(fs.readFileSync(nodeKeysFile(), 'utf8')).publicKey;
+          if (!publicKeyB64) return deny(res, 500, 'raced mint left no readable public key — refusing');
+        }
       }
     } catch (e) { return deny(res, 500, 'node identity error: ' + e.message); }
-    const node_id = identity.originId(dec(publicKeyB64));
+    let node_id;
+    try { node_id = identity.originId(dec(publicKeyB64)); }
+    catch (e) { return deny(res, 500, 'existing key file is unusable (' + e.message + ') — refusing to touch it; restore or remove it deliberately'); }
 
-    // registry entry — upsert by node_id (re-registering this node updates its name/capabilities)
-    const entry = { node_id, name, owner_wallet: wallet, capabilities, registered_at: new Date(now()).toISOString() };
-    try {
-      let reg = { format: 'atmos.node-registry.v1', nodes: [] };
-      try { reg = JSON.parse(fs.readFileSync(registryFile(), 'utf8')); } catch { /* first registration */ }
-      if (!Array.isArray(reg.nodes)) reg.nodes = [];
-      reg.nodes = [...reg.nodes.filter((n) => n.node_id !== node_id), entry];
-      fs.mkdirSync(profileDir, { recursive: true });
-      fs.writeFileSync(registryFile(), JSON.stringify(reg, null, 2));
-    } catch (e) { return deny(res, 500, 'registry write failed: ' + e.message); }
+    // registry upsert — IDEMPOTENT (dual-Codex): re-registering preserves registered_at, stamps
+    // updated_at, mints NO second identity receipt, and answers 200 (201 is first-time only).
+    let reg = { format: 'atmos.node-registry.v1', nodes: [] };
+    try { reg = JSON.parse(fs.readFileSync(registryFile(), 'utf8')); } catch { /* first registration */ }
+    if (!Array.isArray(reg.nodes)) reg.nodes = [];
+    const prior = reg.nodes.find((n) => n.node_id === node_id) || null;
+    const priorRaw = JSON.stringify(reg, null, 2);
+    const stamp = new Date(now()).toISOString();
+    // a TRUE no-op replay (identical name/wallet/capabilities) mutates NOTHING — not even
+    // updated_at (dual-Codex: idempotent means the same request stops changing server state).
+    const unchanged = !!prior && prior.name === name
+      && (prior.owner_wallet ?? null) === wallet
+      && JSON.stringify(prior.capabilities ?? []) === JSON.stringify(capabilities);
+    const rollbackFreshKey = () => { if (minted) { try { fs.rmSync(nodeKeysFile(), { force: true }); } catch { /* best-effort */ } } };
+    const entry = unchanged ? prior
+      : prior
+        ? { ...prior, name, owner_wallet: wallet, capabilities, updated_at: stamp }
+        : { node_id, name, owner_wallet: wallet, capabilities, registered_at: stamp };
+    if (!unchanged) {
+      try {
+        reg.nodes = [...reg.nodes.filter((n) => n.node_id !== node_id), entry];
+        fs.mkdirSync(profileDir, { recursive: true });
+        fs.writeFileSync(registryFile(), JSON.stringify(reg, null, 2));
+      } catch (e) {
+        rollbackFreshKey(); // a refused FIRST registration leaves nothing behind — registry-write failures included
+        return deny(res, 500, 'registry write failed' + (minted ? ' — freshly-minted key rolled back' : '') + ': ' + e.message);
+      }
+    }
 
-    // node-register receipt — hashes only (the registry holds the readable entry)
+    // node-register receipt — FIRST registration only, and FAIL-CLOSED (dual-Codex): a mutation on
+    // a proof-surface without its receipt is refused, and EVERYTHING this request created is
+    // rolled back — the registry write AND a key minted by this very request (leaving a fresh
+    // identity behind on a refusal is fail-open by another name). A reused pre-existing key is
+    // never deleted. Re-registration is a registry update, not a new identity act.
     let receipt_id = null;
-    if (record) {
+    if (!prior) {
+      const revert = (why) => {
+        try { fs.writeFileSync(registryFile(), priorRaw); } catch { /* best-effort; the 503 still refuses */ }
+        rollbackFreshKey();
+        return deny(res, 503, why);
+      };
+      if (!record) return revert('receipt recorder unavailable — registration is a proof-surface mutation and refuses without its receipt (fail-closed; nothing was kept)');
       receipt_id = record({
         action: 'node-register', ref: `node:register:${name}`, owner_wallet: wallet,
         input_hash: sha256(JSON.stringify({ name, capabilities })), output_hash: sha256(node_id),
       });
+      if (!receipt_id) return revert('receipt mint failed — registration refused, registry and freshly-minted key rolled back (fail-closed; retry when the receipt rail is back)');
     }
     // R2/L4 — never silent
-    try { console.log(`[nodes] register ${node_id.slice(0, 24)}… name="${name}" minted=${minted} receipt=${receipt_id || 'none'}`); } catch { /* logging is best-effort */ }
-    res.status(201).json({ node_id, public_key: publicKeyB64, receipt_id, registered: true, key_minted: minted });
+    try { console.log(`[nodes] register ${node_id.slice(0, 24)}… name="${name}" minted=${minted} first=${!prior} receipt=${receipt_id || '(reuse: none)'} `); } catch { /* logging is best-effort */ }
+    res.status(prior ? 200 : 201).json({ node_id, public_key: publicKeyB64, receipt_id, registered: true, first_registration: !prior, key_minted: minted });
   });
 
   return router;

@@ -68,6 +68,21 @@ export function createProductRouter(opts = {}) {
     try { return (fs.existsSync(receiptsFile()) && receipts?.ReceiptLog) ? receipts.ReceiptLog.loadChainEntries(receiptsFile()).length : 0; }
     catch { return 0; }
   };
+  // §2 artifact for the PAIRED checkmark (dual-Codex round 2): a `pairing` receipt that sits on
+  // THIS node's VERIFIED chain — an unverified line is just text; a copied/tampered/stale entry
+  // must not light the checkmark. Full fail-closed verify (same discipline as GET /score).
+  const hasPairingReceipt = () => {
+    try {
+      if (!fs.existsSync(receiptsFile()) || !receipts?.ReceiptLog || !receipts?.makeReceiptVerifier) return false;
+      const keysRaw = JSON.parse(fs.readFileSync(nodeKeysFile(), 'utf8'));
+      if (!keysRaw?.publicKey) return false;
+      const pub = Object.fromEntries(Object.entries(keysRaw.publicKey).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
+      const log = new receipts.ReceiptLog({ verifier: receipts.makeReceiptVerifier(pub) });
+      log.chain = receipts.ReceiptLog.loadChainEntries(receiptsFile());
+      if (!log.chain.some((e) => e.action === 'pairing')) return false;
+      return log.verify({ requireSig: true }).ok === true; // broken chain → no checkmark, fail-closed
+    } catch { return false; }
+  };
   const lastBeat = () => {
     try {
       if (!fs.existsSync(heartbeatFile())) return null;
@@ -131,24 +146,28 @@ export function createProductRouter(opts = {}) {
     const workspacesRoot = process.env.STRATOS_WORKSPACES_DIR || P('workspaces');
     const modelConnected = local != null || providers.length > 0;
     const machine = computeOnboardingState({
-      nodeDid: did, configured, paired, modelConnected,
-      receiptCount: count, traceExists: hasTraceEvidence(workspacesRoot),
+      nodeDid: did, configured, paired, pairingReceipt: hasPairingReceipt(), modelConnected,
+      receiptCount: count, traceScan: hasTraceEvidence(workspacesRoot),
     });
     res.json({
       state: machine.state,                       // ATMOS_ONBOARDING_BACKEND §2, disk-evidenced only
       state_evidence: machine.evidence,           // per-state booleans the FE can render directly
       state_unobservable: machine.unobservable,   // states with no local artifact — never claimed
+      scan_incomplete: machine.scan_incomplete,   // budgeted trace scan ran dry: FIRST_TASK_RUN is UNKNOWN, not false — never regress a checkmark on it
       nodeDid: did,
       ownerDid,
       paired,
       revoked: rt.revokedNodes || [],
       model: { local, providers },
       receipts: { count },
+      // checklist derives from the SAME machine evidence as `state` — one source of truth
+      // (dual-Codex: the legacy did||configured / paired||configured derivations contradicted
+      // the machine and could resurrect the honesty bug through the older field).
       checklist: {
-        installed: did != null || configured,
-        node_created: did != null && configured,
-        paired_or_sovereign: paired || configured, // paired OR proceeding sovereign (V2 rule)
-        model_connected: local != null || providers.length > 0,
+        installed: machine.evidence.INSTALLED,            // this API answering IS the evidence
+        node_created: machine.evidence.NODE_CREATED,
+        paired_or_sovereign: machine.evidence.PAIRED || machine.evidence.NODE_CREATED, // verified artifact OR proceeding sovereign (V2 rule)
+        model_connected: machine.evidence.MODEL_CONNECTED,
         first_receipt: count > 0, // the activation evidence
       },
     });

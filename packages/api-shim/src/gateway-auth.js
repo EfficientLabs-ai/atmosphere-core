@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { recordDenial } from '../../stratos-agent/src/security/denial-audit.js';
 
 /**
  * F2 — opt-in per-request auth for the loopback gateway.
@@ -49,6 +50,9 @@ export function requireGatewaySecret(req, res, next) {
   const viaHeader = secretMatches(req.get('x-atmos-gateway'), GATEWAY_SECRET);
   const viaBearer = secretMatches(bearerToken(req), GATEWAY_SECRET);
   if (!viaHeader && !viaBearer) {
+    // Persist the denial (red-team gap: 401s previously left no queryable trace). Only the fact —
+    // route/method/peer — is recorded; the provided credential value NEVER reaches the sink.
+    recordDenial({ gate: 'gateway-auth', reason: 'invalid or missing gateway secret', route: req.path, method: req.method, actor: req.ip });
     return res.status(401).json({ error: { message: 'Unauthorized: invalid or missing gateway secret (x-atmos-gateway or Authorization: Bearer)', type: 'gateway_auth' } });
   }
   return next();

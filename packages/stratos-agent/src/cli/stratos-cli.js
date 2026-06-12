@@ -30,6 +30,7 @@ import { runDemo, DEFAULT_PROMPT } from './demo-harness.js';
 import { meshAvailable } from '../routing/mesh-signal.js';
 import * as ownerIdentity from '../identity/owner-identity.js';
 import * as nodeAuthz from '../identity/node-authz.js';
+import { makeAuditHook, recordDenial } from '../security/denial-audit.js';
 import { parseCapabilities, assertStepAllowed } from '../security/capability-gate.js';
 import { EgressPolicy, checkEgress, connectorHostsToRules } from '../security/egress-policy.js';
 import * as fts from '../memory/fts-memory.js';
@@ -989,13 +990,16 @@ function cmdPair(rest, deps) {
       // locked, persistent nonce store) — NOT a CLI file (an unlocked CLI read-modify-write would be
       // race-prone and fail-open; Codex finding). So authz passes a fresh ephemeral store and
       // declares its replay check is single-invocation only.
-      const verdict = nodeAuthz.authorizeMeshCommand(readJson(file), trust, { seenNonces: new Set() });
+      const verdict = nodeAuthz.authorizeMeshCommand(readJson(file), trust, { seenNonces: new Set(), audit: makeAuditHook('node-authz') });
       return verdict.ok
         ? { code: 0, lines: [`${C.g}✓ authorized${C.x} ${C.d}(sender role: ${verdict.role}; diagnostic — durable replay state lives in the daemon ingress)${C.x}`] }
         : { code: 1, lines: [`${C.r}✗ DENIED: ${verdict.reason}${C.x}`] };
     }
     return { code: 1, lines: [`${C.r}unknown pair subcommand: ${sub}${C.x} — see 'stratos pair help'`] };
   } catch (e) {
+    // Pairing-attempt telemetry (red-team gap): a refused approve/accept/apply-revocation previously
+    // reached only the human's terminal. Best-effort persist; the refusal itself is unchanged.
+    recordDenial({ gate: 'pairing', reason: e.message, action: `pair ${sub}` });
     return { code: 1, lines: [`${C.r}pair ${sub} failed: ${e.message}${C.x}`] };
   }
 }

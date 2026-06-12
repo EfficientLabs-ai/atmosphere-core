@@ -31,7 +31,11 @@ import { originId } from '../memory/skill-seal.js';
 // 'term-session' (2026-06-12): terminal session lifecycle events (start/attach/detach/end) join the
 // receipt rail — the ref field carries the event. Verification is enum-agnostic (hash chain +
 // signatures), so bundles containing the new action verify with pre-existing verifiers.
-export const RECEIPT_ACTIONS = Object.freeze(['inference', 'skill-run', 'term-session']);
+// 'pairing' (2026-06-13): pairing-success evidence (ATMOS_ONBOARDING_BACKEND §1 step 3 — the
+// checklist's step-3 checkmark needs an artifact, not just runtime state). ref carries the event
+// + counterparty did. 'node-register' (same date): node registration via POST /v1/nodes/register
+// (ATMOS_API_SPEC §2.8 — "enum addition is the honest choice"). Both additive, same precedent.
+export const RECEIPT_ACTIONS = Object.freeze(['inference', 'skill-run', 'term-session', 'pairing', 'node-register']);
 
 const GENESIS = '0'.repeat(64);
 

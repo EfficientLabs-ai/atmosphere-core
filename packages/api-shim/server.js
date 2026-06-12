@@ -19,8 +19,13 @@ import { createReadonlyRouter } from './src/terminal/readonly-api.js';
 import { buildTerminalSessions } from './src/terminal/terminal-sessions.js';
 import { createProductRouter } from './src/product/product-api.js';
 import { createIntelligenceRouter } from './src/product/intelligence-api.js';
-import { verifyBundle as receiptVerifyBundle, ReceiptLog as ReceiptLogClass, makeReceiptSigner as receiptMakeSigner, createReceipt as receiptCreate } from '../stratos-agent/src/ledger/capability-receipt.js';
-import { originId as receiptOriginId } from '../stratos-agent/src/memory/skill-seal.js';
+import { createScoreRouter } from './src/product/score-api.js';
+import { createNodesRouter } from './src/product/nodes-api.js';
+import { createWorkflowsRouter } from './src/product/workflows-api.js';
+import { createSkillsRouter } from './src/product/skills-api.js';
+import { verifyBundle as receiptVerifyBundle, ReceiptLog as ReceiptLogClass, makeReceiptSigner as receiptMakeSigner, createReceipt as receiptCreate, makeReceiptVerifier as receiptMakeVerifier, normalizeWallet as receiptNormalizeWallet } from '../stratos-agent/src/ledger/capability-receipt.js';
+import { originId as receiptOriginId, sealSkillBlock as skillSealBlock } from '../stratos-agent/src/memory/skill-seal.js';
+import { generateHybridKeyPair as identityGenerateKeyPair } from '../stratos-agent/src/security/quantum-crypto.js';
 import { makeContinuityRecorder } from './src/product/continuity-receipt.js';
 import { route as routerRoute, difficulty as routerDifficulty } from '../stratos-agent/src/routing/model-router.js';
 import { resolveRoute as routerResolveRoute } from './src/model-manager.js';
@@ -882,6 +887,48 @@ app.use(createIntelligenceRouter({
   auth: requireGatewaySecretStrict,
   routing: { route: routerRoute, resolveRoute: routerResolveRoute, difficulty: routerDifficulty },
   recordContinuity: _continuityRecorder, // ({input_hash, output_hash, ref}) => real receipt_id | null
+}));
+
+// Lane B (2026-06-13) — onboarding completion + the remaining unified API wrappers. Per-route
+// strict auth throughout (the F1 /health-bleed lesson); each router is fail-closed where its
+// canonical dependency lives outside this repo:
+//  - GET /score: per-user runtime score from LOCAL sources only (not_measured + reason for gaps).
+//  - POST /v1/nodes/register: mint-or-REUSE node identity + registry entry + node-register receipt.
+//  - workflows: the approval-level classifier is operator-plane (automation-runtime.mjs). Wire it
+//    via ATMOS_CLASSIFIER_PATH (a module exporting classifyApprovalLevel); absent ⇒ execution
+//    refuses, dry_run still describes. No executors are wired yet ⇒ even classified-safe steps
+//    refuse honestly ("no executor wired") rather than pretend.
+//  - skills: the lifecycle gate is operator-plane too — wire via ATMOS_LIFECYCLE_GATE_PATH (a
+//    module exporting validatePromotion). Absent ⇒ publish refuses (un-validated promotions never
+//    pass by omission). target:"public" is refused unconditionally inside the router (L5).
+app.use(createScoreRouter({
+  auth: requireGatewaySecretStrict,
+  receipts: { ReceiptLog: ReceiptLogClass, makeReceiptVerifier: receiptMakeVerifier, originId: receiptOriginId },
+}));
+app.use(createNodesRouter({
+  auth: requireGatewaySecretStrict,
+  identity: { generateHybridKeyPair: identityGenerateKeyPair, originId: receiptOriginId, normalizeWallet: receiptNormalizeWallet },
+  record: _continuityRecorder,
+}));
+const _loadOperatorFn = async (envVar, exportName) => {
+  const p = process.env[envVar];
+  if (!p) return null;
+  try { return (await import(p))[exportName] ?? null; }
+  catch (e) { console.warn(`⚠️  [product] ${envVar} set but unloadable (${e.message}) — staying fail-closed`); return null; }
+};
+const _classify = await _loadOperatorFn('ATMOS_CLASSIFIER_PATH', 'classifyApprovalLevel');
+const _lifecycleGate = await _loadOperatorFn('ATMOS_LIFECYCLE_GATE_PATH', 'validatePromotion');
+app.use(createWorkflowsRouter({
+  auth: requireGatewaySecretStrict,
+  // tolerate both classifier shapes: a bare 0–5 number or an object carrying {level}
+  classify: _classify ? (step) => { const r = _classify(step.action); return { level: typeof r === 'number' ? r : r?.level }; } : null,
+  record: _continuityRecorder,
+}));
+app.use(createSkillsRouter({
+  auth: requireGatewaySecretStrict,
+  seal: { sealSkillBlock: skillSealBlock },
+  lifecycleGate: _lifecycleGate ? (x) => _lifecycleGate(x) : null,
+  record: _continuityRecorder,
 }));
 
 // Catch-all health status check

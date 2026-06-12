@@ -37,13 +37,17 @@ export function makeContinuityRecorder(deps = {}, opts = {}) {
     }
   }
 
-  /** ({ input_hash, output_hash, ref }) => signed receipt_id | null. Throws nothing. */
-  return function record({ input_hash, output_hash, ref }) {
+  /**
+   * ({ input_hash, output_hash, ref, action?, owner_wallet? }) => signed receipt_id | null.
+   * Throws nothing. `action` defaults to 'skill-run' (the continuity case); node registration
+   * passes 'node-register' (ATMOS_API_SPEC §2.8) — same rail, same lazy-key retry.
+   */
+  return function record({ input_hash, output_hash, ref, action = 'skill-run', owner_wallet = null }) {
     ensure();
     if (!log) return null;
     try {
       const r = log.append(createReceipt({
-        actor_id: actorId, action: 'skill-run', ref, cost_units: 0,
+        actor_id: actorId, action, ref, cost_units: 0, owner_wallet,
         node_id: actorId, input_hash: input_hash ?? null, output_hash: output_hash ?? null,
       }));
       return r?.receipt_id ?? null; // the TRUE signed id, only after a successful append

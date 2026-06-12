@@ -50,6 +50,16 @@ const SUITES = {
     // Stripe plan; no Stripe/money/signing here). Real hybrid verify; every failure falls to Free
     // Forever (fail-to-free, never fail-closed). Inert — not yet gating any route.
     'test-entitlement.mjs',
+    // LANE B (2026-06-13) — onboarding completion + remaining unified API wrappers. All hermetic:
+    // tmp profiles, real hybrid keys/seal/recorder, ephemeral ports, no live services.
+    //  - onboard-state: the §2 onboarding state machine (disk evidence only; export/activation
+    //    honestly unobservable).
+    //  - score-api: per-user GET /score — MEASURED or not_measured+reason, never synthetic.
+    //  - nodes-register: POST /v1/nodes/register — mint-or-REUSE identity, registry, receipt.
+    //  - workflows-api: workflow.execute — injected classifier, fail-closed, per-step receipts.
+    //  - skills-publish: skill.publish — public ALWAYS refused (L5), lifecycle gate fail-closed.
+    'test-onboard-state.mjs', 'test-score-api.mjs', 'test-nodes-register.mjs',
+    'test-workflows-api.mjs', 'test-skills-publish.mjs',
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG
     // probe that needed a live vector store was removed in the consolidation):
     'test-task-router.js', 'test-classify-live.mjs',
@@ -197,6 +207,11 @@ const SUITES = {
     // grant signed by the owner suite · accept verifies BOTH signature halves and PINS the owner
     // key · pinned owner rejects a foreign (internally-valid) grant · runtime storage round-trips.
     'test-owner-pairing.mjs',
+    // PAIRING RECEIPT (2026-06-13, Lane B) — a successful `pair accept` appends a signed
+    // action:'pairing' receipt (the onboarding step-3 evidence artifact); refusals mint nothing;
+    // the chain stays third-party verifiable. Hermetic: real CLI in tmp dirs, STRATOS_RECEIPTS
+    // pinned to a tmp file.
+    'test-pairing-receipt.mjs',
     // GATE 2b — MESH AUTHORIZATION + REVOCATION (2026-06-11). Deny-by-default command authorization
     // against the device trust set: owner + paired nodes authorized; unknown/revoked/tampered/
     // stale/replayed/impersonating senders DENIED; owner-signed revocations are peer-verifiable

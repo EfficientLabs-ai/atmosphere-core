@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import express from 'express';
+import { computeOnboardingState, hasTraceEvidence } from './onboard-state.js';
 
 const PASSTHROUGH = (req, res, next) => next();
 
@@ -126,7 +127,17 @@ export function createProductRouter(opts = {}) {
     const providers = Object.keys(ms.providers || {}); // NAMES ONLY — never key handles/values
     const count = receiptCount();
     const configured = !!cfg.configured;
+    // §2 state machine — same artifacts, same read-only discipline (the trace scan is bounded).
+    const workspacesRoot = process.env.STRATOS_WORKSPACES_DIR || P('workspaces');
+    const modelConnected = local != null || providers.length > 0;
+    const machine = computeOnboardingState({
+      nodeDid: did, configured, paired, modelConnected,
+      receiptCount: count, traceExists: hasTraceEvidence(workspacesRoot),
+    });
     res.json({
+      state: machine.state,                       // ATMOS_ONBOARDING_BACKEND §2, disk-evidenced only
+      state_evidence: machine.evidence,           // per-state booleans the FE can render directly
+      state_unobservable: machine.unobservable,   // states with no local artifact — never claimed
       nodeDid: did,
       ownerDid,
       paired,

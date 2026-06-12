@@ -74,7 +74,9 @@ export function createNodesRouter(opts = {}) {
         }
       }
     } catch (e) { return deny(res, 500, 'node identity error: ' + e.message); }
-    const node_id = identity.originId(dec(publicKeyB64));
+    let node_id;
+    try { node_id = identity.originId(dec(publicKeyB64)); }
+    catch (e) { return deny(res, 500, 'existing key file is unusable (' + e.message + ') — refusing to touch it; restore or remove it deliberately'); }
 
     // registry upsert — IDEMPOTENT (dual-Codex): re-registering preserves registered_at, stamps
     // updated_at, mints NO second identity receipt, and answers 200 (201 is first-time only).
@@ -94,17 +96,23 @@ export function createNodesRouter(opts = {}) {
     } catch (e) { return deny(res, 500, 'registry write failed: ' + e.message); }
 
     // node-register receipt — FIRST registration only, and FAIL-CLOSED (dual-Codex): a mutation on
-    // a proof surface without its receipt is refused, and the registry write is reverted so state
-    // and chain never disagree. Re-registration is a registry update, not a new identity act.
+    // a proof-surface without its receipt is refused, and EVERYTHING this request created is
+    // rolled back — the registry write AND a key minted by this very request (leaving a fresh
+    // identity behind on a refusal is fail-open by another name). A reused pre-existing key is
+    // never deleted. Re-registration is a registry update, not a new identity act.
     let receipt_id = null;
     if (!prior) {
-      const revert = () => { try { fs.writeFileSync(registryFile(), priorRaw); } catch { /* revert is best-effort; the 503 still refuses */ } };
-      if (!record) { revert(); return deny(res, 503, 'receipt recorder unavailable — registration is a proof-surface mutation and refuses without its receipt (fail-closed)'); }
+      const revert = (why) => {
+        try { fs.writeFileSync(registryFile(), priorRaw); } catch { /* best-effort; the 503 still refuses */ }
+        if (minted) { try { fs.rmSync(nodeKeysFile(), { force: true }); } catch { /* ditto */ } }
+        return deny(res, 503, why);
+      };
+      if (!record) return revert('receipt recorder unavailable — registration is a proof-surface mutation and refuses without its receipt (fail-closed; nothing was kept)');
       receipt_id = record({
         action: 'node-register', ref: `node:register:${name}`, owner_wallet: wallet,
         input_hash: sha256(JSON.stringify({ name, capabilities })), output_hash: sha256(node_id),
       });
-      if (!receipt_id) { revert(); return deny(res, 503, 'receipt mint failed — registration refused and registry reverted (fail-closed; retry when the receipt rail is back)'); }
+      if (!receipt_id) return revert('receipt mint failed — registration refused, registry and freshly-minted key rolled back (fail-closed; retry when the receipt rail is back)');
     }
     // R2/L4 — never silent
     try { console.log(`[nodes] register ${node_id.slice(0, 24)}… name="${name}" minted=${minted} first=${!prior} receipt=${receipt_id || '(reuse: none)'} `); } catch { /* logging is best-effort */ }

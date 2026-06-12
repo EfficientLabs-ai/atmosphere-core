@@ -68,11 +68,19 @@ export function createProductRouter(opts = {}) {
     try { return (fs.existsSync(receiptsFile()) && receipts?.ReceiptLog) ? receipts.ReceiptLog.loadChainEntries(receiptsFile()).length : 0; }
     catch { return 0; }
   };
-  // §2 artifact for the PAIRED checkmark (dual-Codex): a `pairing` receipt on the signed chain.
+  // §2 artifact for the PAIRED checkmark (dual-Codex round 2): a `pairing` receipt that sits on
+  // THIS node's VERIFIED chain — an unverified line is just text; a copied/tampered/stale entry
+  // must not light the checkmark. Full fail-closed verify (same discipline as GET /score).
   const hasPairingReceipt = () => {
     try {
-      if (!fs.existsSync(receiptsFile()) || !receipts?.ReceiptLog) return false;
-      return receipts.ReceiptLog.loadChainEntries(receiptsFile()).some((e) => e.action === 'pairing');
+      if (!fs.existsSync(receiptsFile()) || !receipts?.ReceiptLog || !receipts?.makeReceiptVerifier) return false;
+      const keysRaw = JSON.parse(fs.readFileSync(nodeKeysFile(), 'utf8'));
+      if (!keysRaw?.publicKey) return false;
+      const pub = Object.fromEntries(Object.entries(keysRaw.publicKey).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
+      const log = new receipts.ReceiptLog({ verifier: receipts.makeReceiptVerifier(pub) });
+      log.chain = receipts.ReceiptLog.loadChainEntries(receiptsFile());
+      if (!log.chain.some((e) => e.action === 'pairing')) return false;
+      return log.verify({ requireSig: true }).ok === true; // broken chain → no checkmark, fail-closed
     } catch { return false; }
   };
   const lastBeat = () => {

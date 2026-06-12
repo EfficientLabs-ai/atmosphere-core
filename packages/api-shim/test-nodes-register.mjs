@@ -124,8 +124,16 @@ await ok('FAIL-CLOSED (dual-Codex): first registration without a working receipt
   const r = await postTo(PROFILE2, { name: 'orphan-node' }, null); // record: null — no recorder wired
   assert.strictEqual(r.status, 503, 'proof-surface mutation refused without its receipt');
   assert.ok(!fs.existsSync(path.join(PROFILE2, 'node-registry.json')) || JSON.parse(fs.readFileSync(path.join(PROFILE2, 'node-registry.json'), 'utf8')).nodes.length === 0, 'registry holds NO entry after the refusal');
+  assert.ok(!fs.existsSync(path.join(PROFILE2, 'node-keys.json')), 'the freshly-minted KEY is rolled back too — a refused first registration leaves NOTHING behind (dual-Codex round 2)');
   const r2 = await postTo(PROFILE2, { name: 'orphan-node' }, () => null); // recorder wired but mint FAILS
   assert.strictEqual(r2.status, 503, 'failed mint also refuses');
+  assert.ok(!fs.existsSync(path.join(PROFILE2, 'node-keys.json')), 'key rolled back on failed mint as well');
+  // a PRE-EXISTING identity is NEVER deleted by a refusal (only this-request mints roll back)
+  fs.writeFileSync(path.join(PROFILE2, 'node-keys.json'), JSON.stringify({ publicKey: { ed25519Der: 'AA==' } }));
+  const keep = fs.readFileSync(path.join(PROFILE2, 'node-keys.json'), 'utf8');
+  const r3 = await postTo(PROFILE2, { name: 'orphan-node' }, null);
+  assert.strictEqual(r3.status, 500, 'a corrupt pre-existing key file is refused without being touched');
+  assert.strictEqual(fs.readFileSync(path.join(PROFILE2, 'node-keys.json'), 'utf8'), keep, 'pre-existing key untouched by any refusal path');
 });
 
 assert.strictEqual(pass, 6, `expected all 5 tests, got ${pass}`);

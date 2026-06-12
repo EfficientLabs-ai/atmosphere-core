@@ -51,7 +51,7 @@ ok('createReceipt validates action, ids, and cost (deny-by-default; cost is meas
   assert.throws(() => createReceipt({ action: 'inference', actor_id: '', node_id: NODE_ID, cost_units: 1 }), /actor_id/);
   assert.throws(() => createReceipt({ action: 'inference', actor_id: ACTOR, node_id: '', cost_units: 1 }), /node_id/);
   assert.throws(() => createReceipt({ action: 'inference', actor_id: ACTOR, node_id: NODE_ID, cost_units: -5 }), /non-negative/);
-  assert.deepStrictEqual([...RECEIPT_ACTIONS], ['inference', 'skill-run']);
+  assert.deepStrictEqual([...RECEIPT_ACTIONS], ['inference', 'skill-run', 'term-session']); // term-session: terminal lifecycle joined the rail 2026-06-12
 });
 
 ok('create → sign → verify round-trip (chain + hybrid PQC signature)', () => {

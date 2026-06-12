@@ -16,6 +16,7 @@ import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
 import { requireGatewaySecret, requireGatewaySecretStrict, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
 import { createReadonlyRouter } from './src/terminal/readonly-api.js';
+import { buildTerminalSessions } from './src/terminal/terminal-sessions.js';
 import { beginUpstreamAttempt, recordSuccess, recordFailure, isAvailabilityFailureStatus, breakerSnapshot } from './src/upstream-breaker.js';
 
 const localInference = new LocalInferenceEngine();
@@ -848,6 +849,14 @@ app.post('/mcp', requireGatewaySecret, async (req, res) => {
 // 401s bad secrets. The fs jail + deny-list + redaction live inside the router.
 app.use('/term', requireGatewaySecretStrict, createReadonlyRouter());
 
+// Atmos Terminal slice 2 — PTY sessions (REST now; the WS attach endpoint binds to the http
+// server inside startServer()). Same strict auth. node-pty is an optionalDependency: absent →
+// session creation 503s while every read-only surface keeps working.
+const terminalSessionsPromise = buildTerminalSessions({ workspaceRoot: process.cwd() });
+app.use('/term', requireGatewaySecretStrict, (req, res, next) => {
+  terminalSessionsPromise.then(({ router }) => router(req, res, next)).catch(() => next());
+});
+
 // Catch-all health status check
 app.get('/health', (req, res) => {
   res.json({
@@ -865,6 +874,9 @@ export { app }; // exported so route-level tests can mount it on an ephemeral po
 
 export function startServer() {
   const server = app.listen(PORT, '127.0.0.1', async () => {
+    // WS attach endpoint for terminal sessions (single-use token auth; origin-checked).
+    try { (await terminalSessionsPromise).attachWs(server); }
+    catch (e) { console.warn('⚠️  [terminal] WS attach endpoint unavailable:', e.message); }
     try {
       await reasoningBank.initialize();
       await bootstrapVectorDB(reasoningBank);

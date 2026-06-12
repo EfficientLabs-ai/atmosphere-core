@@ -18,8 +18,12 @@ import { requireGatewaySecret, requireGatewaySecretStrict, secretMatches, GATEWA
 import { createReadonlyRouter } from './src/terminal/readonly-api.js';
 import { buildTerminalSessions } from './src/terminal/terminal-sessions.js';
 import { createProductRouter } from './src/product/product-api.js';
+import { createIntelligenceRouter } from './src/product/intelligence-api.js';
+import { makeSessionReceiptRecorder } from './src/terminal/terminal-sessions.js';
 import { verifyBundle as receiptVerifyBundle, ReceiptLog as ReceiptLogClass } from '../stratos-agent/src/ledger/capability-receipt.js';
 import { originId as receiptOriginId } from '../stratos-agent/src/memory/skill-seal.js';
+import { route as routerRoute, difficulty as routerDifficulty } from '../stratos-agent/src/routing/model-router.js';
+import { resolveRoute as routerResolveRoute } from './src/model-manager.js';
 import { beginUpstreamAttempt, recordSuccess, recordFailure, isAvailabilityFailureStatus, breakerSnapshot } from './src/upstream-breaker.js';
 
 const localInference = new LocalInferenceEngine();
@@ -866,6 +870,19 @@ app.use('/term', requireGatewaySecretStrict, (req, res, next) => {
 app.use(createProductRouter({
   auth: requireGatewaySecretStrict,
   receipts: { verifyBundle: receiptVerifyBundle, ReceiptLog: ReceiptLogClass, originId: receiptOriginId },
+}));
+
+// Foundation F2 — compute.route dry-run (decision only, no spend) + continuity store/retrieve
+// (store mints a skill-run receipt over content HASHES only). Same per-route strict auth.
+const _continuityRecorder = makeSessionReceiptRecorder({});
+app.use(createIntelligenceRouter({
+  auth: requireGatewaySecretStrict,
+  routing: { route: routerRoute, resolveRoute: routerResolveRoute, difficulty: routerDifficulty },
+  recordContinuity: ({ input_hash, output_hash, ref }) => {
+    // reuse the signed-receipt rail; skill-run action, HASHES only (privacy rule). Fail-visible.
+    _continuityRecorder({ ref, owner: 'gateway', profile: 'continuity', action_kind: 'skill-run', input_hash, output_hash });
+    return ref;
+  },
 }));
 
 // Catch-all health status check

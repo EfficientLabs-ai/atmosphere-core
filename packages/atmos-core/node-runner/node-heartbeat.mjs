@@ -67,6 +67,21 @@ export function makeNodeHeartbeat({
   return { start, stop, beat };
 }
 
+/**
+ * Parse a --heartbeat seconds value from CLI/config. Accepts a finite number ≥ 0 (0 = disabled).
+ * Everything else — bare flag (true), '', strings, NaN, Infinity, negatives — falls back LOUDLY.
+ * (Codex round-2: Number(true) === 1, so a bare --heartbeat silently meant a 1s beat.)
+ */
+export function parseHeartbeatSeconds(raw, fallback = 300, warn = (m) => console.warn(m)) {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  try { warn(`⚠️  invalid --heartbeat value (${String(raw)}) — using default ${fallback}s`); } catch { /* warner never throws */ }
+  return fallback;
+}
+
 /** Freshness check for monitors: true when the last beat is younger than staleMs. */
 export function lastBeat(file, { staleMs = 2 * DEFAULT_INTERVAL_MS, now = Date.now } = {}) {
   try {

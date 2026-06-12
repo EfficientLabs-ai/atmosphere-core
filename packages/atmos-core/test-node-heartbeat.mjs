@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeNodeHeartbeat, lastBeat } from './node-runner/node-heartbeat.mjs';
+import { makeNodeHeartbeat, lastBeat, parseHeartbeatSeconds } from './node-runner/node-heartbeat.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'node-hb-'));
 let pass = 0;
@@ -73,6 +73,21 @@ await ok('malformed intervals mean DISABLED, never a 1ms hot loop', async () => 
   }
 });
 
+await ok('parseHeartbeatSeconds: the CLI parse itself is safe (bare flag true → default, loudly)', () => {
+  const warns = [];
+  const warn = (m) => warns.push(m);
+  assert.strictEqual(parseHeartbeatSeconds(true, 300, warn), 300, 'bare --heartbeat (true) → default, NOT Number(true)===1');
+  assert.strictEqual(parseHeartbeatSeconds('', 300, warn), 300);
+  assert.strictEqual(parseHeartbeatSeconds('soon', 300, warn), 300);
+  assert.strictEqual(parseHeartbeatSeconds(Infinity, 300, warn), 300);
+  assert.strictEqual(parseHeartbeatSeconds(-5, 300, warn), 300);
+  assert.strictEqual(warns.length, 5, 'every fallback warned (loud)');
+  assert.strictEqual(parseHeartbeatSeconds('60', 300, warn), 60, 'numeric strings parse');
+  assert.strictEqual(parseHeartbeatSeconds(0, 300, warn), 0, '0 = explicitly disabled, no warning');
+  assert.strictEqual(parseHeartbeatSeconds(120, 300, warn), 120);
+  assert.strictEqual(warns.length, 5, 'valid values never warn');
+});
+
 await ok('lastBeat(): fresh ok, stale not-ok, missing file not-ok', () => {
   const f = path.join(tmp(), 'hb.jsonl');
   const hb = makeNodeHeartbeat({ file: f });
@@ -83,5 +98,5 @@ await ok('lastBeat(): fresh ok, stale not-ok, missing file not-ok', () => {
   assert.strictEqual(lastBeat(path.join(tmp(), 'ghost.jsonl')).ok, false, 'no file = not ok (the alarm)');
 });
 
-assert.strictEqual(pass, 6, `expected all 6 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/6 node-heartbeat tests passed — liveness is now a measured, bounded trace.`);
+assert.strictEqual(pass, 7, `expected all 7 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/7 node-heartbeat tests passed — liveness is now a measured, bounded trace.`);

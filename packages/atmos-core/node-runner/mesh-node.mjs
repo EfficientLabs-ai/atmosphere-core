@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseCustomSection, findCustomSectionRange } from './wasm-sections.js';
-import { makeNodeHeartbeat } from './node-heartbeat.mjs';
+import { makeNodeHeartbeat, parseHeartbeatSeconds } from './node-heartbeat.mjs';
 import { verifyPayload } from './quantum-crypto.js';
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
@@ -159,10 +159,10 @@ let peersNow = 0;
 
 // Periodic liveness telemetry (B5): local jsonl, NEVER an endpoint (this node has no inbound
 // surface by design). --heartbeat <seconds> overrides; 0 disables. A stale file IS the alarm.
-const HB_RAW = Number(getArg('heartbeat', cfg.heartbeatSeconds ?? 300));
-// garbage (--heartbeat with no value / typo / Infinity) falls back to the default, loudly —
-// setInterval would clamp invalid delays to 1ms and turn the beat into a hot loop (Codex finding).
-const HB_SECONDS = Number.isFinite(HB_RAW) && HB_RAW >= 0 ? HB_RAW : (console.warn(`⚠️  invalid --heartbeat value — using default 300s`), 300);
+// Garbage values — BARE --heartbeat (getArg returns true; Number(true)===1!), typos, Infinity,
+// negatives — fall back to the default loudly. The module additionally refuses non-finite
+// intervals outright (a 1ms hot loop is structurally impossible).
+const HB_SECONDS = parseHeartbeatSeconds(getArg('heartbeat', cfg.heartbeatSeconds ?? 300));
 const heartbeat = makeNodeHeartbeat({
   file: process.env.ATMOS_NODE_HEARTBEAT || path.join(__dir, 'node-heartbeat.jsonl'),
   intervalMs: HB_SECONDS * 1000,

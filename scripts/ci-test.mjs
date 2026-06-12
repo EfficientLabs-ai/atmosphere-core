@@ -38,6 +38,10 @@ const SUITES = {
     // optionalDependency, never required hermetically): sanitized env/cwd, single-use attach
     // tokens, ownership, ring replay, flow control, idle reaping, WS frames, signed receipts.
     'test-terminal-sessions.mjs',
+    // PRODUCT API F1 (2026-06-12) — FE-unblocking read APIs + onboarding state: runtime-score
+    // artifact server, receipt verify HTTP wrapper, honest single-node status, onboard/state
+    // checklist (providers names-only, nothing faked). Hermetic: tmp profile, fake readers.
+    'test-product-api.mjs',
     // sovereign router (classify() consolidated onto model-router.js; now hermetic — the LanceDB RAG
     // probe that needed a live vector store was removed in the consolidation):
     'test-task-router.js', 'test-classify-live.mjs',

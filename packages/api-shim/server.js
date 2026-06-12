@@ -17,6 +17,10 @@ import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporte
 import { requireGatewaySecret, requireGatewaySecretStrict, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
 import { createReadonlyRouter } from './src/terminal/readonly-api.js';
 import { buildTerminalSessions } from './src/terminal/terminal-sessions.js';
+import { createProductRouter } from './src/product/product-api.js';
+import * as agentConfig from '../stratos-agent/src/core/agent-config.js';
+import { verifyBundle as receiptVerifyBundle, ReceiptLog as ReceiptLogClass } from '../stratos-agent/src/ledger/capability-receipt.js';
+import { originId as receiptOriginId } from '../stratos-agent/src/memory/skill-seal.js';
 import { beginUpstreamAttempt, recordSuccess, recordFailure, isAvailabilityFailureStatus, breakerSnapshot } from './src/upstream-breaker.js';
 
 const localInference = new LocalInferenceEngine();
@@ -856,6 +860,13 @@ const terminalSessionsPromise = buildTerminalSessions({ workspaceRoot: process.c
 app.use('/term', requireGatewaySecretStrict, (req, res, next) => {
   terminalSessionsPromise.then(({ router }) => router(req, res, next)).catch(() => next());
 });
+
+// Foundation F1 — FE-unblocking read APIs + onboarding state. Strict auth (fail-closed, denials
+// audited); read-only, no spend, no entitlement check (single-tenant loopback today).
+app.use(requireGatewaySecretStrict, createProductRouter({
+  config: agentConfig,
+  receipts: { verifyBundle: receiptVerifyBundle, ReceiptLog: ReceiptLogClass, originId: receiptOriginId },
+}));
 
 // Catch-all health status check
 app.get('/health', (req, res) => {

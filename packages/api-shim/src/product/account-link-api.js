@@ -3,9 +3,11 @@
  * proof (TRANSPORT_IDENTITY_KEYSTONE second link; NODE_ACCOUNT_LINK_SPEC slice 2).
  *
  * Given an account_id + the single-use challenge the account issued, the node signs an ownership
- * proof with its NODE key and returns it. The owner (or the console via a scoped token) calls this
- * to bind their node to their EL account — the gateway secret is the owner's authority, so the route
- * is behind requireGatewaySecretStrict.
+ * proof with its NODE key and returns it. The owner calls this (via the CLI / first-party with the
+ * gateway secret) to bind their node to their EL account — the gateway secret is the owner's
+ * authority, so the route is behind requireGatewaySecretStrict. NOTE: the read-scoped console token
+ * does NOT reach this route (it is wired only to /score + /entitlements) — binding requires the
+ * master secret, not a console session.
  *
  * SOVEREIGNTY: the node PRIVATE key is read into memory only to sign and is NEVER returned or logged;
  * the response carries the proof (public key bundle + signature) only — the same posture as the

@@ -137,5 +137,22 @@ await ok('a stale heartbeat or a TAMPERED chain → measured RED sub-scores, her
   assert.strictEqual(doc.hero.verdict, 'RED', 'any measured failure → RED');
 });
 
-assert.strictEqual(pass, 3, `expected all 3 tests, got ${pass}`);
-console.log(`\n✅ ${pass}/3 score-api tests passed — FE-contract-valid in every state, never synthetic.`);
+await ok('an UNREADABLE receipt chain → stable generic reason, never raw exception text (no path/parser leak to the read-scoped console token)', async () => {
+  const PROFILE = tmp();
+  const NOW = Date.parse('2026-06-13T12:00:00Z');
+  const kp = generateHybridKeyPair();
+  fs.writeFileSync(path.join(PROFILE, 'node-keys.json'), JSON.stringify({ publicKey: b64(kp.publicKey), privateKey: b64(kp.privateKey) }));
+  // a receipts file that EXISTS but is corrupt → loadChainEntries JSON.parse throws → the catch path
+  fs.writeFileSync(path.join(PROFILE, 'live-receipts.jsonl'), '{ this is not valid json @@@\n');
+  const doc = await (await serve({ profileDir: PROFILE, receipts: RECEIPT_DEPS, now: () => NOW })).json();
+  assert.ok(feValidatorAccepts(doc), 'unreadable-chain payload must still pass the FE validator');
+  const blob = JSON.stringify(doc);
+  // the catch path renders continuity/ownership not_measured with the STABLE reason only
+  assert.strictEqual(doc.scores.continuity.reason, 'receipt chain unreadable', 'stable generic reason, verbatim');
+  assert.strictEqual(doc.scores.ownership.reason, 'receipt chain unreadable', 'ownership too');
+  // no raw parser/filesystem detail leaks anywhere in the response
+  assert.ok(!/Unexpected token|JSON|ENOENT|EACCES|\/tmp\/|at JSON\.parse/i.test(blob), 'no raw exception/path text reflected');
+});
+
+assert.strictEqual(pass, 4, `expected all 4 tests, got ${pass}`);
+console.log(`\n✅ ${pass}/4 score-api tests passed — FE-contract-valid in every state, never synthetic; unreadable-chain leaks nothing.`);

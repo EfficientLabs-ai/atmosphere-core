@@ -99,3 +99,58 @@ export function requireGatewaySecretStrict(req, res, next) {
 export function gatewayAuthHeaders() {
   return GATEWAY_SECRET ? { 'x-atmos-gateway': GATEWAY_SECRET } : {};
 }
+
+/**
+ * READ-surface auth that ALSO accepts a console-scoped token (CONSOLE_UI_SPEC). The browser console
+ * holds ONLY this token (never the master secret); it was minted via the master secret at
+ * POST /console/session. `verifyConsoleToken` is injected (the stateful console-token store).
+ *
+ *   - `x-atmos-console: <token>` present  → the token is the authority for this read surface, BUT the
+ *     request Host must be loopback (127.0.0.1/localhost/::1). A browser cannot forge the Host header,
+ *     so this also defeats DNS-rebinding: a page at evil.com (rebound to 127.0.0.1) still sends
+ *     Host: evil.com and is refused. A present-but-invalid/expired token → 401 (re-authenticate),
+ *     NOT a fall-through (the caller declared intent to use the console path).
+ *   - no console token                    → the normal requireGatewaySecretStrict gate (CLI / first-
+ *     party / SDK with the master secret + Origin allowlist).
+ *
+ * Apply ONLY to read routes (/score, /entitlements). Spend/mint/register/link keep the strict gate —
+ * a console token is read-scoped and can never reach them.
+ */
+/** Extract the hostname from a Host header, handling bracketed IPv6 (`[::1]:port` → `::1`) and
+ *  `host:port` (→ `host`). A bare/garbage value yields ''. */
+function hostnameOf(hostHeader) {
+  const h = String(hostHeader || '').trim();
+  if (h.startsWith('[')) { const end = h.indexOf(']'); return end > 0 ? h.slice(1, end) : ''; }
+  return h.split(':')[0];
+}
+
+export function makeConsoleReadAuth({ verifyConsoleToken }) {
+  if (typeof verifyConsoleToken !== 'function') throw new Error('makeConsoleReadAuth needs verifyConsoleToken');
+  return function consoleReadAuth(req, res, next) {
+    const token = req.get('x-atmos-console');
+    if (token) {
+      const denied = (code, reason) => {
+        recordDenial({ gate: 'console-auth', reason, route: req.path, method: req.method, actor: req.ip });
+        return res.status(code).json({ error: { message: reason, type: 'console_auth' } });
+      };
+      // (1) loopback Host — a browser cannot forge Host, so this refuses DNS-rebound pages.
+      const host = hostnameOf(req.get('host'));
+      if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
+        return denied(403, 'console token is loopback-only (rebinding refused)');
+      }
+      // (2) Origin allowlist — mirror requireGatewaySecretStrict so the console-token branch is NOT
+      // weaker defense-in-depth (dual-Codex): a present browser Origin must be allowlisted, at the
+      // AUTH layer, independent of CORS. Same-origin GETs send no Origin and pass; a cross-site page
+      // (even loopback-rebound) sends its real Origin and is refused here, not just by CORS.
+      const origin = req.get('origin');
+      if (origin) {
+        const allowed = (process.env.ATMOS_GATEWAY_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+        if (!allowed.includes(origin)) return denied(403, 'browser-origin not allowlisted on this surface');
+      }
+      // (3) the token itself — present-but-invalid → 401 (re-authenticate), never a fall-through.
+      if (!verifyConsoleToken(token)) return denied(401, 'console session expired — re-authenticate');
+      return next();
+    }
+    return requireGatewaySecretStrict(req, res, next);
+  };
+}

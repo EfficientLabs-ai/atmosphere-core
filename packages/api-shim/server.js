@@ -14,7 +14,9 @@ import { languageGate } from './src/language-gateway.js';
 import { complianceApprovalGate } from './src/compliance-gateway.js';
 import { LegacyBridge } from '../stratos-agent/src/ingestion/legacy-bridge.js';
 import { TelemetryExporter } from '../stratos-agent/src/memory/telemetry-exporter.js';
-import { requireGatewaySecret, requireGatewaySecretStrict, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
+import { requireGatewaySecret, requireGatewaySecretStrict, makeConsoleReadAuth, secretMatches, GATEWAY_SECRET } from './src/gateway-auth.js';
+import { makeConsoleTokens } from './src/console-token.js';
+import { createConsoleRouter } from './src/product/console-api.js';
 import { createReadonlyRouter } from './src/terminal/readonly-api.js';
 import { buildTerminalSessions } from './src/terminal/terminal-sessions.js';
 import { createProductRouter } from './src/product/product-api.js';
@@ -913,8 +915,15 @@ app.use(createIntelligenceRouter({
 //  - skills: the lifecycle gate is operator-plane too — wire via ATMOS_LIFECYCLE_GATE_PATH (a
 //    module exporting validatePromotion). Absent ⇒ publish refuses (un-validated promotions never
 //    pass by omission). target:"public" is refused unconditionally inside the router (L5).
+// Console read auth: the node-served console holds a short-TTL, read-scoped token (minted via the
+// master secret at POST /console/session) INSTEAD of the master secret. makeConsoleReadAuth accepts
+// that token (loopback-only) OR falls through to the strict master-secret gate. Applied ONLY to the
+// read surface below; spend/mint/register/link keep requireGatewaySecretStrict.
+const _consoleTokens = makeConsoleTokens();
+const _consoleReadAuth = makeConsoleReadAuth({ verifyConsoleToken: _consoleTokens.verify });
+app.use(createConsoleRouter({ auth: requireGatewaySecretStrict, tokens: _consoleTokens }));
 app.use(createScoreRouter({
-  auth: requireGatewaySecretStrict,
+  auth: _consoleReadAuth,
   receipts: { ReceiptLog: ReceiptLogClass, makeReceiptVerifier: receiptMakeVerifier, originId: receiptOriginId },
 }));
 app.use(createNodesRouter({
@@ -925,7 +934,7 @@ app.use(createNodesRouter({
 // GET /entitlements — read-only resolution of the local entitlement (verifier wired live; NO
 // enforcement flip — that stays the deliberate Phase 1.3 step). Strict auth per-route; fail-to-free.
 app.use(createEntitlementsRouter({
-  auth: requireGatewaySecretStrict,
+  auth: _consoleReadAuth,
 }));
 // POST /v1/account/link/proof — the node→account ownership proof (keystone second link). Signs with
 // the node key (private half never leaves), emits a fail-closed account-link receipt. Strict auth.

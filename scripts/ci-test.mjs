@@ -59,6 +59,10 @@ const SUITES = {
     // account-link-api route (node-side prover, fail-closed account-link receipt, private key never
     // returned) is here; the pure prover/verifier module test lives under stratos-agent below.
     'test-account-link-api.mjs',
+    // CONSOLE SCOPED TOKEN (2026-06-14, CONSOLE_UI_SPEC) — the node-served console holds a short-TTL,
+    // read-scoped token (minted via the master secret) INSTEAD of the master secret. Store + the
+    // makeConsoleReadAuth gate (loopback-only, rebinding-refused, fall-through to strict) + mint route.
+    'test-console-token.mjs',
     // LANE B (2026-06-13) — onboarding completion + remaining unified API wrappers. All hermetic:
     // tmp profiles, real hybrid keys/seal/recorder, ephemeral ports, no live services.
     //  - onboard-state: the §2 onboarding state machine (disk evidence only; export/activation

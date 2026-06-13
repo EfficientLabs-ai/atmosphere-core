@@ -83,7 +83,7 @@ export function createScoreRouter(opts = {}) {
       const rawTs = log.chain[log.chain.length - 1]?.ts ?? null;
       const lastTs = Number.isFinite(rawTs) ? new Date(rawTs).toISOString() : (typeof rawTs === 'string' ? rawTs : null);
       return { count: log.length, intact: !!v.ok, lastTs, detail: v.ok ? null : (v.reason ?? 'chain verification failed') };
-    } catch (e) { return { err: 'receipt chain unreadable: ' + e.message }; }
+    } catch { return { err: 'receipt chain unreadable' }; } // stable reason — never reflect raw e.message (could leak local paths/parser detail to the read-scoped console token; dual-Codex)
   }
 
   // ── GET /score — per-user runtime score from LOCAL sources only ──

@@ -20,6 +20,7 @@ import { buildTerminalSessions } from './src/terminal/terminal-sessions.js';
 import { createProductRouter } from './src/product/product-api.js';
 import { createIntelligenceRouter } from './src/product/intelligence-api.js';
 import { createScoreRouter } from './src/product/score-api.js';
+import { createEntitlementsRouter } from './src/product/entitlements-api.js';
 import { createNodesRouter } from './src/product/nodes-api.js';
 import { createWorkflowsRouter } from './src/product/workflows-api.js';
 import { createSkillsRouter } from './src/product/skills-api.js';
@@ -101,7 +102,14 @@ const reasoningBank = new ReasoningBank({
 
 // Middleware
 // CORS scoped via ATMOS_GATEWAY_ORIGINS (comma-separated); defaults to reflect-origin.
-app.use(cors({ origin: process.env.ATMOS_GATEWAY_ORIGINS ? process.env.ATMOS_GATEWAY_ORIGINS.split(',').map((s) => s.trim()) : true }));
+// CORS for the loopback gateway. The origin allowlist comes from ATMOS_GATEWAY_ORIGINS (the console
+// origin + the EL account origin only). When UNSET the default is `false` (reflect NO browser origin)
+// — NOT `true`: a loopback gateway that reflects every Origin is the DNS-rebinding hole (a malicious
+// page resolving a hostname to 127.0.0.1 could read responses). First-party server-to-server callers
+// send no Origin and are unaffected; the strict routes already refuse non-allowlisted browser Origins
+// at the auth layer (gateway-auth requireGatewaySecretStrict) — this aligns the CORS layer with that
+// same intent so the two can't disagree. Browser access REQUIRES an explicit allowlist entry.
+app.use(cors({ origin: process.env.ATMOS_GATEWAY_ORIGINS ? process.env.ATMOS_GATEWAY_ORIGINS.split(',').map((s) => s.trim()) : false }));
 app.use(bodyParser.json());
 
 // Fail-closed helper for when the compliance gate THROWS on the BYOK-capable route (/v1/chat/completions).
@@ -911,6 +919,11 @@ app.use(createNodesRouter({
   auth: requireGatewaySecretStrict,
   identity: { generateHybridKeyPair: identityGenerateKeyPair, originId: receiptOriginId, normalizeWallet: receiptNormalizeWallet },
   record: _continuityRecorder,
+}));
+// GET /entitlements — read-only resolution of the local entitlement (verifier wired live; NO
+// enforcement flip — that stays the deliberate Phase 1.3 step). Strict auth per-route; fail-to-free.
+app.use(createEntitlementsRouter({
+  auth: requireGatewaySecretStrict,
 }));
 const _loadOperatorFn = async (envVar, exportName) => {
   const p = process.env[envVar];

@@ -50,6 +50,11 @@ const SUITES = {
     // Stripe plan; no Stripe/money/signing here). Real hybrid verify; every failure falls to Free
     // Forever (fail-to-free, never fail-closed). Inert — not yet gating any route.
     'test-entitlement.mjs',
+    // ENTITLEMENT GRANTING SIDE (2026-06-13, Track A slice 1) — the signer (exact inverse of the
+    // verifier: byte-array hybrid sig, reserved-claim guard, round-trip + inert-snapshot parity vs
+    // input-shape attacks, bounded fail-to-free read) + the read-only GET /entitlements surface +
+    // the loopback CORS lockdown (unset origin → reflect none). All hermetic; dual-Codex APPROVE.
+    'test-entitlement-signer.mjs', 'test-entitlements-api.mjs', 'test-gateway-cors.mjs',
     // LANE B (2026-06-13) — onboarding completion + remaining unified API wrappers. All hermetic:
     // tmp profiles, real hybrid keys/seal/recorder, ephemeral ports, no live services.
     //  - onboard-state: the §2 onboarding state machine (disk evidence only; export/activation

@@ -28,6 +28,34 @@ export const FREE_FOREVER_NAMESPACES = Object.freeze([
 
 const GRACE_MS = 14 * 24 * 60 * 60_000; // PROPOSED 14-day grace past expiry (plan §4)
 
+/** Max entitlement token size on disk. A hybrid-signed token (byte-array Ed25519+ML-DSA-65 sig) is
+ *  ~13 KB; 64 KB is generous headroom. */
+const MAX_TOKEN_BYTES = 64 * 1024;
+/**
+ * Bounded, fail-to-free token read (dual-Codex finding: GET /entitlements makes resolve() remotely
+ * reachable, so its file read must not be weaponizable). Refuses — WITHOUT reading into memory — any
+ * path that is not a regular file (FIFO/device/dir, incl. a symlink swapped to /dev/zero) or that
+ * exceeds the cap. stat is taken on the OPEN fd, so there is no TOCTOU window between check and read.
+ * Returns the file contents, or null for "no usable token" (every null path resolves to Free Forever).
+ */
+function readTokenSafe(p) {
+  let fd;
+  try {
+    // O_NONBLOCK (dual-Codex round 2): a plain O_RDONLY open on a FIFO BLOCKS until a writer appears
+    // (Linux fifo(7)) — so a named pipe at the token path would wedge this synchronous, now
+    // remotely-reachable read BEFORE the isFile() guard runs. O_NONBLOCK makes the open return
+    // immediately for a FIFO/special file so fstat can reject it; it is a no-op for regular files.
+    fd = fs.openSync(p, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > MAX_TOKEN_BYTES) return null; // non-regular or oversized → not a token
+    return fs.readFileSync(fd, 'utf8');
+  } catch {
+    return null; // missing/unreadable → Free (never throws on the caller)
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already gone */ } }
+  }
+}
+
 /** Recursive canonical JSON (the repo idiom — skill-seal.js/node-authz.js). A flat-key replacer
  *  would collapse nested objects to {}, letting a nested authz field be tampered post-signature
  *  (Codex finding). This canonicalizes at EVERY depth; the provisioning signer MUST use the same. */
@@ -90,8 +118,8 @@ export function createEntitlement(deps = {}, opts = {}) {
    */
   function resolve() {
     const free = (reason) => ({ tier: 'free_forever', namespaces: [...FREE_FOREVER_NAMESPACES], state: 'active', source: 'free', reason });
-    let raw;
-    try { raw = fs.readFileSync(tokenPath(), 'utf8'); } catch { return free('no entitlement token — Free Forever floor (no contact required)'); }
+    const raw = readTokenSafe(tokenPath()); // bounded + regular-file-only; null = no usable token
+    if (raw == null) return free('no readable entitlement token — Free Forever floor (no contact required)');
     let token;
     try { token = JSON.parse(raw); } catch { return free('entitlement token unreadable — fail to Free Forever'); }
     if (token?.format !== 'efl.entitlement.v1' || !token.sig) return free('entitlement token malformed — fail to Free Forever');

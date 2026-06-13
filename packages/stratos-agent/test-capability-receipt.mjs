@@ -52,8 +52,9 @@ ok('createReceipt validates action, ids, and cost (deny-by-default; cost is meas
   assert.throws(() => createReceipt({ action: 'inference', actor_id: ACTOR, node_id: '', cost_units: 1 }), /node_id/);
   assert.throws(() => createReceipt({ action: 'inference', actor_id: ACTOR, node_id: NODE_ID, cost_units: -5 }), /non-negative/);
   // term-session joined 2026-06-12; pairing + node-register joined 2026-06-13 (onboarding step-3
-  // evidence + ATMOS_API_SPEC §2.8). Verification is enum-agnostic, so additions stay compatible.
-  assert.deepStrictEqual([...RECEIPT_ACTIONS], ['inference', 'skill-run', 'term-session', 'pairing', 'node-register']);
+  // evidence + ATMOS_API_SPEC §2.8); account-link joined 2026-06-13 (node→account ownership proof,
+  // distinct from pairing). Verification is enum-agnostic, so additions stay compatible.
+  assert.deepStrictEqual([...RECEIPT_ACTIONS], ['inference', 'skill-run', 'term-session', 'pairing', 'node-register', 'account-link']);
 });
 
 ok('create → sign → verify round-trip (chain + hybrid PQC signature)', () => {

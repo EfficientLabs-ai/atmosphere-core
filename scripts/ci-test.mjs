@@ -55,6 +55,10 @@ const SUITES = {
     // input-shape attacks, bounded fail-to-free read) + the read-only GET /entitlements surface +
     // the loopback CORS lockdown (unset origin → reflect none). All hermetic; dual-Codex APPROVE.
     'test-entitlement-signer.mjs', 'test-entitlements-api.mjs', 'test-gateway-cors.mjs',
+    // NODE→ACCOUNT LINK (2026-06-13, Track A slice 2) — the keystone's second signed link. The
+    // account-link-api route (node-side prover, fail-closed account-link receipt, private key never
+    // returned) is here; the pure prover/verifier module test lives under stratos-agent below.
+    'test-account-link-api.mjs',
     // LANE B (2026-06-13) — onboarding completion + remaining unified API wrappers. All hermetic:
     // tmp profiles, real hybrid keys/seal/recorder, ephemeral ports, no live services.
     //  - onboard-state: the §2 onboarding state machine (disk evidence only; export/activation
@@ -222,6 +226,10 @@ const SUITES = {
     // stale/replayed/impersonating senders DENIED; owner-signed revocations are peer-verifiable
     // (foreign owner + tamper fail closed). Includes a real-CLI end-to-end revoke→deny.
     'test-node-authz.mjs',
+    // NODE→ACCOUNT LINK module (2026-06-13, Track A slice 2) — the pure prover/verifier. Round-trip
+    // oracle: real proof verifies; tamper/wrong-account/wrong-or-replayed-challenge/stale/future/
+    // DID↔key-mismatch/forged-key all fail-closed; the verifier refuses without its bindings.
+    'test-account-link.mjs',
   ],
 };
 

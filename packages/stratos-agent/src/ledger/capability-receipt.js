@@ -35,7 +35,10 @@ import { originId } from '../memory/skill-seal.js';
 // checklist's step-3 checkmark needs an artifact, not just runtime state). ref carries the event
 // + counterparty did. 'node-register' (same date): node registration via POST /v1/nodes/register
 // (ATMOS_API_SPEC §2.8 — "enum addition is the honest choice"). Both additive, same precedent.
-export const RECEIPT_ACTIONS = Object.freeze(['inference', 'skill-run', 'term-session', 'pairing', 'node-register']);
+// 'account-link' (2026-06-13): the node→account ownership proof (NODE_ACCOUNT_LINK_SPEC slice 2). A
+// DISTINCT action from 'pairing' on purpose — onboarding's PAIRED check counts only 'pairing'
+// (owner-pairing ceremony) receipts, so account-link evidence must NOT alias it (dual-Codex finding).
+export const RECEIPT_ACTIONS = Object.freeze(['inference', 'skill-run', 'term-session', 'pairing', 'node-register', 'account-link']);
 
 const GENESIS = '0'.repeat(64);
 

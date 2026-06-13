@@ -22,11 +22,13 @@ import { createIntelligenceRouter } from './src/product/intelligence-api.js';
 import { createScoreRouter } from './src/product/score-api.js';
 import { createEntitlementsRouter } from './src/product/entitlements-api.js';
 import { createNodesRouter } from './src/product/nodes-api.js';
+import { createAccountLinkRouter } from './src/product/account-link-api.js';
 import { createWorkflowsRouter } from './src/product/workflows-api.js';
 import { createSkillsRouter } from './src/product/skills-api.js';
 import { verifyBundle as receiptVerifyBundle, ReceiptLog as ReceiptLogClass, makeReceiptSigner as receiptMakeSigner, createReceipt as receiptCreate, makeReceiptVerifier as receiptMakeVerifier, normalizeWallet as receiptNormalizeWallet } from '../stratos-agent/src/ledger/capability-receipt.js';
 import { originId as receiptOriginId, sealSkillBlock as skillSealBlock } from '../stratos-agent/src/memory/skill-seal.js';
 import { generateHybridKeyPair as identityGenerateKeyPair } from '../stratos-agent/src/security/quantum-crypto.js';
+import { createNodeAccountProof } from '../stratos-agent/src/identity/account-link.js';
 import { makeContinuityRecorder } from './src/product/continuity-receipt.js';
 import { route as routerRoute, difficulty as routerDifficulty } from '../stratos-agent/src/routing/model-router.js';
 import { resolveRoute as routerResolveRoute } from './src/model-manager.js';
@@ -924,6 +926,13 @@ app.use(createNodesRouter({
 // enforcement flip — that stays the deliberate Phase 1.3 step). Strict auth per-route; fail-to-free.
 app.use(createEntitlementsRouter({
   auth: requireGatewaySecretStrict,
+}));
+// POST /v1/account/link/proof — the node→account ownership proof (keystone second link). Signs with
+// the node key (private half never leaves), emits a fail-closed account-link receipt. Strict auth.
+app.use(createAccountLinkRouter({
+  auth: requireGatewaySecretStrict,
+  accountLink: { createNodeAccountProof },
+  record: _continuityRecorder,
 }));
 const _loadOperatorFn = async (envVar, exportName) => {
   const p = process.env[envVar];

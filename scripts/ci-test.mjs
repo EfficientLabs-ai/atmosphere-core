@@ -55,6 +55,14 @@ const SUITES = {
     // input-shape attacks, bounded fail-to-free read) + the read-only GET /entitlements surface +
     // the loopback CORS lockdown (unset origin → reflect none). All hermetic; dual-Codex APPROVE.
     'test-entitlement-signer.mjs', 'test-entitlements-api.mjs', 'test-gateway-cors.mjs',
+    // PROVISIONING LOOP (2026-06-18) — the server-side paid→provisioned→delivered loop that closes
+    // the §8 build order on top of the signer/verifier: subscription-state (tier→entitlement recompute
+    // + state machine, truth-path not delta-path), entitlement-store (records + event-id dedup, atomic
+    // writes), provisioning-service (applyEvent/issueToken/reconcile), and the two thin routers
+    // (stripe-webhook fail-closed on unverified events; entitlement-issue fail-to-free). The full loop
+    // is proven E2E against the SHIPPED offline verifier (webhook → record → signed token → resolve →
+    // apex; cancel → Free floor). Hermetic: injected fake-Stripe + test-mode verifier, tmp dirs.
+    'test-provisioning-core.mjs', 'test-provisioning-service.mjs', 'test-provisioning-api.mjs',
     // NODE→ACCOUNT LINK (2026-06-13, Track A slice 2) — the keystone's second signed link. The
     // account-link-api route (node-side prover, fail-closed account-link receipt, private key never
     // returned) is here; the pure prover/verifier module test lives under stratos-agent below.

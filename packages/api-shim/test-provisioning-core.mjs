@@ -99,16 +99,18 @@ console.log('\nentitlement-store — records + dedup\n');
   store.upsert({ subject: 'cus_456', tier: 'exos_pro', state: 'active' });
   ok(store.all().length === 2, 'all() returns both records');
 
-  // dedup
+  // dedup (single-state-file: claim → finalize → done is the permanent processed record)
   ok(store.isProcessed('evt_1') === false, 'unseen event → not processed');
-  store.markProcessed('evt_1', 'checkout.session.completed');
-  ok(store.isProcessed('evt_1') === true, 'marked event → processed (dedup hit)');
+  ok(store.claimEvent('evt_1') === 'claimed', 'unseen event → claimEvent returns "claimed"');
+  store.finalizeEvent('evt_1', 'checkout.session.completed');
+  ok(store.isProcessed('evt_1') === true, 'finalized event → processed (dedup hit)');
+  ok(store.claimEvent('evt_1') === 'done', 'a re-claim of a finalized id → "done" (deduped, not reprocessed)');
   ok(store.isProcessed('evt_2') === false, 'other event → still not processed');
 
   // persistence across a fresh store instance over the same dir (atomic write survived)
   const store2 = createEntitlementStore({ dir, now: () => t });
   ok(store2.get('cus_123').tier === 'apex', 'records persist across a new store instance');
-  ok(store2.isProcessed('evt_1') === true, 'dedup log persists across a new store instance');
+  ok(store2.isProcessed('evt_1') === true, 'dedup state persists across a new store instance');
 
   fs.rmSync(dir, { recursive: true, force: true });
 }

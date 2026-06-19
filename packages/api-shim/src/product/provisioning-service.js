@@ -80,10 +80,13 @@ export function createProvisioningService(deps = {}) {
    *   { handled:true, subject, record }        record upserted (grant or canceled)
    *   { retry:true, reason }                   transient — DON'T ack (let Stripe retry); not finalized
    *
-   * ATOMIC CLAIM (Codex HIGH): the event id is claimed write-if-absent at the very START (claimEvent),
-   * before any await, so two concurrent applyEvent(sameId) cannot both proceed. The claim is provisional
-   * — it is FINALIZED only on a successful handled/ignored outcome, and RELEASED on a retryable failure
-   * so a claim never permanently blocks a retry.
+   * ATOMIC CLAIM — SINGLE STATE FILE (Codex HIGH, REDESIGN): the event id is claimed write-if-absent at
+   * the very START (claimEvent), before any await, via one atomic state file per id. claimEvent returns:
+   * 'done' (already processed) or 'inflight' (a fresh concurrent claim) → dedup; 'claimed' or 'reclaimed'
+   * (a fresh claim, or an orphaned stale claim recovered after a crash) → process. A TERMINAL outcome —
+   * handled, ignored, OR a non-retryable error — FINALIZES the state file to 'done' (so a poison/terminal
+   * event never loops forever); only a RETRYABLE failure RELEASES it so a legitimate Stripe retry can
+   * re-claim (and a crash that releases nothing is recovered by the STALE_TTL reclaim in claimEvent).
    *
    * OUT-OF-ORDER FLOOR (Codex HIGH): resolveSubscription refetches current state; on top of that, a
    * per-subject monotonic event.created marker rejects an event older than the last applied so a stale
@@ -97,13 +100,18 @@ export function createProvisioningService(deps = {}) {
     if (!event || typeof event.id !== 'string' || !event.id || typeof event.type !== 'string') {
       return { handled: false, ignored: true, reason: 'malformed event' };
     }
-    // Claim the id ATOMICALLY before any await. Lost claim (concurrent caller or already finalized) → dedup.
-    let claimed;
-    try { claimed = store.claimEvent(event.id); }
+    // Claim the id ATOMICALLY before any await (single state file; openSync('wx') IS the gate).
+    //   'done'      → already processed   → dedup.
+    //   'inflight'  → a fresh concurrent claimant holds it → dedup (Stripe will retry; it will finalize).
+    //   'claimed'   → THIS call owns a fresh claim → process.
+    //   'reclaimed' → an orphaned stale claim (prior claimant crashed) recovered → process (no black-hole).
+    let claim;
+    try { claim = store.claimEvent(event.id); }
     catch (e) { return { retry: true, reason: `event claim failed: ${e.message}` }; }
-    if (!claimed) return { deduped: true };
+    if (claim === 'done' || claim === 'inflight') return { deduped: true };
 
-    // From here on, a retryable exit MUST release the claim; a terminal (handled/ignored) exit finalizes it.
+    // From here on (claim is 'claimed' or 'reclaimed') a RETRYABLE exit MUST release the state file; a
+    // TERMINAL exit (handled, ignored, OR a non-retryable error) FINALIZES it to 'done' so it can't loop.
     try {
       const known = SUBSCRIPTION_TYPES.has(event.type) || SESSION_TYPES.has(event.type) || INVOICE_TYPES.has(event.type);
       if (!known) { store.finalizeEvent(event.id, event.type); return { handled: false, ignored: true, reason: `ignored type ${event.type}` }; }
@@ -147,9 +155,15 @@ export function createProvisioningService(deps = {}) {
       store.finalizeEvent(event.id, event.type);
       return { handled: true, subject, record };
     } catch (e) {
-      // Unexpected processing failure → release the claim so Stripe's retry can re-process.
-      store.releaseEvent(event.id);
-      throw e;
+      // An exception HERE is a TERMINAL (poison) failure: the explicitly-retryable paths above
+      // (subscription fetch down, unmapped active price) already returned { retry:true } after
+      // releaseEvent — they never reach this catch. Anything that throws during recompute/upsert is
+      // deterministic in the event bytes, so redelivering the identical event would crash identically
+      // forever. Per the prescribed design a TERMINAL/non-retryable error FINALIZES the claim (so the
+      // poison event does not loop) and is acked. We surface it as ignored (loud log), never as a grant.
+      console.error(`✖ [provisioning] TERMINAL processing failure for event ${event.id} (${event.type}) — finalizing as poison (no retry, no grant): ${e.message}`);
+      store.finalizeEvent(event.id, event.type);
+      return { handled: false, ignored: true, reason: `terminal processing failure: ${e.message}` };
     }
   }
 

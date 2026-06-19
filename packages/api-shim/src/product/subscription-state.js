@@ -98,13 +98,20 @@ export function entitlementFromSubscription(sub, deps = {}) {
   const price_id = priceIdOf(sub);
   const state = mapSubscriptionStatus(sub?.status);
 
-  const no = (reason) => ({ grant: false, state: 'canceled', subject, price_id, reason });
+  // `mapped_state` carries the status-derived state (active|past_due|canceled) on a NO result too, so a
+  // caller can tell a genuine cancellation (status not granting) from an ACTIVE/grace subscription that
+  // merely failed a downstream check (e.g. an unmapped price). `unmapped_price` flags the specific
+  // operator-misconfig case: an otherwise-granting subscription whose price maps to no known tier —
+  // that must NOT be silently downgraded to free (Codex HIGH); the caller signals retry + alerts.
+  const no = (reason, extra = {}) => ({ grant: false, state: 'canceled', mapped_state: state, subject, price_id, reason, ...extra });
 
   if (state === 'canceled') return no(`subscription status "${sub?.status}" is not granting`);
   if (!price_id) return no('subscription has no resolvable price id');
 
   const tier = tierForPrice(price_id);
-  if (!tier || !TIER_NAMESPACES[tier]) return no(`price "${price_id}" maps to no known tier`);
+  // An ACTIVE/grace subscription whose price maps to no known tier is an operator misconfig, NOT a free
+  // user: flag it so the caller retries + alerts instead of writing a free record + acking the event.
+  if (!tier || !TIER_NAMESPACES[tier]) return no(`price "${price_id}" maps to no known tier`, { unmapped_price: true });
 
   // current_period_end is Stripe seconds → epoch ms. The token's expires_at is the PERIOD END only;
   // the verifier (entitlement.js) applies the 14-day grace ON TOP via GRACE_MS, so do NOT add grace

@@ -63,10 +63,15 @@ const SUITES = {
     // is proven E2E against the SHIPPED offline verifier (webhook → record → signed token → resolve →
     // apex; cancel → Free floor). Hermetic: injected fake-Stripe + test-mode verifier, tmp dirs.
     'test-provisioning-core.mjs', 'test-provisioning-service.mjs', 'test-provisioning-api.mjs',
-    // PROVISIONING HARDENING (2026-06-20, Codex review of feat/provisioning-mount) — fail-closed
-    // regression: the entitlement-issue route must derive the SUBJECT from an injected resolver, never a
-    // client header (no resolver + no opt-in → 503; the header-controlled mint is closed).
-    'test-entitlement-issue-subject.mjs',
+    // PROVISIONING HARDENING (2026-06-20, Codex review of feat/provisioning-mount) — four fail-closed
+    // regressions on the live mount: (1) the entitlement-issue route must derive the SUBJECT from an
+    // injected resolver, never a client header (no resolver + no opt-in → 503, the header-controlled
+    // mint is closed); (2) out-of-order webhooks cannot regress state (refetch-current + a per-subject
+    // monotonic event.created floor); (3) the event-id dedup claim is ATOMIC (concurrent same-id →
+    // exactly one applies; retry never permanently blocked); (4) an ACTIVE sub on an UNMAPPED price
+    // 5xx-retries + alerts and is NOT finalized (never silently ACKed as a free record).
+    'test-entitlement-issue-subject.mjs', 'test-provisioning-ordering.mjs',
+    'test-provisioning-dedup-race.mjs', 'test-provisioning-unmapped-price.mjs',
     // PROVISIONING MOUNT (2026-06-19) — the LIVE-PATH wiring that mounts the loop on the bridge:
     // buildProvisioning() (safe-by-default 503 with no bundle; live via an injected verifier + signing
     // key + price map), the Supabase console mirror (writes the SAME recompute result to the

@@ -88,6 +88,10 @@ export function createProvisioningService(deps = {}) {
    * OUT-OF-ORDER FLOOR (Codex HIGH): resolveSubscription refetches current state; on top of that, a
    * per-subject monotonic event.created marker rejects an event older than the last applied so a stale
    * `.updated` can never regress a `.deleted`.
+   *
+   * UNMAPPED ACTIVE PRICE (Codex HIGH): an ACTIVE subscription whose price maps to no known tier is an
+   * operator misconfig — it RETRIES + alerts loudly and is NOT finalized/downgraded to free (only a
+   * genuine non-granting status becomes a free record).
    */
   async function applyEvent(event) {
     if (!event || typeof event.id !== 'string' || !event.id || typeof event.type !== 'string') {
@@ -113,6 +117,15 @@ export function createProvisioningService(deps = {}) {
       const ent = entitlementFromSubscription(sub, { tierForPrice });
       const subject = ent.subject;
       if (!subject) { store.finalizeEvent(event.id, event.type); return { handled: false, ignored: true, reason: 'subscription has no resolvable subject' }; }
+
+      // UNMAPPED ACTIVE PRICE → retry + alert (NOT a free record, NOT finalized). The subscription would
+      // otherwise grant (its status is active/past_due) but the founder/Stripe price→tier map is missing
+      // an entry — silently writing free would let Stripe stop retrying and the operator never notice.
+      if (!ent.grant && ent.unmapped_price && (ent.mapped_state === 'active' || ent.mapped_state === 'past_due')) {
+        console.error(`✖ [provisioning] ACTIVE subscription on UNMAPPED price "${ent.price_id}" (subject ${subject}) — price→tier map is missing this entry. Signalling retry (Stripe will re-deliver); NOT writing a free record. Add the price to tierForPrice.`);
+        store.releaseEvent(event.id);
+        return { retry: true, reason: `active subscription on unmapped price "${ent.price_id}" — operator must map it (not downgrading to free)` };
+      }
 
       // OUT-OF-ORDER FLOOR: reject an event older than the last applied for this subject (monotonic
       // event.created). Refetch-current-state above is the primary defense; this is the floor for the

@@ -23,5 +23,15 @@
     "@solana/web3.js": "^1.98.4",
     "discord.js": "^14.26.4",
     "matrix-js-sdk": "^41.6.0"
+  },
+  "comments": {
+    "overrides": "Security: pin patched transitive deps WITHOUT breaking the top-level packages (EFL revenue-path hardening, 2026-06-19). undici→discord.js (high HTTP header-injection/DoS), form-data+qs+tough-cookie→the node-telegram-bot-api request chain (critical form-data boundary CRLF + qs DoS + tough-cookie proto-pollution), uuid→the @solana jayson chain (moderate bounds-check). @solana/web3.js is NOT dropped: it is still imported by packages/atmos-core/src/billing/payment-engine.js + tests, so it is present-and-USED, not present-and-unused — dropping it would break the build. The deprecated `request@2.88.2` chain (request-promise-core, the source of the SSRF + form-data critical) reaches us ONLY via @cypress/request-promise; node-telegram-bot-api itself already uses @cypress/request@3.x (modern form-data). The overrides force the patched transitive versions; verified green against the full hermetic suite + telegram adapter test + a non-prod bridge boot."
+  },
+  "overrides": {
+    "undici": "^6.27.0",
+    "uuid": "^11.1.1",
+    "form-data": "^4.0.6",
+    "qs": "^6.5.3",
+    "tough-cookie": "^4.1.3"
   }
 }

@@ -19,6 +19,10 @@ import { createEntitlementIssueRouter } from './src/product/entitlement-issue-ap
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.error('  ✗', m); } };
 
+// This suite drives the issue route via the test-only x-efl-subject header (no injected resolver).
+// The header path is fail-closed by default (Codex CRITICAL); opt in explicitly for the hermetic test.
+process.env.ALLOW_HEADER_SUBJECT = '1';
+
 const DAY = 86_400_000;
 const prov = generateHybridKeyPair();
 const periodEndSec = Math.round((Date.now() + 30 * DAY) / 1000);

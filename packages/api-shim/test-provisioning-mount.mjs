@@ -27,6 +27,10 @@ import { createSupabaseFulfillment } from './src/product/supabase-fulfillment.js
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.error('  ✗', m); } };
 
+// The live-issue assertions drive the route via the test-only x-efl-subject header (no injected
+// resolver in this slice). That header path is fail-closed by default (Codex CRITICAL); opt in here.
+process.env.ALLOW_HEADER_SUBJECT = '1';
+
 const DAY = 86_400_000;
 const prov = generateHybridKeyPair();
 const periodEndSec = Math.round((Date.now() + 30 * DAY) / 1000);

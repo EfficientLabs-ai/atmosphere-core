@@ -40,12 +40,21 @@ import { beginUpstreamAttempt, recordSuccess, recordFailure, isAvailabilityFailu
 const localInference = new LocalInferenceEngine();
 const taskRouter = new TaskClassifierRouter({ verbose: true });
 
+// MOCK-FALLBACK HARDENING (task §5): the bridge must NOT silently degrade a "Live"-claimed feature to
+// a mock. If the real dependency fails to load, startup REFUSES (throws → PM2 surfaces the crash)
+// UNLESS the operator has explicitly opted in via ALLOW_MOCK_BROWSER=1 / ALLOW_MOCK_REASONING=1. The
+// opt-in exists for hermetic/dev runs; it is OFF by default so production can never quietly run on a
+// mock that fakes browser execution or vector recall while claiming the real capability.
 let BrowserHarness;
 try {
   const module = await import('../stratos-agent/browser-harness.js');
   BrowserHarness = module.BrowserHarness;
 } catch (err) {
-  console.warn('[API-SHIM] Could not load BrowserHarness from stratos-agent directly. Using mock browser execution framework:', err.message);
+  if (process.env.ALLOW_MOCK_BROWSER !== '1') {
+    console.error('✖ [API-SHIM] BrowserHarness failed to load and ALLOW_MOCK_BROWSER is not set — REFUSING to start on a mock browser (a Live-claimed feature must not silently degrade). Set ALLOW_MOCK_BROWSER=1 to permit the mock for dev/hermetic runs.');
+    throw err;
+  }
+  console.warn('[API-SHIM] ALLOW_MOCK_BROWSER=1 — using mock browser execution framework (NOT for production):', err.message);
 
   class MockBrowserHarness {
     constructor() {
@@ -75,7 +84,11 @@ try {
   const module = await import('../stratos-agent/reasoning-bank.js');
   ReasoningBank = module.ReasoningBank;
 } catch (err) {
-  console.warn('[API-SHIM] Could not load ReasoningBank from stratos-agent directly. Using mock reasoning bank:', err.message);
+  if (process.env.ALLOW_MOCK_REASONING !== '1') {
+    console.error('✖ [API-SHIM] ReasoningBank failed to load and ALLOW_MOCK_REASONING is not set — REFUSING to start on a mock reasoning bank (a Live-claimed feature must not silently degrade vector recall). Set ALLOW_MOCK_REASONING=1 to permit the mock for dev/hermetic runs.');
+    throw err;
+  }
+  console.warn('[API-SHIM] ALLOW_MOCK_REASONING=1 — using mock reasoning bank (NOT for production):', err.message);
 
   class MockReasoningBank {
     constructor() {

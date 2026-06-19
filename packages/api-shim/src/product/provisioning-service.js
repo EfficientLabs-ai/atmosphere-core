@@ -88,9 +88,11 @@ export function createProvisioningService(deps = {}) {
    * event never loops forever); only a RETRYABLE failure RELEASES it so a legitimate Stripe retry can
    * re-claim (and a crash that releases nothing is recovered by the STALE_TTL reclaim in claimEvent).
    *
-   * OUT-OF-ORDER FLOOR (Codex HIGH): resolveSubscription refetches current state; on top of that, a
-   * per-subject monotonic event.created marker rejects an event older than the last applied so a stale
-   * `.updated` can never regress a `.deleted`.
+   * OUT-OF-ORDER FLOOR (Codex HIGH, HARDENED F2): resolveSubscription refetches current state; on top of
+   * that, a per-subject monotonic event.created marker guards the no-fetch fallback. The floor rejects an
+   * event STRICTLY older than the last applied; AND at an EQUAL timestamp it never allows a transition
+   * that INCREASES entitlement (grant:false→grant:true) — a terminal/cancellation outcome at second T must
+   * win over a same-second non-terminal event. Equivalently: grant:true only flips when created > lastEventAt.
    *
    * UNMAPPED ACTIVE PRICE (Codex HIGH): an ACTIVE subscription whose price maps to no known tier is an
    * operator misconfig — it RETRIES + alerts loudly and is NOT finalized/downgraded to free (only a
@@ -135,16 +137,29 @@ export function createProvisioningService(deps = {}) {
         return { retry: true, reason: `active subscription on unmapped price "${ent.price_id}" — operator must map it (not downgrading to free)` };
       }
 
-      // OUT-OF-ORDER FLOOR: reject an event older than the last applied for this subject (monotonic
-      // event.created). Refetch-current-state above is the primary defense; this is the floor for the
-      // no-fetcher fallback and for paths where the refetch still yields a stale snapshot. Treat as a
-      // benign duplicate (finalize, ack) — Stripe need not retry a strictly-older event.
+      // OUT-OF-ORDER FLOOR (HARDENED F2): refetch-current-state above is the primary defense; this is the
+      // floor for the no-fetcher fallback and any path where the refetch still yields a stale snapshot.
+      //   (a) STRICTLY OLDER (created < last): reject — a stale event can never regress current state.
+      //   (b) SAME SECOND (created === last): a grant-INCREASING transition (false→true) is rejected — a
+      //       terminal/cancellation outcome at second T must win over a same-second non-terminal event, so
+      //       grant:true may only flip when created > last. (A same-second grant:false→false or a state
+      //       that does not increase entitlement is allowed through; it cannot resurrect a grant.)
+      // Both are benign duplicates (finalize, ack) — Stripe need not retry an order it already lost.
       const eventAt = Number(event.created) || 0;
       if (eventAt > 0) {
         const last = store.lastEventAt(subject);
         if (last > 0 && eventAt < last) {
           store.finalizeEvent(event.id, event.type);
           return { handled: false, ignored: true, reason: `stale event (created ${eventAt} < last applied ${last}) — ignored to preserve current state` };
+        }
+        if (last > 0 && eventAt === last && ent.grant) {
+          const prev = store.get(subject);
+          // Only block if this would INCREASE entitlement (the last-applied state was non-granting). A
+          // same-second event that keeps/repeats an existing grant is harmless and applied normally.
+          if (prev && prev.grant === false) {
+            store.finalizeEvent(event.id, event.type);
+            return { handled: false, ignored: true, reason: `same-second event (created ${eventAt} === last applied ${last}) cannot resurrect a non-granting state — grant:true only flips when created > last` };
+          }
         }
       }
 

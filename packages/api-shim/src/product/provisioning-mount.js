@@ -125,9 +125,23 @@ export function buildProvisioning(deps = {}) {
     return r;
   }
 
+  // REQUIRE fetchSubscription FOR THE LIVE WEBHOOK (Codex HIGH F2). Refetch-current-state is the PRIMARY
+  // out-of-order defense: a `.updated`/`.deleted` event's EMBEDDED subscription can be stale relative to
+  // Stripe's current truth, so the service refetches when a fetcher is present. Without it the loop would
+  // run on the weak monotonic-timestamp floor ALONE — which cannot fully order same-second events — so a
+  // bundle that injects a verifier but no fetchSubscription must FAIL CLOSED, not silently degrade. We do
+  // this with the SAME pattern as the missing verifier: drop the real verifier so the webhook 503s. (The
+  // floor in provisioning-service is also hardened against same-second grant resurrection as the
+  // belt-and-braces second layer — see applyEvent — but the live mount must not depend on it alone.)
+  const hasFetcher = typeof bundle.fetchSubscription === 'function';
+  if (bundle.verifyEvent && !hasFetcher) {
+    console.warn('⚠️  [provisioning] live verifier injected WITHOUT fetchSubscription — refetch-current-state is the primary out-of-order defense, so the webhook stays FAIL-CLOSED (503). Add fetchSubscription to the bundle to go live.');
+  }
   const webhookRouter = createStripeWebhookRouter({
     service: { applyEvent: applyEventWithMirror }, // verifier-gated; raw body inside the router
-    verifyEvent: bundle.verifyEvent,               // absent ⇒ REFUSE_VERIFY ⇒ 503 (fail-closed)
+    // absent verifier OR absent fetchSubscription ⇒ REFUSE_VERIFY ⇒ 503 (fail-closed). fetchSubscription
+    // is REQUIRED for the live webhook (out-of-order primary defense), not optional.
+    verifyEvent: hasFetcher ? bundle.verifyEvent : undefined,
   });
 
   // subjectOf resolves an authenticated request → its billing subject (the node↔account binding). In
@@ -140,12 +154,14 @@ export function buildProvisioning(deps = {}) {
     subjectOf: deps.subjectOf || bundle.subjectOf,
   });
 
-  const live = !!bundle.verifyEvent;
+  // LIVE requires BOTH a verifier AND fetchSubscription (the webhook is fail-closed without either).
+  const live = !!bundle.verifyEvent && hasFetcher;
   const status = {
-    live,                                   // a live Stripe verifier is injected
+    live,                                   // a live Stripe verifier AND fetchSubscription are injected
     canSign: !!bundle.provPrivBundle,       // signing key present ⇒ issuer can mint tokens
     consoleMirror: fulfillment.enabled,     // Supabase console mirror configured
     priceMap: typeof bundle.tierForPrice === 'function',
+    canFetch: hasFetcher,                   // fetchSubscription present ⇒ refetch-current-state defense active
   };
 
   return { webhookRouter, issueRouter, status, service, fulfillment };

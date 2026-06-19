@@ -7,12 +7,21 @@
  * delivery) when fetchSubscription is available; (B) a per-subject monotonic event.created floor that
  * rejects an event older than the last applied — the floor for the no-fetcher fallback.
  *
+ * HARDENED (Codex HIGH F2, 2nd review): the floor previously rejected only created < last, NOT
+ * created === last, and the LIVE MOUNT did not require fetchSubscription — so on the no-fetch / same-
+ * second path .deleted(created=1000) then a stale .updated(created=1000) restored grant:true. Now the
+ * floor never resurrects a grant at an EQUAL timestamp (grant:true only flips when created > last), and
+ * the mount fails closed without fetchSubscription (see test-provisioning-mount.mjs).
+ *
  * Proves:
  *   A. fetchSubscription present: .deleted (Stripe now canceled) then a stale .updated carrying an
  *      active object → grant stays FALSE (refetch-current wins over the stale embedded object).
  *   B. fetchSubscription absent: a monotonic event.created floor rejects the older .updated → grant
  *      stays FALSE (the stale event cannot regress the record).
  *   C. a NEWER event still applies (the floor is a floor, not a freeze).
+ *   D. SAME-SECOND no-fetch: .deleted(1000) then stale .updated(1000) → grant stays FALSE (the equal-
+ *      timestamp grant-resurrection bug). E. SAME-SECOND WITH fetch: refetch returns the deleted/current
+ *      truth → grant stays FALSE.
  * Hermetic: real signer/store, injected fake Stripe, tmp dirs.
  */
 import fs from 'node:fs';
@@ -79,6 +88,37 @@ console.log('provisioning-ordering — out-of-order webhooks cannot regress stat
   ok(store.get('cus_A').grant === false, 'C: older event applied first → canceled');
   const r = await svc.applyEvent({ id: 'evt_new', type: 'customer.subscription.updated', created: 3000, data: { object: apexSub({ status: 'active' }) } });
   ok(r.handled === true && store.get('cus_A').grant === true, 'C: a NEWER event still applies (floor is not a freeze)');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// D. SAME-SECOND, NO FETCHER (the F2 regression): .deleted(1000) then a stale .updated(1000) must NOT
+//    resurrect the grant. The OLD floor only rejected created < last, so an equal timestamp slipped
+//    through and restored grant:true. Now grant:true only flips when created > last.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ord-d-'));
+  const store = createEntitlementStore({ dir });
+  const svc = createProvisioningService({ store, tierForPrice, signEntitlement, provPrivBundle: prov.privateKey }); // NO fetchSubscription
+  await svc.applyEvent({ id: 'evt_del_d', type: 'customer.subscription.deleted', created: 1000, data: { object: apexSub({ status: 'canceled' }) } });
+  ok(store.get('cus_A').grant === false, 'D: after .deleted(1000) (no fetcher) → grant:false');
+  const r = await svc.applyEvent({ id: 'evt_upd_d', type: 'customer.subscription.updated', created: 1000, data: { object: apexSub({ status: 'active' }) } });
+  ok(r.ignored === true && /same-second/.test(r.reason || ''), 'D: same-second .updated(1000) → ignored (cannot resurrect a non-granting state)');
+  ok(store.get('cus_A').grant === false, 'D: stale same-second .updated did NOT restore grant (equal-timestamp floor held)');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// E. SAME-SECOND, WITH FETCHER: refetch returns Stripe's CURRENT (deleted/canceled) truth, so the stale
+//    same-second .updated cannot regress — grant stays false via the primary defense too.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ord-e-'));
+  const store = createEntitlementStore({ dir });
+  const svc = createProvisioningService({
+    store, tierForPrice, signEntitlement, provPrivBundle: prov.privateKey,
+    fetchSubscription: async () => apexSub({ status: 'canceled' }), // Stripe's current truth = canceled
+  });
+  await svc.applyEvent({ id: 'evt_del_e', type: 'customer.subscription.deleted', created: 1000, data: { object: apexSub({ status: 'canceled' }) } });
+  ok(store.get('cus_A').grant === false, 'E: after .deleted(1000) (with fetcher) → grant:false');
+  await svc.applyEvent({ id: 'evt_upd_e', type: 'customer.subscription.updated', created: 1000, data: { object: apexSub({ status: 'active' }) } });
+  ok(store.get('cus_A').grant === false, 'E: same-second .updated, refetch returns canceled → grant stays false (refetch-current wins)');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

@@ -111,6 +111,18 @@ console.log('provisioning-mount — live-path wiring + Supabase console mirror\n
   close();
 }
 
+// 6. REQUIRE fetchSubscription (Codex HIGH F2): a bundle with a verifier but NO fetchSubscription must
+//    FAIL CLOSED (503) — refetch-current-state is the primary out-of-order defense; the mount must not
+//    silently run on the weak floor alone. status.live must also be false (and canFetch:false).
+{
+  const bundle = { verifyEvent, tierForPrice, provPrivBundle: prov.privateKey }; // NO fetchSubscription
+  const { base, status, close } = await serve({ bundle, fulfillment: { enabled: true, write: async () => {} } });
+  ok(status.live === false && status.canFetch === false, 'verifier WITHOUT fetchSubscription → status live:false, canFetch:false');
+  const r = await fetch(`${base}/v1/stripe/webhook`, webhookEvt('evt_nofetch', 'customer.subscription.updated', subs.sub_1));
+  ok(r.status === 503, 'verifier present but fetchSubscription absent → webhook 503 (fail-closed, not the weak floor)');
+  close();
+}
+
 // 4. FAIL LOUD: Supabase creds absent → mirror throws → webhook 500 (retry), NEVER a silent 200-noop.
 {
   const bundle = { verifyEvent, tierForPrice, fetchSubscription: async (id) => subs[id] || null, provPrivBundle: prov.privateKey };

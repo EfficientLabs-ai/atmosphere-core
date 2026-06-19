@@ -13,11 +13,17 @@
  * dedupKey() contract). Out-of-order delivery is handled UPSTREAM by recomputing from subscription
  * STATE (subscription-state.js), not event deltas — so this store only needs at-most-once application.
  *
+ * ATOMIC EVENT CLAIM (Codex HIGH): the dedup key is claimed write-if-absent at the START of processing
+ * (claimEvent), not after the work, so two concurrent applyEvent(sameId) cannot both proceed. A claim
+ * is provisional until finalizeEvent() succeeds; a retryable failure releases it so a legitimate Stripe
+ * retry is never permanently blocked.
+ *
  * Writes are atomic (write tmp + rename) so a crash mid-write never corrupts records.json. Reads
  * never throw (a missing/garbage file → empty); fail-soft like the rest of the rail.
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const MAX_RECORDS_BYTES = 8 * 1024 * 1024; // generous cap; a corrupt/huge file → treated as empty
 
@@ -28,8 +34,11 @@ export function createEntitlementStore(opts = {}) {
   const now = opts.now || Date.now;
   const recordsPath = () => path.join(dir, 'records.json');
   const eventsPath = () => path.join(dir, 'processed-events.jsonl');
+  const claimsDir = () => path.join(dir, 'event-claims');
+  const claimPath = (eventId) => path.join(claimsDir(), crypto.createHash('sha256').update(eventId).digest('hex') + '.claim');
 
   function ensureDir() { try { fs.mkdirSync(dir, { recursive: true }); } catch { /* exists/uncreatable → writes will surface */ } }
+  function ensureClaimsDir() { try { fs.mkdirSync(claimsDir(), { recursive: true }); } catch { /* surfaces on the claim write */ } }
 
   /** Read the records map. Never throws; corrupt/oversized/missing → {}. */
   function readRecords() {
@@ -69,6 +78,44 @@ export function createEntitlementStore(opts = {}) {
       if (typeof eventId !== 'string' || !eventId) return false;
       ensureDir();
       fs.appendFileSync(eventsPath(), JSON.stringify({ evt_id: eventId, type: type || null, at: now() }) + '\n');
+      return true;
+    },
+
+    /**
+     * ATOMICALLY claim an event id for processing (Codex HIGH: non-atomic dedup race). Uses
+     * O_CREAT|O_EXCL so the create either succeeds (we own the claim) or fails with EEXIST (someone
+     * else already claimed it) — there is no check-then-act window. Already-finalized (in the durable
+     * processed-events log) also counts as claimed. Returns true iff THIS call won the claim.
+     */
+    claimEvent(eventId) {
+      if (typeof eventId !== 'string' || !eventId) return false;
+      if (this.isProcessed(eventId)) return false; // already finalized in a prior run → not a fresh claim
+      ensureClaimsDir();
+      try {
+        const fd = fs.openSync(claimPath(eventId), 'wx'); // wx = O_CREAT|O_EXCL|O_WRONLY — fails if exists
+        fs.writeSync(fd, JSON.stringify({ evt_id: eventId, claimed_at: now() }));
+        fs.closeSync(fd);
+        return true;
+      } catch (e) {
+        if (e && e.code === 'EEXIST') return false; // a concurrent caller already holds the claim
+        throw e; // a real I/O failure must surface (caller signals retry)
+      }
+    },
+
+    /** Finalize a claimed event: append to the durable processed-events log AND drop the provisional
+     *  claim file. After this, isProcessed(eventId) is true across restarts. */
+    finalizeEvent(eventId, type) {
+      if (typeof eventId !== 'string' || !eventId) return false;
+      this.markProcessed(eventId, type);
+      try { fs.unlinkSync(claimPath(eventId)); } catch { /* already gone */ }
+      return true;
+    },
+
+    /** Release a provisional claim WITHOUT finalizing — for a retryable failure, so a legitimate Stripe
+     *  retry can re-claim and re-process (the claim must never permanently block a retry). */
+    releaseEvent(eventId) {
+      if (typeof eventId !== 'string' || !eventId) return false;
+      try { fs.unlinkSync(claimPath(eventId)); } catch { /* already gone */ }
       return true;
     },
 

@@ -55,36 +55,52 @@ export function createProvisioningService(deps = {}) {
   /**
    * Apply one Stripe event idempotently. NEVER throws on a handled outcome; throws only are caught by
    * the router to signal a retryable failure. Returns:
-   *   { deduped:true }                         already processed → ack, do nothing
+   *   { deduped:true }                         already processed/claimed → ack, do nothing
    *   { handled:false, ignored:true, reason }  irrelevant event type → ack, do nothing
    *   { handled:true, subject, record }        record upserted (grant or canceled)
-   *   { retry:true, reason }                   transient — DON'T ack (let Stripe retry); not marked processed
+   *   { retry:true, reason }                   transient — DON'T ack (let Stripe retry); not finalized
+   *
+   * ATOMIC CLAIM (Codex HIGH): the event id is claimed write-if-absent at the very START (claimEvent),
+   * before any await, so two concurrent applyEvent(sameId) cannot both proceed. The claim is provisional
+   * — it is FINALIZED only on a successful handled/ignored outcome, and RELEASED on a retryable failure
+   * so a legitimate Stripe retry can re-process (a claim never permanently blocks a retry).
    */
   async function applyEvent(event) {
     if (!event || typeof event.id !== 'string' || !event.id || typeof event.type !== 'string') {
       return { handled: false, ignored: true, reason: 'malformed event' };
     }
-    if (store.isProcessed(event.id)) return { deduped: true };
+    // Claim the id ATOMICALLY before any await. Lost claim (concurrent caller or already finalized) → dedup.
+    let claimed;
+    try { claimed = store.claimEvent(event.id); }
+    catch (e) { return { retry: true, reason: `event claim failed: ${e.message}` }; }
+    if (!claimed) return { deduped: true };
 
-    const known = SUBSCRIPTION_TYPES.has(event.type) || SESSION_TYPES.has(event.type) || INVOICE_TYPES.has(event.type);
-    if (!known) { store.markProcessed(event.id, event.type); return { handled: false, ignored: true, reason: `ignored type ${event.type}` }; }
+    // From here on, a retryable exit MUST release the claim; a terminal (handled/ignored) exit finalizes it.
+    try {
+      const known = SUBSCRIPTION_TYPES.has(event.type) || SESSION_TYPES.has(event.type) || INVOICE_TYPES.has(event.type);
+      if (!known) { store.finalizeEvent(event.id, event.type); return { handled: false, ignored: true, reason: `ignored type ${event.type}` }; }
 
-    let sub;
-    try { sub = await resolveSubscription(event); }
-    catch (e) { return { retry: true, reason: `subscription fetch failed: ${e.message}` }; } // do NOT mark processed
+      let sub;
+      try { sub = await resolveSubscription(event); }
+      catch (e) { store.releaseEvent(event.id); return { retry: true, reason: `subscription fetch failed: ${e.message}` }; }
 
-    if (!sub) { store.markProcessed(event.id, event.type); return { handled: false, ignored: true, reason: 'event carries no subscription' }; }
+      if (!sub) { store.finalizeEvent(event.id, event.type); return { handled: false, ignored: true, reason: 'event carries no subscription' }; }
 
-    const ent = entitlementFromSubscription(sub, { tierForPrice });
-    const subject = ent.subject;
-    if (!subject) { store.markProcessed(event.id, event.type); return { handled: false, ignored: true, reason: 'subscription has no resolvable subject' }; }
+      const ent = entitlementFromSubscription(sub, { tierForPrice });
+      const subject = ent.subject;
+      if (!subject) { store.finalizeEvent(event.id, event.type); return { handled: false, ignored: true, reason: 'subscription has no resolvable subject' }; }
 
-    const record = ent.grant
-      ? { ...ent }                                   // full granting record
-      : canceledRecord(subject, ent.price_id, ent.reason); // canceled → Free floor (NEVER data deletion)
-    store.upsert(record);
-    store.markProcessed(event.id, event.type);
-    return { handled: true, subject, record };
+      const record = ent.grant
+        ? { ...ent }                                   // full granting record
+        : canceledRecord(subject, ent.price_id, ent.reason); // canceled → Free floor (NEVER data deletion)
+      store.upsert(record);
+      store.finalizeEvent(event.id, event.type);
+      return { handled: true, subject, record };
+    } catch (e) {
+      // Unexpected processing failure → release the claim so Stripe's retry can re-process.
+      store.releaseEvent(event.id);
+      throw e;
+    }
   }
 
   /**

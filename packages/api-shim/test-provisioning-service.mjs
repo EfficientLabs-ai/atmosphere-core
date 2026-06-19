@@ -90,6 +90,9 @@ const svc = createProvisioningService({
 
 // 6. subscription.deleted → canceled → issueToken returns no token → verifier falls to Free.
 {
+  // Stripe is the source of truth: a deleted subscription retrieves as canceled (the service refetches
+  // current state to defeat out-of-order delivery), so the fake registry must reflect the cancellation.
+  stripe.subs.sub_1 = apexSub({ status: 'canceled' });
   const r = await svc.applyEvent({ id: 'evt_del', type: 'customer.subscription.deleted', data: { object: apexSub({ status: 'canceled' }) } });
   ok(r.handled && r.record.grant === false, 'subscription.deleted → canceled record (NEVER data deletion)');
   const issued = svc.issueToken('cus_A');

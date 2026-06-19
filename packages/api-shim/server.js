@@ -32,6 +32,7 @@ import { originId as receiptOriginId, sealSkillBlock as skillSealBlock } from '.
 import { generateHybridKeyPair as identityGenerateKeyPair } from '../stratos-agent/src/security/quantum-crypto.js';
 import { createNodeAccountProof } from '../stratos-agent/src/identity/account-link.js';
 import { makeContinuityRecorder } from './src/product/continuity-receipt.js';
+import { loadProvisioningBundle, buildProvisioning } from './src/product/provisioning-mount.js';
 import { route as routerRoute, difficulty as routerDifficulty } from '../stratos-agent/src/routing/model-router.js';
 import { resolveRoute as routerResolveRoute } from './src/model-manager.js';
 import { beginUpstreamAttempt, recordSuccess, recordFailure, isAvailabilityFailureStatus, breakerSnapshot } from './src/upstream-breaker.js';
@@ -45,7 +46,7 @@ try {
   BrowserHarness = module.BrowserHarness;
 } catch (err) {
   console.warn('[API-SHIM] Could not load BrowserHarness from stratos-agent directly. Using mock browser execution framework:', err.message);
-  
+
   class MockBrowserHarness {
     constructor() {
       console.log('[MockBrowserHarness] Initialized.');
@@ -75,7 +76,7 @@ try {
   ReasoningBank = module.ReasoningBank;
 } catch (err) {
   console.warn('[API-SHIM] Could not load ReasoningBank from stratos-agent directly. Using mock reasoning bank:', err.message);
-  
+
   class MockReasoningBank {
     constructor() {
       this.records = [];
@@ -114,6 +115,26 @@ const reasoningBank = new ReasoningBank({
 // at the auth layer (gateway-auth requireGatewaySecretStrict) — this aligns the CORS layer with that
 // same intent so the two can't disagree. Browser access REQUIRES an explicit allowlist entry.
 app.use(cors({ origin: process.env.ATMOS_GATEWAY_ORIGINS ? process.env.ATMOS_GATEWAY_ORIGINS.split(',').map((s) => s.trim()) : false }));
+
+// ── PROVISIONING LOOP — Stripe webhook (RAW BODY) MUST be mounted BEFORE the global JSON parser ──
+// Stripe signature verification needs the EXACT bytes Stripe signed; the global bodyParser.json()
+// below would consume + re-encode the body and break every signature. The webhook router carries its
+// OWN express.raw({type:'application/json'}) parser scoped to its single route, so registering it here
+// (ahead of bodyParser.json) guarantees the raw bytes reach verifyEvent untouched and that the raw
+// parser applies to the webhook path ONLY — every other route still uses the global JSON parser.
+//
+// SAFE-BY-DEFAULT: with no live bundle injected (ATMOS_PROVISIONING_PATH unset) the webhook is
+// fail-closed (REFUSE_VERIFY → 503) and the issuer stays on the Free Forever floor. The founder flips
+// it live via the injection seam documented in src/product/provisioning-mount.js — NOTHING goes live
+// on a bare reload. The GET issue route (no body) is mounted with the other product routers below.
+const _provBundle = await loadProvisioningBundle();
+const _provisioning = buildProvisioning({
+  bundle: _provBundle,
+  issueAuth: requireGatewaySecretStrict, // minting a token is a privilege act — strict auth in prod
+});
+app.use(_provisioning.webhookRouter);
+console.log(`🔑 [provisioning] webhook mounted — live:${_provisioning.status.live} canSign:${_provisioning.status.canSign} consoleMirror:${_provisioning.status.consoleMirror} priceMap:${_provisioning.status.priceMap}`);
+
 app.use(bodyParser.json());
 
 // Fail-closed helper for when the compliance gate THROWS on the BYOK-capable route (/v1/chat/completions).
@@ -936,6 +957,11 @@ app.use(createNodesRouter({
 app.use(createEntitlementsRouter({
   auth: _consoleReadAuth,
 }));
+// GET /v1/account/entitlement-token — the GRANTING delivery surface (provisioning loop §4). Strict
+// auth (minting a signed token is a privilege act); fail-to-free (no granting record / no signing key
+// → 200 Free floor, never an error wall). Built in the provisioning bundle above (raw-body webhook is
+// mounted ahead of the JSON parser; this body-less GET is mounted here with the other product routes).
+app.use(_provisioning.issueRouter);
 // POST /v1/account/link/proof — the node→account ownership proof (keystone second link). Signs with
 // the node key (private half never leaves), emits a fail-closed account-link receipt. Strict auth.
 app.use(createAccountLinkRouter({

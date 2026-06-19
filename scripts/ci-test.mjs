@@ -63,6 +63,13 @@ const SUITES = {
     // is proven E2E against the SHIPPED offline verifier (webhook → record → signed token → resolve →
     // apex; cancel → Free floor). Hermetic: injected fake-Stripe + test-mode verifier, tmp dirs.
     'test-provisioning-core.mjs', 'test-provisioning-service.mjs', 'test-provisioning-api.mjs',
+    // PROVISIONING MOUNT (2026-06-19) — the LIVE-PATH wiring that mounts the loop on the bridge:
+    // buildProvisioning() (safe-by-default 503 with no bundle; live via an injected verifier + signing
+    // key + price map), the Supabase console mirror (writes the SAME recompute result to the
+    // `subscriptions` row the console reads; FAILS LOUD → 500 retry if creds absent), and raw-body
+    // coexistence with the global JSON parser (the exact shape server.js mounts). Hermetic: injected
+    // fake Stripe verifier + fake subscription source + fake Supabase fetch, tmp dirs.
+    'test-provisioning-mount.mjs',
     // NODE→ACCOUNT LINK (2026-06-13, Track A slice 2) — the keystone's second signed link. The
     // account-link-api route (node-side prover, fail-closed account-link receipt, private key never
     // returned) is here; the pure prover/verifier module test lives under stratos-agent below.

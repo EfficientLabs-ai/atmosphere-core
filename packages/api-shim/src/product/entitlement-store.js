@@ -18,6 +18,11 @@
  * is provisional until finalizeEvent() succeeds; a retryable failure releases it so a legitimate Stripe
  * retry is never permanently blocked.
  *
+ * Out-of-order FLOOR (Codex HIGH): refetch-current-state (in the service) is the primary defense, but a
+ * per-subject monotonic high-water mark (the largest applied `event.created`) is the floor — an event
+ * older than the last applied for that subject is rejected so a stale `.updated` can never regress a
+ * `.deleted`. Stored in records.json under `_last_event_at` per subject; advanced atomically on upsert.
+ *
  * Writes are atomic (write tmp + rename) so a crash mid-write never corrupts records.json. Reads
  * never throw (a missing/garbage file → empty); fail-soft like the rest of the rail.
  */
@@ -26,6 +31,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const MAX_RECORDS_BYTES = 8 * 1024 * 1024; // generous cap; a corrupt/huge file → treated as empty
+
+/** Per-subject monotonic marker key inside a record. The largest applied event.created (seconds) for
+ *  that subject; an incoming event older than this is rejected (out-of-order floor). */
+const LAST_EVENT_AT = '_last_event_at';
 
 export function createEntitlementStore(opts = {}) {
   const dir = opts.dir
@@ -119,13 +128,28 @@ export function createEntitlementStore(opts = {}) {
       return true;
     },
 
-    /** Upsert the current entitlement record for a subject. Stamps updated_at. */
-    upsert(record) {
+    /** The largest applied event.created (seconds) for a subject, or 0 if none (out-of-order floor). */
+    lastEventAt(subject) {
+      if (typeof subject !== 'string' || !subject) return 0;
+      const rec = readRecords()[subject];
+      const v = rec && Number(rec[LAST_EVENT_AT]);
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    },
+
+    /**
+     * Upsert the current entitlement record for a subject. Stamps updated_at. Optionally advances the
+     * per-subject monotonic event marker (eventAt = event.created seconds) so a later stale event is
+     * rejected by lastEventAt(); never moves the marker backwards.
+     */
+    upsert(record, eventAt) {
       if (!record || typeof record.subject !== 'string' || !record.subject) {
         throw new Error('entitlement record requires a string subject');
       }
       const map = readRecords();
-      map[record.subject] = { ...record, updated_at: now() };
+      const prevAt = Number(map[record.subject]?.[LAST_EVENT_AT]) || 0;
+      const at = Number(eventAt);
+      const nextAt = Number.isFinite(at) && at > prevAt ? at : prevAt; // monotonic; never regresses
+      map[record.subject] = { ...record, updated_at: now(), [LAST_EVENT_AT]: nextAt || undefined };
       writeRecords(map);
       return map[record.subject];
     },

@@ -40,11 +40,31 @@ export function createProvisioningService(deps = {}) {
   const now = deps.now || Date.now;
   if (!store) throw new Error('provisioning-service requires a store');
 
-  /** Resolve the authoritative subscription object for an event (truth path, plan §5). Returns the
-   *  subscription object, or throws (→ caller signals retry). */
+  /**
+   * Resolve the authoritative subscription object for an event (truth path, plan §5).
+   *
+   * OUT-OF-ORDER FIX (Codex HIGH): Stripe delivers webhooks out of order, so the subscription object
+   * EMBEDDED in a `.updated`/`.deleted` event can be stale relative to Stripe's current truth. We
+   * therefore REFETCH the current subscription via fetchSubscription whenever its id is known and the
+   * fetcher is available — Stripe is the source of truth. We fall back to the embedded object only when
+   * no fetcher is configured (test/dev) or the id is absent; the per-subject monotonic timestamp floor
+   * in applyEvent() is the additional guard for that fallback. Returns the subscription object, or
+   * throws (→ caller signals retry).
+   */
   async function resolveSubscription(event) {
     const obj = event?.data?.object;
-    if (SUBSCRIPTION_TYPES.has(event.type)) return obj; // event object IS the subscription
+    if (SUBSCRIPTION_TYPES.has(event.type)) {
+      // The event object IS the subscription, but it may be stale (out-of-order delivery). Prefer the
+      // current authoritative state from Stripe; fall back to the embedded object only with no fetcher.
+      const subId = obj?.id;
+      if (typeof fetchSubscription === 'function' && typeof subId === 'string' && subId) {
+        const current = await fetchSubscription(subId);
+        // A `.deleted` whose subscription Stripe no longer returns (null) → treat the embedded canceled
+        // object as truth (it IS gone); otherwise the current object wins over the stale embedded one.
+        return current || obj;
+      }
+      return obj;
+    }
     // checkout.session.completed / invoice.* carry a `subscription` id → fetch authoritative state.
     const subId = obj?.subscription;
     if (typeof subId !== 'string' || !subId) return null; // e.g. a one-time checkout with no subscription
@@ -63,7 +83,11 @@ export function createProvisioningService(deps = {}) {
    * ATOMIC CLAIM (Codex HIGH): the event id is claimed write-if-absent at the very START (claimEvent),
    * before any await, so two concurrent applyEvent(sameId) cannot both proceed. The claim is provisional
    * — it is FINALIZED only on a successful handled/ignored outcome, and RELEASED on a retryable failure
-   * so a legitimate Stripe retry can re-process (a claim never permanently blocks a retry).
+   * so a claim never permanently blocks a retry.
+   *
+   * OUT-OF-ORDER FLOOR (Codex HIGH): resolveSubscription refetches current state; on top of that, a
+   * per-subject monotonic event.created marker rejects an event older than the last applied so a stale
+   * `.updated` can never regress a `.deleted`.
    */
   async function applyEvent(event) {
     if (!event || typeof event.id !== 'string' || !event.id || typeof event.type !== 'string') {
@@ -90,10 +114,23 @@ export function createProvisioningService(deps = {}) {
       const subject = ent.subject;
       if (!subject) { store.finalizeEvent(event.id, event.type); return { handled: false, ignored: true, reason: 'subscription has no resolvable subject' }; }
 
+      // OUT-OF-ORDER FLOOR: reject an event older than the last applied for this subject (monotonic
+      // event.created). Refetch-current-state above is the primary defense; this is the floor for the
+      // no-fetcher fallback and for paths where the refetch still yields a stale snapshot. Treat as a
+      // benign duplicate (finalize, ack) — Stripe need not retry a strictly-older event.
+      const eventAt = Number(event.created) || 0;
+      if (eventAt > 0) {
+        const last = store.lastEventAt(subject);
+        if (last > 0 && eventAt < last) {
+          store.finalizeEvent(event.id, event.type);
+          return { handled: false, ignored: true, reason: `stale event (created ${eventAt} < last applied ${last}) — ignored to preserve current state` };
+        }
+      }
+
       const record = ent.grant
         ? { ...ent }                                   // full granting record
         : canceledRecord(subject, ent.price_id, ent.reason); // canceled → Free floor (NEVER data deletion)
-      store.upsert(record);
+      store.upsert(record, eventAt);
       store.finalizeEvent(event.id, event.type);
       return { handled: true, subject, record };
     } catch (e) {

@@ -35,7 +35,8 @@ const TELEGRAM_MODEL = process.env.TELEGRAM_MODEL || 'gemma4:e4b';
 export class TelegramBridge {
   constructor(options = {}) {
     this.port = options.port || process.env.PORT || 4000;
-    this.token = options.token || process.env.TELEGRAM_BOT_TOKEN || null;
+    this.dryRun = options.dryRun === true;
+    this.token = this.dryRun ? null : (options.token || process.env.TELEGRAM_BOT_TOKEN || null);
     this.bot = null;
     this.verbose = options.verbose !== false;
     this.dispatcher = new UnifiedDispatcher({ verbose: this.verbose });
@@ -46,7 +47,7 @@ export class TelegramBridge {
     this.telegramModel = options.telegramModel || TELEGRAM_MODEL;
 
     // 1. Attempt dynamic retrieval from Secrets Vault if no token environment exists
-    if (!this.token) {
+    if (!this.dryRun && !this.token) {
       try {
         const vaultPath = path.join(process.cwd(), '.secrets-vault', 'env_blueprint.md');
         if (fs.existsSync(vaultPath)) {

@@ -40,10 +40,12 @@ This README leads with what is verified and working today, and marks everything 
 - **A folder-stage pipeline engine** and an **off-chain** x402 payment engine (PoW + state-channel +
   settlement *math*, stress-proven) — see the honest scope on settlement below.
 
-Run the hermetic test suite (CI runs it on every PR, Node 20 + 22):
+Run the hermetic test suite with the pinned runtime in `.nvmrc` (CI uses the same version):
 
 ```bash
+nvm use
 npm ci
+npm run preflight
 npm run test:ci
 ```
 

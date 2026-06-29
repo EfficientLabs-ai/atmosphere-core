@@ -16,11 +16,25 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const VDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'composio-vault-'));
 const PDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'composio-prof-'));
 process.env.STRATOS_VAULT_DIR = VDIR;
 process.env.STRATOS_PROFILE_DIR = PDIR;
+
+// Clean-worktree reproducibility (ATM-SEC-001): the full ~17 MB MIT catalog under /services/ is
+// gitignored, so a fresh checkout lacks it and the fail-hard loader would make `npm test`
+// non-reproducible. When no explicit path is set AND the real catalog is absent, fall back to the
+// committed CI fixture (the same one .github/workflows/ci.yml injects) so the suite stays hermetic.
+// A dev box that still has the real catalog is unaffected.
+if (!process.env.STRATOS_COMPOSIO_DATA) {
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const realCatalog = path.resolve(HERE, '../../services/composio/docs/public/data/toolkits.json');
+  if (!fs.existsSync(realCatalog)) {
+    process.env.STRATOS_COMPOSIO_DATA = path.resolve(HERE, 'test/fixtures/composio-catalog.ci.json');
+  }
+}
 
 const tk = await import('./src/integrations/composio-toolkits.js');
 const { runToolAction, vaultConnectorFor, composioCapabilities } = await import('./src/integrations/composio-exec.js');

@@ -36,6 +36,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Production dependency audit gate
+        run: npm run audit:prod
+
       - name: Run hermetic test suite
         run: node scripts/ci-test.mjs
         env:

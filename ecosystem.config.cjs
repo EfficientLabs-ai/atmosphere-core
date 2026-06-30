@@ -46,6 +46,7 @@ module.exports = {
       name: 'atmos-secure-bridge',
       script: 'packages/api-shim/index.js',
       cwd: __dirname, // repo root — keep cwd-relative paths (.stratos-vector-store) stable
+      interpreter: '/home/neo/.nvm/versions/node/v22.22.3/bin/node',
       node_args: '--max-old-space-size=256',
       max_memory_restart: '400M',
       exp_backoff_restart_delay: 200,

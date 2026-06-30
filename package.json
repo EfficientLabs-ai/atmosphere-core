@@ -16,7 +16,8 @@
     "start:maximus": "npm run start --workspace=packages/maximus-telemetry",
     "start:desktop": "npm run tauri dev --workspace=packages/atmos-desktop",
     "test:ci": "node scripts/ci-test.mjs",
-    "audit:prod": "node scripts/audit-prod-gate.mjs"
+    "audit:prod": "node scripts/audit-prod-gate.mjs",
+    "preflight": "node scripts/preflight-node.mjs"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.29.0",
@@ -24,6 +25,9 @@
     "@solana/web3.js": "^1.98.4",
     "discord.js": "^14.26.4",
     "matrix-js-sdk": "^41.6.0"
+  },
+  "engines": {
+    "node": ">=22.22.3 <23"
   },
   "overrides": {
     "form-data": "^4.0.6",

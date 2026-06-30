@@ -67,6 +67,9 @@ A change is **DONE** only when **all** of these are true — this is the discipl
 > version of the guarantee, and it's the one worth having. Aspiration is labeled aspiration
 > (doctrine rule). We never report something as done that wasn't verified.
 
+Production launch readiness is stricter than an ordinary merge gate. The launch/no-go checklist,
+backup/restore discipline, PM2 reload rules, observability proof, and founder-gated money/secret steps live in [`PRODUCTION-READINESS.md`](PRODUCTION-READINESS.md).
+
 ---
 
 ## 4. How you drive it (your interface)

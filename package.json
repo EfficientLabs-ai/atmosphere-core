@@ -23,5 +23,12 @@
     "@solana/web3.js": "^1.98.4",
     "discord.js": "^14.26.4",
     "matrix-js-sdk": "^41.6.0"
+  },
+  "overrides": {
+    "form-data": "^4.0.6",
+    "undici": "^6.27.0",
+    "jayson": {
+      "uuid": "^14.0.1"
+    }
   }
 }

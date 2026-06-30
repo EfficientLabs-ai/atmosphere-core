@@ -43,7 +43,7 @@ const PRODUCTS = {
     exports: { '.': './api-shim/index.js', './cli': './stratos-agent/src/cli/stratos-cli.js' },
     deps: {
       express: '^4.19.2', cors: '^2.8.5', 'body-parser': '^1.20.2', 'node-fetch': '^3.3.2',
-      'node-telegram-bot-api': '^0.66.0', '@lancedb/lancedb': '^0.29.0', '@noble/post-quantum': '^0.6.1',
+      'node-telegram-bot-api': '^1.1.2', '@lancedb/lancedb': '^0.29.0', '@noble/post-quantum': '^0.6.1',
       'apache-arrow': '^18.1.0',
     },
     optionalDeps: {},

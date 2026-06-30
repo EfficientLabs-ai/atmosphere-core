@@ -81,6 +81,9 @@ const SUITES = {
     // persistent typing indicator (re-fires on interval, clears with no leak), throttled typewriter edits,
     // the >4096 split into a new message, the edit-failure → full-sendMessage fail-safe (reply never lost),
     // 429 backoff, and the streamOllamaChat NDJSON parser (incl. throw-on-non-OK for the fallback).
+    // ATM-SEC-001: the bridge itself also initializes in dry-run mode without a token, network client, or
+    // local vault probe.
+    'test-telegram-bridge-dry-run.mjs',
     'test-telegram-streamer.mjs',
     // EXCLUDED (not hermetic): test-evolution-seam.mjs depends on ambient Ollama — it passes locally
     // only because this dev box runs Ollama, and fails in the clean CI runner (no inference service).

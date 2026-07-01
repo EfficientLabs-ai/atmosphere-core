@@ -69,6 +69,8 @@ A change is **DONE** only when **all** of these are true — this is the discipl
 
 Production launch readiness is stricter than an ordinary merge gate. The launch/no-go checklist,
 backup/restore discipline, PM2 reload rules, observability proof, and founder-gated money/secret steps live in [`PRODUCTION-READINESS.md`](PRODUCTION-READINESS.md).
+The 2026-06-30 environment modernization assessment, memory architecture recommendation, and
+72-hour launch roadmap live in [`ENVIRONMENT-MODERNIZATION-READINESS-2026-06-30.md`](ENVIRONMENT-MODERNIZATION-READINESS-2026-06-30.md).
 
 ---
 

@@ -25,9 +25,10 @@ For the next 72 hours, the company should ship a coherent, honest, narrow slice:
 - Main branch protection is enabled with admin enforcement, strict required checks, one required approving review, stale-review dismissal, last-push approval, and required conversation resolution.
 - Required checks on main now use the satisfiable `.nvmrc` context: `Hermetic tests (Node from .nvmrc)`.
 - `docs/operating/ISSUES.md`, `STATE.md`, and older launch-readiness files contain known doc/runtime drift, especially qwen/Gemma model identity, Vercel deploy state, Supabase/auth references, stale status pages, active-vision fabrication, vector isolation, and receipt CLI gaps.
-- `/opt/efficient-labs/command-center/00_truth/EFFICIENT_CONTEXT_PROTOCOL.md` already defines ECP as canonical file architecture with manifests, compiler, ledger, receipts, lifecycle gates, and disclosure fail-closed behavior.
-- `/opt/efficient-labs/command-center/00_truth/DATA_BRIDGING_LAYER.md` already defines local-first, user-owned continuity, secret refusal, hashed proof receipts, active/archive routing, and a realistic bridge matrix.
-- `/opt/efficient-labs/command-center/00_truth/LIFECYCLE.md` already defines lifecycle states and the completion ladder: `DOCUMENTED -> PARTIAL -> WIRED -> ENFORCED -> MEASURED -> PRODUCTION`.
+- Host-local operator context (non-normative for this repo): the following three files live in the founder's private command-center checkout at `/opt/efficient-labs/command-center/00_truth/` and cannot be verified by reviewers or CI from this repository. Readers without host access should rely on the in-repo docs instead — `docs/operating/PRODUCTION-READINESS.md`, `docs/operating/STATE.md`, and `AGENTS.md` are the verifiable sources for this repo.
+  - `EFFICIENT_CONTEXT_PROTOCOL.md` already defines ECP as canonical file architecture with manifests, compiler, ledger, receipts, lifecycle gates, and disclosure fail-closed behavior.
+  - `DATA_BRIDGING_LAYER.md` already defines local-first, user-owned continuity, secret refusal, hashed proof receipts, active/archive routing, and a realistic bridge matrix.
+  - `LIFECYCLE.md` already defines lifecycle states and the completion ladder: `DOCUMENTED -> PARTIAL -> WIRED -> ENFORCED -> MEASURED -> PRODUCTION`.
 - Current disk pressure is acceptable on `/` but `/tmp` is tight; use repo/worktree paths for installs and builds, not `/tmp`.
 
 ### External research used
@@ -167,7 +168,7 @@ The project needs one authoritative architecture chain, not more memory layers.
 
 Proposed authority order:
 
-1. `00_truth` command-center doctrine: private canonical doctrine and lifecycle.
+1. `00_truth` command-center doctrine: private canonical doctrine and lifecycle (host-local operator context, non-normative for this repo — see the evidence-baseline note above).
 2. `docs/operating/STATE.md`: current operational board, but only after it is refreshed and explicitly date-stamped.
 3. `docs/operating/PRODUCTION-READINESS.md`: merged launch/no-go gate.
 4. ADRs in repo: canonical public engineering decisions.
@@ -178,8 +179,8 @@ Consolidation steps:
 
 1. Keep the merged production-readiness gate as the repo launch/no-go authority.
 2. Keep branch protection aligned to the merged `.nvmrc` CI context and treat stale required contexts as production blockers.
-3. Add ADR-0001 for self-hosted Postgres replacing Supabase as the durable business store.
-4. Add ADR-0002 for the memory contract: Redis cache, Postgres durable memory, derived retrieval indexes.
+3. Add an ADR for self-hosted Postgres replacing Supabase as the durable business store, numbered at the next genuinely free number per the ADR index. Do not reuse low numbers: ADR-0001 (audit-consulting deprecation) and ADR-0002 (second-brain retirement) are already assigned and enforced by `scripts/claim-lint.mjs`, and ADR-0003 (merge gate, `AGENTS.md`) and ADR-0013 (cross-agent shared memory, `NORTH_STAR.md`) are also taken. When the ADR index is created, record these already-cited historical decisions first so their numbers stay stable.
+4. Add an ADR for the memory contract — Redis cache, Postgres durable memory, derived retrieval indexes — under the same numbering rule: next free number per the ADR index, never reusing an assigned number.
 5. Refresh `docs/operating/STATE.md` from live evidence and remove stale counts.
 6. Mark `docs/PROGRAM_STATUS.md` as stale or rewrite it into a dated archive.
 7. Reconcile all qwen/Gemma model identity claims.
@@ -294,7 +295,7 @@ Exit criteria: one current production-readiness page, no stale source-of-truth a
 - Remove or gate fabricated active-vision live paths.
 - Fix vector retrieval isolation or keep multi-channel memory disabled.
 - Prove clean install on a clean host/container.
-- Vercel CLI is not installed; install it with `npm i -g vercel` for the web/deploy lane if web launch work is active, so agents can use `vercel env pull`, `vercel deploy`, and `vercel logs` instead of guessing deploy state.
+- Vercel CLI is not installed; install it with `npm i -g vercel` for the web/deploy lane if web launch work is active, so agents can use `vercel deploy` and `vercel logs` instead of guessing deploy state. If a command needs project environment variables, use `vercel env run -- <cmd>` so secrets stay in process env and are never materialized to disk. Never run `vercel env pull`: it writes project secrets to a local `.env` file, which violates this repo's binding no-secrets-on-disk rule.
 - Verify live web equals audited code before any traffic.
 
 Exit criteria: no known false public claims, install proof captured, deploy proof captured or launch downgraded.
